@@ -28,9 +28,9 @@ jobs:
         run: ./gradlew build connectedCheck
 
       - name: Debug Sign
-        run: jarsigner -verbose -keystore ~/.android/debug.keystore -storepass android -keypass android -signedjar app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk androiddebugkey
+        run: jarsigner -verbose -keystore ~/.android/debug.keystore -storepass android -keypass android -signedjar ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk androiddebugkey
 
       - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk"
+          artifacts: "./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk"
