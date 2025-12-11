@@ -30,9 +30,7 @@ jobs:
       - name: Debug Sign
         run: jarsigner -verbose -keystore ~/.android/debug.keystore -storepass android -keypass android -signedjar app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk androiddebugkey
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Create Release
+        uses: ncipollo/release-action@v1
         with:
-          name: moonlight-android
-          path: app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk
-          if-no-files-found: error
+          artifacts: "app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk"
