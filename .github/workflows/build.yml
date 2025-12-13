@@ -10,32 +10,31 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/setup-java@v5
+      - name: Setup Java JDK
+        uses: actions/setup-java@v5
         with:
           java-version: 21
           distribution: 'corretto'
 
-      - uses: android-actions/setup-android@v3
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
         with:
             packages: ''
 
-      - name: Checkout
+      - name: Checkout Repo
         uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      # - name: Build artifact
-      #   run: ./gradlew assembleNonRoot
-
-      - uses: burrunan/gradle-cache-action@v3
-        name: Build Moonlight
+      - name: Build Moonlight
+        uses: burrunan/gradle-cache-action@v3
         with:
           arguments: assembleNonRoot
 
-      - name: Decode keystore
+      - name: Decode Keystore
         run: echo "${{ secrets.KEYSTORE }}" | base64 -d > /tmp/debug.keystore
 
-      - name: Debug sign
+      - name: Sign APK With Key
         run: |
           jarsigner -verbose \
           -keystore /tmp/debug.keystore \
@@ -56,8 +55,3 @@ jobs:
         with:
           name: moonlight-android.apk
           path: ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release.apk
-
-      # - name: Create Release
-      #   uses: ncipollo/release-action@v1
-      #   with:
-      #     artifacts: "./app/build/outputs/apk/nonRoot/release/app-nonRoot-release.apk"
