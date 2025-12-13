@@ -36,10 +36,11 @@ jobs:
         run: echo "${{ secrets.KEYSTORE }}" | base64 -d > /tmp/debug.keystore
 
       - name: Debug sign
-        run: | 
+        run: |
           jarsigner -verbose \ 
           -keystore /tmp/debug.keystore \ 
-          -storepass android -keypass android  \ 
+          -storepass android \ 
+          -keypass android  \ 
           -signedjar ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk \ 
           ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk \
           androiddebugkey
