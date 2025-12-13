@@ -37,11 +37,11 @@ jobs:
 
       - name: Debug sign
         run: |
-          jarsigner -verbose \ 
-          -keystore /tmp/debug.keystore \ 
-          -storepass android \ 
-          -keypass android  \ 
-          -signedjar ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk \ 
+          jarsigner -verbose \
+          -keystore /tmp/debug.keystore \
+          -storepass android \
+          -keypass android  \
+          -signedjar ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk \
           ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk \
           androiddebugkey
 
