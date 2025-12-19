@@ -1,6 +1,6 @@
 # Moonlight Android
 
-Custom build with some PR's merged from external developers:
+Custom build with some PR's merged from the community:
 * Support for the "Microsoft Xbox Wireless Adapter for Windows" (Thanks to [summershrimp](https://github.com/summershrimp))
 
 ---
