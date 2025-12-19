@@ -1,7 +1,7 @@
 # Moonlight Android
 
 Custom build with some PR's merged from the community:
-* Support for the "Microsoft Xbox Wireless Adapter for Windows" (Thanks to [summershrimp](https://github.com/summershrimp))
+* Support for the "Microsoft Xbox Wireless Adapter for Windows" (Thanks to [summershrimp](https://github.com/summershrimp)) [(PR)](https://github.com/moonlight-stream/moonlight-android/pull/1415) [(Branch)](https://github.com/summershrimp/moonlight-android/tree/xow-support)
 
 ---
 
