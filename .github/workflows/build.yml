@@ -54,4 +54,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: moonlight-android.apk
-          path: ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release.apk
+          path: ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk
