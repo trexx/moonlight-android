@@ -31,24 +31,24 @@ jobs:
         with:
           arguments: assembleNonRoot
 
+      - name: Align APK
+        run: |
+          $ANDROID_HOME/build-tools/34.0.0/zipalign -v 4 \
+          ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk \
+          ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-aligned.apk
+
       - name: Decode Keystore
         run: echo "${{ secrets.KEYSTORE }}" | base64 -d > /tmp/debug.keystore
 
       - name: Sign APK With Key
         run: |
-          jarsigner -verbose \
-          -keystore /tmp/debug.keystore \
-          -storepass android \
-          -keypass android  \
-          -signedjar ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk \
-          ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk \
-          androiddebugkey
-
-      - name: Align APK
-        run: |
-          $ANDROID_HOME/build-tools/34.0.0/zipalign -v 4 \
-          ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk \
-          ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release.apk
+          apksigner sign \
+            --ks /tmp/debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --out ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk \
+            ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-aligned.apk
 
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
