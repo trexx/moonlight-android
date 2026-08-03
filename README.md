@@ -19,10 +19,9 @@ You can follow development on our [Discord server](https://moonlight-stream.org/
 * [APK](https://github.com/moonlight-stream/moonlight-android/releases)
 
 ## Building
-* Install Android Studio and the Android NDK
+* Install Android Studio and a JDK 17 or later
 * Run ‘git submodule update --init --recursive’ from within moonlight-android/
-* In moonlight-android/, create a file called ‘local.properties’. Add an ‘ndk.dir=’ property to the local.properties file and set it equal to your NDK directory.
-* Build the APK using Android Studio or gradle
+* Build the APK using Android Studio or ‘./gradlew assembleRelease’. The required NDK (pinned by ‘ndkVersion’ in app/build.gradle) is downloaded automatically.
 
 ## Authors
 

@@ -93,12 +93,6 @@ public class MediaCodecHelper {
             blacklistedDecoderPrefixes.add("omx.google");
             blacklistedDecoderPrefixes.add("AVCDecoder");
 
-            // We want to avoid ffmpeg decoders since they're usually software decoders,
-            // but we'll defer to the Android 10 isSoftwareOnly() API on newer devices
-            // to determine if we should use these or not.
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                blacklistedDecoderPrefixes.add("OMX.ffmpeg");
-            }
         }
 
         // Force these decoders disabled because:
@@ -158,14 +152,13 @@ public class MediaCodecHelper {
         // only Shield ATV got an Oreo update and any newer Tegra devices will not ship
         // with an old OS like Nougat.
         if (!Build.DEVICE.equalsIgnoreCase("shieldtablet") &&
-                !Build.DEVICE.equalsIgnoreCase("mocha") &&
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                !Build.DEVICE.equalsIgnoreCase("mocha")) {
             whitelistedHevcDecoders.add("omx.nvidia");
         }
 
         // Plot twist: On newer Sony devices (BRAVIA_ATV2, BRAVIA_ATV3_4K, BRAVIA_UR1_4K) the H.264 decoder crashes
         // on several configurations (> 60 FPS and 1440p) that work with HEVC, so we'll whitelist those devices for HEVC.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Build.DEVICE.startsWith("BRAVIA_")) {
+        if (Build.DEVICE.startsWith("BRAVIA_")) {
             whitelistedHevcDecoders.add("omx.mtk");
         }
 
@@ -181,15 +174,13 @@ public class MediaCodecHelper {
         // support, which provides equivalent latency to H.264 now.
         //
         // FIXME: Should we do this for all Amlogic S905X SoCs?
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P && !Build.DEVICE.equalsIgnoreCase("sabrina")) {
+        if (!Build.DEVICE.equalsIgnoreCase("sabrina")) {
             whitelistedHevcDecoders.add("omx.amlogic");
         }
 
         // Realtek SoCs are used inside many Android TV devices and can only do 4K60 with HEVC.
         // We'll enable those HEVC decoders by default and see if anything breaks.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            whitelistedHevcDecoders.add("omx.realtek");
-        }
+        whitelistedHevcDecoders.add("omx.realtek");
 
         // These theoretically have good HEVC decoding capabilities (potentially better than
         // their AVC decoders), but haven't been tested enough
@@ -337,10 +328,8 @@ public class MediaCodecHelper {
             // Apart from a few TV models, the main Amlogic-based Fire TV devices are the Fire TV
             // Cubes and Fire TV 3. This check will exclude the Fire TV 3 and Fire TV Cube 1, but
             // allow the newer Fire TV Cubes to use HEVC RFI.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                refFrameInvalidationHevcPrefixes.add("omx.amlogic");
-                refFrameInvalidationHevcPrefixes.add("c2.amlogic");
-            }
+            refFrameInvalidationHevcPrefixes.add("omx.amlogic");
+            refFrameInvalidationHevcPrefixes.add("c2.amlogic");
         }
 
         ActivityManager activityManager =
@@ -360,7 +349,7 @@ public class MediaCodecHelper {
                 // Exclude HEVC RFI on Pixel C and Tegra devices prior to Android 11. Misbehaving RFI
                 // on these devices can cause hundreds of milliseconds of latency, so it's not worth
                 // using it unless we're absolutely sure that it will not cause increased latency.
-                if (!Build.DEVICE.equalsIgnoreCase("dragon") && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (!Build.DEVICE.equalsIgnoreCase("dragon")) {
                     refFrameInvalidationHevcPrefixes.add("omx.nvidia");
                 }
 
@@ -396,7 +385,7 @@ public class MediaCodecHelper {
 
             // Older MediaTek SoCs have issues with HEVC rendering but the newer chips with
             // PowerVR GPUs have good HEVC support.
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && isPowerVR(glRenderer)) {
+            if (isPowerVR(glRenderer)) {
                 LimeLog.info("Added omx.mtk to HEVC decoders based on PowerVR GPU");
                 whitelistedHevcDecoders.add("omx.mtk");
 
@@ -433,16 +422,14 @@ public class MediaCodecHelper {
     }
 
     private static boolean decoderSupportsAndroidRLowLatency(MediaCodecInfo decoderInfo, String mimeType) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            try {
-                if (decoderInfo.getCapabilitiesForType(mimeType).isFeatureSupported(CodecCapabilities.FEATURE_LowLatency)) {
-                    LimeLog.info("Low latency decoding mode supported (FEATURE_LowLatency)");
-                    return true;
-                }
-            } catch (Exception e) {
-                // Tolerate buggy codecs
-                e.printStackTrace();
+        try {
+            if (decoderInfo.getCapabilitiesForType(mimeType).isFeatureSupported(CodecCapabilities.FEATURE_LowLatency)) {
+                LimeLog.info("Low latency decoding mode supported (FEATURE_LowLatency)");
+                return true;
             }
+        } catch (Exception e) {
+            // Tolerate buggy codecs
+            e.printStackTrace();
         }
 
         return false;
@@ -487,8 +474,7 @@ public class MediaCodecHelper {
         //
         // NB: Even on Android 10, this optimization still provides significant
         // performance gains on Pixel 2.
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
-                isDecoderInList(qualcommDecoderPrefixes, decoderName) &&
+        return isDecoderInList(qualcommDecoderPrefixes, decoderName) &&
                 !isAdreno620;
     }
 
@@ -510,8 +496,7 @@ public class MediaCodecHelper {
             }
         }
 
-        if (tryNumber < 2 &&
-                (!Build.MANUFACTURER.equalsIgnoreCase("xiaomi") || Build.VERSION.SDK_INT > Build.VERSION_CODES.M)) {
+        if (tryNumber < 2) {
             // MediaTek decoders don't use vendor-defined keys for low latency mode. Instead, they have a modified
             // version of AOSP's ACodec.cpp which supports the "vdec-lowlatency" option. This option is passed down
             // to the decoder as OMX.MTK.index.param.video.LowLatencyDecode.
@@ -534,7 +519,7 @@ public class MediaCodecHelper {
                 videoFormat.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
                 setNewOption = true;
             }
-            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            else {
                 videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
                 setNewOption = true;
             }
@@ -546,48 +531,46 @@ public class MediaCodecHelper {
         //
         // MediaCodec vendor extension support was introduced in Android 8.0:
         // https://cs.android.com/android/_/android/platform/frameworks/av/+/01c10f8cdcd58d1e7025f426a72e6e75ba5d7fc2
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            // Try vendor-specific low latency options
+        // Try vendor-specific low latency options
+        //
+        // NOTE: Update knownVendorLowLatencyOptions if you modify this code!
+        if (isDecoderInList(qualcommDecoderPrefixes, decoderInfo.getName())) {
+            // Examples of Qualcomm's vendor extensions for Snapdragon 845:
+            // https://cs.android.com/android/platform/superproject/+/master:hardware/qcom/sdm845/media/mm-video-v4l2/vidc/vdec/src/omx_vdec_extensions.hpp
+            // https://cs.android.com/android/_/android/platform/hardware/qcom/sm8150/media/+/0621ceb1c1b19564999db8293574a0e12952ff6c
             //
-            // NOTE: Update knownVendorLowLatencyOptions if you modify this code!
-            if (isDecoderInList(qualcommDecoderPrefixes, decoderInfo.getName())) {
-                // Examples of Qualcomm's vendor extensions for Snapdragon 845:
-                // https://cs.android.com/android/platform/superproject/+/master:hardware/qcom/sdm845/media/mm-video-v4l2/vidc/vdec/src/omx_vdec_extensions.hpp
-                // https://cs.android.com/android/_/android/platform/hardware/qcom/sm8150/media/+/0621ceb1c1b19564999db8293574a0e12952ff6c
-                //
-                // We will first try both, then try vendor.qti-ext-dec-low-latency.enable alone if that fails
-                if (tryNumber < 4) {
-                    videoFormat.setInteger("vendor.qti-ext-dec-picture-order.enable", 1);
-                    setNewOption = true;
-                }
-                if (tryNumber < 5) {
-                    videoFormat.setInteger("vendor.qti-ext-dec-low-latency.enable", 1);
-                    setNewOption = true;
-                }
+            // We will first try both, then try vendor.qti-ext-dec-low-latency.enable alone if that fails
+            if (tryNumber < 4) {
+                videoFormat.setInteger("vendor.qti-ext-dec-picture-order.enable", 1);
+                setNewOption = true;
             }
-            else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
-                if (tryNumber < 4) {
-                    // Kirin low latency options
-                    // https://developer.huawei.com/consumer/cn/forum/topic/0202325564295980115
-                    videoFormat.setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req", 1);
-                    videoFormat.setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-rdy", -1);
-                    setNewOption = true;
-                }
+            if (tryNumber < 5) {
+                videoFormat.setInteger("vendor.qti-ext-dec-low-latency.enable", 1);
+                setNewOption = true;
             }
-            else if (isDecoderInList(exynosDecoderPrefixes, decoderInfo.getName())) {
-                if (tryNumber < 4) {
-                    // Exynos low latency option for H.264 decoder
-                    videoFormat.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1);
-                    setNewOption = true;
-                }
+        }
+        else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
+            if (tryNumber < 4) {
+                // Kirin low latency options
+                // https://developer.huawei.com/consumer/cn/forum/topic/0202325564295980115
+                videoFormat.setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req", 1);
+                videoFormat.setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-rdy", -1);
+                setNewOption = true;
             }
-            else if (isDecoderInList(amlogicDecoderPrefixes, decoderInfo.getName())) {
-                if (tryNumber < 4) {
-                    // Amlogic low latency vendor extension
-                    // https://github.com/codewalkerster/android_vendor_amlogic_common_prebuilt_libstagefrighthw/commit/41fefc4e035c476d58491324a5fe7666bfc2989e
-                    videoFormat.setInteger("vendor.low-latency.enable", 1);
-                    setNewOption = true;
-                }
+        }
+        else if (isDecoderInList(exynosDecoderPrefixes, decoderInfo.getName())) {
+            if (tryNumber < 4) {
+                // Exynos low latency option for H.264 decoder
+                videoFormat.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1);
+                setNewOption = true;
+            }
+        }
+        else if (isDecoderInList(amlogicDecoderPrefixes, decoderInfo.getName())) {
+            if (tryNumber < 4) {
+                // Amlogic low latency vendor extension
+                // https://github.com/codewalkerster/android_vendor_amlogic_common_prebuilt_libstagefrighthw/commit/41fefc4e035c476d58491324a5fe7666bfc2989e
+                videoFormat.setInteger("vendor.low-latency.enable", 1);
+                setNewOption = true;
             }
         }
 
@@ -713,7 +696,7 @@ public class MediaCodecHelper {
             LimeLog.info("Disallowing HEVC on software decoder: " + decoderInfo.getName());
             return false;
         }
-        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && (!decoderInfo.isHardwareAccelerated() || decoderInfo.isSoftwareOnly())) {
+        else if (!decoderInfo.isHardwareAccelerated() || decoderInfo.isSoftwareOnly()) {
             LimeLog.info("Disallowing HEVC on software decoder: " + decoderInfo.getName());
             return false;
         }
@@ -742,12 +725,6 @@ public class MediaCodecHelper {
     }
 
     public static boolean isDecoderWhitelistedForAv1(MediaCodecInfo decoderInfo) {
-        // Google didn't have official support for AV1 (or more importantly, a CTS test) until
-        // Android 10, so don't use any decoder before then.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            return false;
-        }
-
         //
         // Software decoders are terrible and we never want to use them.
         // We want to catch decoders like:
@@ -829,11 +806,9 @@ public class MediaCodecHelper {
 
     private static boolean isCodecBlacklisted(MediaCodecInfo codecInfo) {
         // Use the new isSoftwareOnly() function on Android Q
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            if (!SHOULD_BYPASS_SOFTWARE_BLOCK && codecInfo.isSoftwareOnly()) {
-                LimeLog.info("Skipping software-only decoder: "+codecInfo.getName());
-                return true;
-            }
+        if (!SHOULD_BYPASS_SOFTWARE_BLOCK && codecInfo.isSoftwareOnly()) {
+            LimeLog.info("Skipping software-only decoder: "+codecInfo.getName());
+            return true;
         }
 
         // Check for explicitly blacklisted decoders
@@ -853,10 +828,8 @@ public class MediaCodecHelper {
             }
 
             // Skip compatibility aliases on Q+
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                if (codecInfo.isAlias()) {
-                    continue;
-                }
+            if (codecInfo.isAlias()) {
+                continue;
             }
             
             // Find a decoder that supports the specified video format
@@ -916,10 +889,8 @@ public class MediaCodecHelper {
                 }
 
                 // Skip compatibility aliases on Q+
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    if (codecInfo.isAlias()) {
-                        continue;
-                    }
+                if (codecInfo.isAlias()) {
+                    continue;
                 }
 
                 // Find a decoder that supports the requested video format

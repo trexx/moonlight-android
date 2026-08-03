@@ -93,20 +93,18 @@ public class UiHelper {
     }
 
     public static void applyStatusBarPadding(View view) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // This applies the padding that we omitted in notifyNewRootView() on Q
-            view.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
-                @Override
-                public WindowInsets onApplyWindowInsets(View view, WindowInsets windowInsets) {
-                    view.setPadding(view.getPaddingLeft(),
-                            view.getPaddingTop(),
-                            view.getPaddingRight(),
-                            windowInsets.getTappableElementInsets().bottom);
-                    return windowInsets;
-                }
-            });
-            view.requestApplyInsets();
-        }
+        // This applies the padding that we omitted in notifyNewRootView() on Q
+        view.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View view, WindowInsets windowInsets) {
+                view.setPadding(view.getPaddingLeft(),
+                        view.getPaddingTop(),
+                        view.getPaddingRight(),
+                        windowInsets.getTappableElementInsets().bottom);
+                return windowInsets;
+            }
+        });
+        view.requestApplyInsets();
     }
 
     public static void notifyNewRootView(final Activity activity)
@@ -117,15 +115,13 @@ public class UiHelper {
         // Set GameState.MODE_NONE initially for all activities
         setGameModeStatus(activity, false, false);
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            // Allow this non-streaming activity to layout under notches.
-            //
-            // We should NOT do this for the Game activity unless
-            // the user specifically opts in, because it can obscure
-            // parts of the streaming surface.
-            activity.getWindow().getAttributes().layoutInDisplayCutoutMode =
-                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
-        }
+        // Allow this non-streaming activity to layout under notches.
+        //
+        // We should NOT do this for the Game activity unless
+        // the user specifically opts in, because it can obscure
+        // parts of the streaming surface.
+        activity.getWindow().getAttributes().layoutInDisplayCutoutMode =
+                WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
 
         if (modeMgr.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
             // Increase view padding on TVs
@@ -136,7 +132,7 @@ public class UiHelper {
             rootView.setPadding(horizontalPaddingPixels, verticalPaddingPixels,
                     horizontalPaddingPixels, verticalPaddingPixels);
         }
-        else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        else {
             // Draw under the status bar on Android Q devices
 
             // Using getDecorView() here breaks the translucent status/navigation bar when gestures are disabled

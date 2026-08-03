@@ -1,6 +1,5 @@
 package com.limelight.nvstream.http;
 
-import android.os.Build;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;

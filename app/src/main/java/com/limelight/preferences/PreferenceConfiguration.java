@@ -193,14 +193,8 @@ public class PreferenceConfiguration {
     public static boolean isSquarishScreen(Display display) {
         int width, height;
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            width = display.getMode().getPhysicalWidth();
-            height = display.getMode().getPhysicalHeight();
-        }
-        else {
-            width = display.getWidth();
-            height = display.getHeight();
-        }
+        width = display.getMode().getPhysicalWidth();
+        height = display.getMode().getPhysicalHeight();
 
         return isSquarishScreen(width, height);
     }
@@ -328,10 +322,8 @@ public class PreferenceConfiguration {
             }
 
             // API 21 uses LEANBACK instead of TELEVISION
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                if (manager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
-                    return false;
-                }
+            if (manager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+                return false;
             }
         }
 

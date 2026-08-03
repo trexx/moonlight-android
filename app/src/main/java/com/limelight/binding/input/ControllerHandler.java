@@ -50,7 +50,6 @@ import org.cgutman.shieldcontrollerextensions.SceChargingState;
 import org.cgutman.shieldcontrollerextensions.SceConnectionType;
 import org.cgutman.shieldcontrollerextensions.SceManager;
 
-import java.lang.reflect.InvocationTargetException;
 import java.util.Map;
 
 public class ControllerHandler implements InputManager.InputDeviceListener, UsbDriverListener {
@@ -584,21 +583,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return false;
         }
 
-        // Landroid/view/InputDevice;->hasButtonUnderPad()Z is blocked after O
-        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.O) {
-            try {
-                return (Boolean) dev.getClass().getMethod("hasButtonUnderPad").invoke(dev);
-            } catch (NoSuchMethodException e) {
-                e.printStackTrace();
-            } catch (IllegalAccessException e) {
-                e.printStackTrace();
-            } catch (InvocationTargetException e) {
-                e.printStackTrace();
-            } catch (ClassCastException e) {
-                e.printStackTrace();
-            }
-        }
-
         // We can't use the platform API, so we'll have to just guess based on the gamepad type.
         // If this is a PlayStation controller with a touchpad, we know it has a clickpad.
         return type == MoonBridge.LI_CTYPE_PS;
@@ -625,27 +609,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return false;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Landroid/view/InputDevice;->isExternal()Z is officially public on Android Q
-            return dev.isExternal();
-        }
-        else {
-            try {
-                // Landroid/view/InputDevice;->isExternal()Z is on the light graylist in Android P
-                return (Boolean)dev.getClass().getMethod("isExternal").invoke(dev);
-            } catch (NoSuchMethodException e) {
-                e.printStackTrace();
-            } catch (IllegalAccessException e) {
-                e.printStackTrace();
-            } catch (InvocationTargetException e) {
-                e.printStackTrace();
-            } catch (ClassCastException e) {
-                e.printStackTrace();
-            }
-        }
-
-        // Answer true if we don't know
-        return true;
+        return dev.isExternal();
     }
 
     private boolean shouldIgnoreBack(InputDevice dev) {
@@ -765,9 +729,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         // created upon the first call to InputDevice.getSensorManager(), so we avoid calling this
         // on Android 12 unless we have a gamepad that could plausibly have motion sensors.
         // https://cs.android.com/android/_/android/platform/frameworks/base/+/8970010a5e9f3dc5c069f56b4147552accfcbbeb
-        if ((Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ||
-                (Build.VERSION.SDK_INT == Build.VERSION_CODES.S &&
-                        (context.vendorId == 0x054c || context.vendorId == 0x057e))) && // Sony or Nintendo
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ||
+                        context.vendorId == 0x054c || context.vendorId == 0x057e) && // Sony or Nintendo
                 prefConfig.gamepadMotionSensors) {
             if (dev.getSensorManager().getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null || dev.getSensorManager().getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null) {
                 context.sensorManager = dev.getSensorManager();
@@ -1343,11 +1307,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return KeyEvent.KEYCODE_BUTTON_MODE;
         }
 
-        // This mapping was adding in Android 10, then changed based on
-        // kernel changes (adding hid-nintendo) in Android 11. If we're
-        // on anything newer than Pie, just use the built-in mapping.
-        if ((context.vendorId == 0x057e && context.productId == 0x2009 && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) || // Switch Pro controller
-                (context.vendorId == 0x0f0d && context.productId == 0x00c1)) { // HORIPAD for Switch
+        // The Switch Pro controller uses the built-in mapping on Android 11 and later.
+        if (context.vendorId == 0x0f0d && context.productId == 0x00c1) { // HORIPAD for Switch
             switch (event.getScanCode()) {
                 case 0x130:
                     return KeyEvent.KEYCODE_BUTTON_A;
@@ -1744,7 +1705,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 break;
 
             case MotionEvent.ACTION_BUTTON_PRESS:
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && event.getActionButton() == MotionEvent.BUTTON_PRIMARY) {
+                if (event.getActionButton() == MotionEvent.BUTTON_PRIMARY) {
                     context.inputMap |= ControllerPacket.TOUCHPAD_FLAG;
                     sendControllerInputPacket(context);
                     return !prefConfig.gamepadTouchpadAsMouse; // Report as unhandled event to trigger mouse handling
@@ -1752,7 +1713,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 return false;
 
             case MotionEvent.ACTION_BUTTON_RELEASE:
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && event.getActionButton() == MotionEvent.BUTTON_PRIMARY) {
+                if (event.getActionButton() == MotionEvent.BUTTON_PRIMARY) {
                     context.inputMap &= ~ControllerPacket.TOUCHPAD_FLAG;
                     sendControllerInputPacket(context);
                     return !prefConfig.gamepadTouchpadAsMouse; // Report as unhandled event to trigger mouse handling
@@ -1995,23 +1956,21 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         // Attempt to use amplitude-based control if we're on Oreo and the device
         // supports amplitude-based vibration control.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (vibrator.hasAmplitudeControl()) {
-                VibrationEffect effect = VibrationEffect.createOneShot(60000, simulatedAmplitude);
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    VibrationAttributes vibrationAttributes = new VibrationAttributes.Builder()
-                            .setUsage(VibrationAttributes.USAGE_MEDIA)
-                            .build();
-                    vibrator.vibrate(effect, vibrationAttributes);
-                }
-                else {
-                    AudioAttributes audioAttributes = new AudioAttributes.Builder()
-                            .setUsage(AudioAttributes.USAGE_GAME)
-                            .build();
-                    vibrator.vibrate(effect, audioAttributes);
-                }
-                return;
+        if (vibrator.hasAmplitudeControl()) {
+            VibrationEffect effect = VibrationEffect.createOneShot(60000, simulatedAmplitude);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                VibrationAttributes vibrationAttributes = new VibrationAttributes.Builder()
+                        .setUsage(VibrationAttributes.USAGE_MEDIA)
+                        .build();
+                vibrator.vibrate(effect, vibrationAttributes);
             }
+            else {
+                AudioAttributes audioAttributes = new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_GAME)
+                        .build();
+                vibrator.vibrate(effect, audioAttributes);
+            }
+            return;
         }
 
         // If we reach this point, we don't have amplitude controls available, so
