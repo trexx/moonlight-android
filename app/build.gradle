@@ -13,7 +13,7 @@ android {
         applicationId = "com.limelight"
 
         minSdk = 30
-        targetSdk = 30
+        targetSdk = 34
 
         versionName = "12.1"
         versionCode = 314
@@ -34,9 +34,7 @@ android {
     }
 
     lint {
-        // ExpiredTargetSdkVersion: targetSdk is intentionally pinned to 30 (Android 11).
-        // Google Play will not accept uploads below targetSdk 33.
-        disable += ['MissingTranslation', 'ExpiredTargetSdkVersion']
+        disable += 'MissingTranslation'
         lintConfig = file('lint.xml')
     }
 
