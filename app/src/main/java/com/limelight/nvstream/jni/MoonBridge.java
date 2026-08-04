@@ -118,6 +118,18 @@ public class MoonBridge {
     public static final short LI_CCAP_BATTERY_STATE   = 0x40;
     public static final short LI_CCAP_RGB_LED         = 0x80;
 
+    // Mirrors Limelight.h but intentionally unused. Android's InputDevice API exposes a
+    // single SOURCE_TOUCHPAD per device with no way to address a second one, so we must
+    // never advertise this capability to the host.
+    public static final short LI_CCAP_DUAL_TOUCHPAD   = 0x100;
+
+    // Mirrors Limelight.h but intentionally unwired. Android has no API to apply
+    // adaptive trigger effects, so the setAdaptiveTriggers callback is left NULL and
+    // moonlight-common-c substitutes its own stub.
+    public static final int DS_EFFECT_PAYLOAD_SIZE  = 10;
+    public static final byte DS_EFFECT_RIGHT_TRIGGER = 0x04;
+    public static final byte DS_EFFECT_LEFT_TRIGGER  = 0x08;
+
     public static final byte LI_MOTION_TYPE_ACCEL = 0x01;
     public static final byte LI_MOTION_TYPE_GYRO  = 0x02;
 
@@ -402,6 +414,21 @@ public class MoonBridge {
     public static native int getPendingAudioDuration();
 
     public static native int getPendingVideoFrames();
+
+    // Indices into the arrays returned by getRTPAudioStats()/getRTPVideoStats().
+    public static final int RTP_STAT_PACKETS       = 0; // audio or video packets, per stream
+    public static final int RTP_STAT_FEC           = 1;
+    public static final int RTP_STAT_FEC_RECOVERED = 2;
+    public static final int RTP_STAT_FEC_FAILED    = 3;
+    public static final int RTP_STAT_OOS           = 4;
+    public static final int RTP_STAT_INVALID       = 5;
+    public static final int RTP_STAT_FEC_INVALID   = 6;
+
+    // Counters are cumulative for the lifetime of the stream. Safe to call at any
+    // time - moonlight-common-c returns a zeroed struct when no stream is active.
+    public static native long[] getRTPAudioStats();
+
+    public static native long[] getRTPVideoStats();
 
     public static native int testClientConnectivity(String testServerHostName, int referencePort, int testFlags);
 

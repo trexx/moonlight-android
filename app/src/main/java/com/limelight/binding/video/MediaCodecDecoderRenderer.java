@@ -1382,6 +1382,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         (float)lastTwo.framesLost / lastTwo.totalFrames * 100)).append('\n');
                 sb.append(context.getString(R.string.perf_overlay_netlatency,
                         (int)(rttInfo >> 32), (int)rttInfo)).append('\n');
+                long[] videoRtpStats = MoonBridge.getRTPVideoStats();
+                long[] audioRtpStats = MoonBridge.getRTPAudioStats();
+                if (videoRtpStats != null && audioRtpStats != null) {
+                    sb.append(context.getString(R.string.perf_overlay_fec,
+                            videoRtpStats[MoonBridge.RTP_STAT_FEC_RECOVERED],
+                            audioRtpStats[MoonBridge.RTP_STAT_FEC_RECOVERED],
+                            videoRtpStats[MoonBridge.RTP_STAT_FEC_FAILED],
+                            audioRtpStats[MoonBridge.RTP_STAT_FEC_FAILED])).append('\n');
+                }
                 if (lastTwo.framesWithHostProcessingLatency > 0) {
                     sb.append(context.getString(R.string.perf_overlay_hostprocessinglatency,
                             (float)lastTwo.minHostProcessingLatency / 10,
@@ -1843,6 +1852,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             str += "Total frames received: "+renderer.globalVideoStats.totalFramesReceived+DELIMITER;
             str += "Total frames rendered: "+renderer.globalVideoStats.totalFramesRendered+DELIMITER;
             str += "Frame losses: "+renderer.globalVideoStats.framesLost+" in "+renderer.globalVideoStats.frameLossEvents+" loss events"+DELIMITER;
+            long[] videoRtp = MoonBridge.getRTPVideoStats();
+            long[] audioRtp = MoonBridge.getRTPAudioStats();
+            if (videoRtp != null) {
+                str += "Video RTP packets/FEC/recovered/failed/OOS/invalid: "+
+                        videoRtp[MoonBridge.RTP_STAT_PACKETS]+", "+videoRtp[MoonBridge.RTP_STAT_FEC]+", "+
+                        videoRtp[MoonBridge.RTP_STAT_FEC_RECOVERED]+", "+videoRtp[MoonBridge.RTP_STAT_FEC_FAILED]+", "+
+                        videoRtp[MoonBridge.RTP_STAT_OOS]+", "+videoRtp[MoonBridge.RTP_STAT_INVALID]+DELIMITER;
+            }
+            if (audioRtp != null) {
+                str += "Audio RTP packets/FEC/recovered/failed/OOS/invalid: "+
+                        audioRtp[MoonBridge.RTP_STAT_PACKETS]+", "+audioRtp[MoonBridge.RTP_STAT_FEC]+", "+
+                        audioRtp[MoonBridge.RTP_STAT_FEC_RECOVERED]+", "+audioRtp[MoonBridge.RTP_STAT_FEC_FAILED]+", "+
+                        audioRtp[MoonBridge.RTP_STAT_OOS]+", "+audioRtp[MoonBridge.RTP_STAT_INVALID]+DELIMITER;
+            }
             str += "Average end-to-end client latency: "+renderer.getAverageEndToEndLatency()+"ms"+DELIMITER;
             str += "Average hardware decoder latency: "+renderer.getAverageDecoderLatency()+"ms"+DELIMITER;
             str += "Frame pacing mode: "+renderer.prefs.framePacing+DELIMITER;

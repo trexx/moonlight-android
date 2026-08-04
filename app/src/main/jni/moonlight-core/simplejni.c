@@ -168,6 +168,48 @@ Java_com_limelight_nvstream_jni_MoonBridge_getPendingVideoFrames(JNIEnv *env, jc
     return LiGetPendingVideoFrames();
 }
 
+// The counters are uint32_t, so they are widened into a jlong array to avoid
+// presenting values above 2^31 as negative during long sessions.
+JNIEXPORT jlongArray JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getRTPAudioStats(JNIEnv *env, jclass clazz) {
+    const RTP_AUDIO_STATS* stats = LiGetRTPAudioStats();
+    jlong values[] = {
+            (jlong)stats->packetCountAudio,
+            (jlong)stats->packetCountFec,
+            (jlong)stats->packetCountFecRecovered,
+            (jlong)stats->packetCountFecFailed,
+            (jlong)stats->packetCountOOS,
+            (jlong)stats->packetCountInvalid,
+            (jlong)stats->packetCountFecInvalid,
+    };
+
+    jlongArray array = (*env)->NewLongArray(env, sizeof(values) / sizeof(values[0]));
+    if (array != NULL) {
+        (*env)->SetLongArrayRegion(env, array, 0, sizeof(values) / sizeof(values[0]), values);
+    }
+    return array;
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getRTPVideoStats(JNIEnv *env, jclass clazz) {
+    const RTP_VIDEO_STATS* stats = LiGetRTPVideoStats();
+    jlong values[] = {
+            (jlong)stats->packetCountVideo,
+            (jlong)stats->packetCountFec,
+            (jlong)stats->packetCountFecRecovered,
+            (jlong)stats->packetCountFecFailed,
+            (jlong)stats->packetCountOOS,
+            (jlong)stats->packetCountInvalid,
+            (jlong)stats->packetCountFecInvalid,
+    };
+
+    jlongArray array = (*env)->NewLongArray(env, sizeof(values) / sizeof(values[0]));
+    if (array != NULL) {
+        (*env)->SetLongArrayRegion(env, array, 0, sizeof(values) / sizeof(values[0]), values);
+    }
+    return array;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_testClientConnectivity(JNIEnv *env, jclass clazz, jstring testServerHostName, jint referencePort, jint testFlags) {
     int ret;
