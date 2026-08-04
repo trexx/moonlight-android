@@ -267,11 +267,15 @@ Java_com_limelight_nvstream_jni_MoonBridge_guessControllerType(JNIEnv *env, jcla
             switch (arrControllers[i].m_eControllerType) {
                 case k_eControllerType_XBox360Controller:
                 case k_eControllerType_XBoxOneController:
+                // SDL split the Elite controllers out of XBoxOneController
+                case k_eControllerType_XBoxEliteController:
                     return LI_CTYPE_XBOX;
 
                 case k_eControllerType_PS3Controller:
                 case k_eControllerType_PS4Controller:
                 case k_eControllerType_PS5Controller:
+                // SDL split the DualSense Edge out of PS5Controller
+                case k_eControllerType_PS5EdgeController:
                     return LI_CTYPE_PS;
 
                 case k_eControllerType_WiiController:
@@ -280,7 +284,13 @@ Java_com_limelight_nvstream_jni_MoonBridge_guessControllerType(JNIEnv *env, jcla
                 case k_eControllerType_SwitchJoyConRight:
                 case k_eControllerType_SwitchJoyConPair:
                 case k_eControllerType_SwitchInputOnlyController:
+                case k_eControllerType_Switch2ProController:
+                case k_eControllerType_Switch2InputOnlyController:
                     return LI_CTYPE_NINTENDO;
+
+                // Deliberately unmapped: 8BitDoController and XInputPS4Controller cover
+                // devices with varying button layouts, and the Steam/Valve types have no
+                // equivalent, so guessing a type would be worse than reporting unknown.
 
                 default:
                     return LI_CTYPE_UNKNOWN;
