@@ -4,3 +4,6 @@
 [submodule "app/src/main/jni/libusb"]
 	path = app/src/main/jni/libusb
 	url = https://github.com/libusb/libusb.git
+[submodule "app/src/main/jni/moonlight-core/mbedtls"]
+	path = app/src/main/jni/moonlight-core/mbedtls
+	url = https://github.com/Mbed-TLS/mbedtls.git

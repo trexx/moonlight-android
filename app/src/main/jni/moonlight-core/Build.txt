@@ -1,1 +1,11 @@
-Static libraries were built from https://github.com/cgutman/moonlight-mobile-deps using AppVeyor CI 
+libopus/ contains prebuilt static libraries built from
+https://github.com/cgutman/moonlight-mobile-deps using AppVeyor CI.
+
+Mbed TLS is no longer prebuilt. It is a git submodule (mbedtls/) compiled from
+source by Android.mk using the trimmed configuration in
+moonlight_mbedtls_config.h, so updating it is just a submodule bump.
+
+It replaced the prebuilt OpenSSL 1.1.1q static libraries that used to live in
+openssl/. moonlight-common-c only needs AES-CBC, AES-GCM and a CTR-DRBG for the
+control stream, which Mbed TLS provides in a fraction of the size. HTTPS to the
+host is unaffected - that is handled on the Java side by OkHttp and BouncyCastle.

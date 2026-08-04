@@ -5,6 +5,23 @@ include $(call all-subdir-makefiles)
 
 LOCAL_PATH := $(MY_LOCAL_PATH)
 
+# Mbed TLS provides the symmetric crypto for moonlight-common-c. The whole
+# library/ directory is compiled because every file is guarded by its own
+# MBEDTLS_*_C feature macro, so the trimmed config in
+# moonlight_mbedtls_config.h reduces the unused ones to empty objects.
+include $(CLEAR_VARS)
+LOCAL_MODULE    := mbedtls
+LOCAL_SRC_FILES := $(patsubst $(LOCAL_PATH)/%,%,$(wildcard $(LOCAL_PATH)/mbedtls/library/*.c))
+LOCAL_C_INCLUDES := $(LOCAL_PATH) \
+                    $(LOCAL_PATH)/mbedtls/include \
+                    $(LOCAL_PATH)/mbedtls/library \
+
+LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/mbedtls/include
+LOCAL_CFLAGS := -DMBEDTLS_CONFIG_FILE=\"moonlight_mbedtls_config.h\" -ffunction-sections -fdata-sections
+LOCAL_EXPORT_CFLAGS := -DMBEDTLS_CONFIG_FILE=\"moonlight_mbedtls_config.h\"
+LOCAL_BRANCH_PROTECTION := standard
+include $(BUILD_STATIC_LIBRARY)
+
 include $(CLEAR_VARS)
 LOCAL_MODULE    := moonlight-core
 
@@ -51,7 +68,7 @@ LOCAL_C_INCLUDES := $(LOCAL_PATH)/moonlight-common-c/enet/include \
                     $(LOCAL_PATH)/moonlight-common-c/nanors/deps/obl \
                     $(LOCAL_PATH)/moonlight-common-c/src \
 
-LOCAL_CFLAGS := -DHAS_SOCKLEN_T=1 -DLC_ANDROID -DHAVE_CLOCK_GETTIME=1
+LOCAL_CFLAGS := -DHAS_SOCKLEN_T=1 -DLC_ANDROID -DHAVE_CLOCK_GETTIME=1 -DUSE_MBEDTLS
 
 ifeq ($(NDK_DEBUG),1)
 LOCAL_CFLAGS += -DLC_DEBUG
@@ -59,7 +76,7 @@ endif
 
 LOCAL_LDLIBS := -llog
 
-LOCAL_STATIC_LIBRARIES := libopus libssl libcrypto cpufeatures
+LOCAL_STATIC_LIBRARIES := libopus mbedtls cpufeatures
 LOCAL_LDFLAGS += -Wl,--exclude-libs,ALL
 
 LOCAL_BRANCH_PROTECTION := standard
