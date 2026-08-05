@@ -33,6 +33,7 @@ import android.view.MotionEvent;
 import android.view.Surface;
 import android.widget.Toast;
 
+import com.limelight.GameMenu;
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.binding.input.driver.AbstractController;
@@ -50,6 +51,8 @@ import org.cgutman.shieldcontrollerextensions.SceChargingState;
 import org.cgutman.shieldcontrollerextensions.SceConnectionType;
 import org.cgutman.shieldcontrollerextensions.SceManager;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 public class ControllerHandler implements InputManager.InputDeviceListener, UsbDriverListener {
@@ -1308,7 +1311,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         // The Switch Pro controller uses the built-in mapping on Android 11 and later.
-        if (context.vendorId == 0x0f0d && context.productId == 0x00c1) { // HORIPAD for Switch
+        if ((context.vendorId == 0x0f0d && context.productId == 0x00c1) || // HORIPAD for Switch
+                // The PowerA Pro reports no VID/PID at all, so match on its device name
+                (context.vendorId == 0 && context.productId == 0 && "Lic Pro Controller".equals(context.name))) {
             switch (event.getScanCode()) {
                 case 0x130:
                     return KeyEvent.KEYCODE_BUTTON_A;
@@ -2350,7 +2355,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             if ((context.inputMap & ControllerPacket.PLAY_FLAG) != 0 &&
                     event.getEventTime() - context.startDownTime > ControllerHandler.START_DOWN_TIME_MOUSE_MODE_MS &&
                     prefConfig.mouseEmulation) {
-                context.toggleMouseEmulation();
+                gestures.showGameMenu(context);
             }
             context.inputMap &= ~ControllerPacket.PLAY_FLAG;
             break;
@@ -2823,6 +2828,20 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     }
 
     @Override
+    public void reportControllerMotion(int controllerId, byte motionType, float motionX, float motionY, float motionZ) {
+        if (stopped) {
+            return;
+        }
+
+        GenericControllerContext context = usbDeviceContexts.get(controllerId);
+        if (context == null) {
+            return;
+        }
+
+        conn.sendControllerMotionEvent((byte) context.controllerNumber, motionType, motionX, motionY, motionZ);
+    }
+
+    @Override
     public void deviceRemoved(AbstractController controller) {
         UsbDeviceContext context = usbDeviceContexts.get(controller.getControllerId());
         if (context != null) {
@@ -2843,7 +2862,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         usbDeviceContexts.put(controller.getControllerId(), context);
     }
 
-    class GenericControllerContext {
+    class GenericControllerContext implements GameInputDevice {
         public int id;
         public boolean external;
 
@@ -2895,6 +2914,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 mainThreadHandler.postDelayed(this, mouseEmulationReportPeriod);
             }
         };
+
+        @Override
+        public List<GameMenu.MenuOption> getGameMenuOptions() {
+            List<GameMenu.MenuOption> options = new ArrayList<>();
+            options.add(new GameMenu.MenuOption(activityContext.getString(mouseEmulationActive ?
+                    R.string.game_menu_toggle_mouse_off : R.string.game_menu_toggle_mouse_on),
+                    true, () -> toggleMouseEmulation()));
+
+            return options;
+        }
 
         public void toggleMouseEmulation() {
             mainThreadHandler.removeCallbacks(mouseEmulationRunnable);

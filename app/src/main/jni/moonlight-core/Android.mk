@@ -60,6 +60,7 @@ LOCAL_SRC_FILES := moonlight-common-c/src/AudioStream.c \
                    simplejni.c \
                    callbacks.c \
                    minisdl.c \
+                   aaudio_renderer.c \
 
 
 LOCAL_C_INCLUDES := $(LOCAL_PATH)/moonlight-common-c/enet/include \
@@ -74,7 +75,7 @@ ifeq ($(NDK_DEBUG),1)
 LOCAL_CFLAGS += -DLC_DEBUG
 endif
 
-LOCAL_LDLIBS := -llog
+LOCAL_LDLIBS := -llog -laaudio
 
 LOCAL_STATIC_LIBRARIES := libopus mbedtls cpufeatures
 LOCAL_LDFLAGS += -Wl,--exclude-libs,ALL

@@ -16,6 +16,7 @@ import android.view.WindowInsets;
 import android.view.WindowManager;
 
 import com.limelight.Game;
+import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.preferences.PreferenceConfiguration;
@@ -28,13 +29,23 @@ public class UiHelper {
 
     private static void setGameModeStatus(Context context, boolean streaming, boolean interruptible) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            GameManager gameManager = context.getSystemService(GameManager.class);
+            // Game Mode is purely an advisory hint to the OS, so never let a device that ships
+            // a missing or partial GameManager take the stream down with it. Meta Quest returns
+            // null here, and some OEM builds throw outright.
+            try {
+                GameManager gameManager = context.getSystemService(GameManager.class);
+                if (gameManager == null) {
+                    return;
+                }
 
-            if (streaming) {
-                gameManager.setGameState(new GameState(false, interruptible ? GameState.MODE_GAMEPLAY_INTERRUPTIBLE : GameState.MODE_GAMEPLAY_UNINTERRUPTIBLE));
-            }
-            else {
-                gameManager.setGameState(new GameState(false, GameState.MODE_NONE));
+                if (streaming) {
+                    gameManager.setGameState(new GameState(false, interruptible ? GameState.MODE_GAMEPLAY_INTERRUPTIBLE : GameState.MODE_GAMEPLAY_UNINTERRUPTIBLE));
+                }
+                else {
+                    gameManager.setGameState(new GameState(false, GameState.MODE_NONE));
+                }
+            } catch (Throwable t) {
+                LimeLog.warning("Unable to set game mode status: " + t.getMessage());
             }
         }
     }

@@ -49,6 +49,7 @@ public class MediaCodecHelper {
 
     private static boolean isLowEndSnapdragon = false;
     private static boolean isAdreno620 = false;
+    private static boolean isAmlogicRfiSafe = false;
     private static boolean initialized = false;
 
     static {
@@ -329,6 +330,11 @@ public class MediaCodecHelper {
             // allow the newer Fire TV Cubes to use HEVC RFI.
             refFrameInvalidationHevcPrefixes.add("omx.amlogic");
             refFrameInvalidationHevcPrefixes.add("c2.amlogic");
+
+            // Fire OS is the only place we've confirmed Amlogic HEVC RFI actually behaves, so
+            // record that here. Other Amlogic devices are excluded in
+            // decoderSupportsRefFrameInvalidationHevc() below.
+            isAmlogicRfiSafe = true;
         }
 
         ActivityManager activityManager =
@@ -666,8 +672,21 @@ public class MediaCodecHelper {
         // buffering frames.
         if (decoderSupportsAndroidRLowLatency(decoderInfo, "video/hevc") ||
                 decoderSupportsKnownVendorLowLatencyOption(decoderInfo.getName())) {
-            LimeLog.info("Enabling HEVC RFI based on low latency option support");
-            return true;
+            if (!isDecoderInList(amlogicDecoderPrefixes, decoderInfo.getName())) {
+                LimeLog.info("Enabling HEVC RFI based on low latency option support");
+                return true;
+            }
+            else if (isAmlogicRfiSafe) {
+                LimeLog.info("Enabling HEVC RFI on confirmed-safe Amlogic device");
+                return true;
+            }
+            else {
+                // Amlogic HEVC decoders commonly produce artifacts and decoder hangs when RFI is
+                // used after packet loss, even though they advertise low latency support. The Onn
+                // 4K Plus and Chromecast 4K are both affected, so advertised low latency support
+                // isn't sufficient evidence on its own here.
+                LimeLog.info("Not enabling HEVC RFI on unconfirmed Amlogic decoder: " + decoderInfo.getName());
+            }
         }
 
         return isDecoderInList(refFrameInvalidationHevcPrefixes, decoderInfo.getName());

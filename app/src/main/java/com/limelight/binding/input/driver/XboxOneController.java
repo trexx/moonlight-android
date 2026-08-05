@@ -24,6 +24,7 @@ public class XboxOneController extends AbstractXboxController {
             0x1532, // Razer Wildcat
             0x20d6, // PowerA
             0x24c6, // PowerA
+            0x2dc8, // 8BitDo
             0x2e24, // Hyperkin
     };
 
@@ -43,7 +44,12 @@ public class XboxOneController extends AbstractXboxController {
             new InitPacket(0x0f0d, 0x0067, HORI_INIT),
             new InitPacket(0x0000, 0x0000, FW2015_INIT),
             new InitPacket(0x045e, 0x02ea, ONE_S_INIT),
+            new InitPacket(0x045e, 0x02fe, ONE_S_INIT),
             new InitPacket(0x045e, 0x0b00, ONE_S_INIT),
+            // Xbox Series S/X pads take the same init sequence as the One S
+            new InitPacket(0x045e, 0x0b05, ONE_S_INIT),
+            new InitPacket(0x045e, 0x0b12, ONE_S_INIT),
+            new InitPacket(0x045e, 0x0b13, ONE_S_INIT),
             new InitPacket(0x0e6f, 0x0000, PDP_INIT1),
             new InitPacket(0x0e6f, 0x0000, PDP_INIT2),
             new InitPacket(0x24c6, 0x541a, RUMBLE_INIT1),

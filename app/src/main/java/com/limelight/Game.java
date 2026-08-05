@@ -2,8 +2,9 @@ package com.limelight;
 
 
 import com.limelight.binding.PlatformBinding;
-import com.limelight.binding.audio.AndroidAudioRenderer;
+import com.limelight.binding.audio.LowLatencyAudioRenderer;
 import com.limelight.binding.input.ControllerHandler;
+import com.limelight.binding.input.GameInputDevice;
 import com.limelight.binding.input.KeyboardTranslator;
 import com.limelight.binding.input.capture.InputCaptureManager;
 import com.limelight.binding.input.capture.InputCaptureProvider;
@@ -170,6 +171,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private TextView performanceOverlayView;
+    private int requestedPerformanceOverlayVisibility = View.GONE;
 
     private MediaCodecDecoderRenderer decoderRenderer;
     private boolean reportedCrash;
@@ -378,10 +380,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
         }
 
-        // Check if the user has enabled performance stats overlay
-        if (prefConfig.enablePerfOverlay) {
-            performanceOverlayView.setVisibility(View.VISIBLE);
-        }
+        // The preference sets the initial state only. From here it's owned by the game menu,
+        // which can toggle the overlay on and off without restarting the stream.
+        requestedPerformanceOverlayVisibility = prefConfig.enablePerfOverlay ? View.VISIBLE : View.GONE;
+        performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
 
         decoderRenderer = new MediaCodecDecoderRenderer(
                 this,
@@ -613,10 +615,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 virtualController.show();
             }
 
-            if (prefConfig.enablePerfOverlay) {
-                performanceOverlayView.setVisibility(View.VISIBLE);
-            }
-
+            performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
             notificationOverlayView.setVisibility(requestedNotificationOverlayVisibility);
 
             // Enable sensors again after exiting PiP
@@ -1222,6 +1221,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
         if (event.isMetaPressed()) {
             modifier |= KeyboardPacket.MODIFIER_META;
+        }
+        if (event.getKeyCode() == KeyEvent.KEYCODE_PLUS) {
+            // The host protocol only has the single US =/+ virtual key, which we send for both
+            // KEYCODE_EQUALS and KEYCODE_PLUS. Android's KEYCODE_PLUS is semantic rather than
+            // positional, so it arrives without a Shift modifier and would otherwise type '='.
+            modifier |= KeyboardPacket.MODIFIER_SHIFT;
         }
         return modifier;
     }
@@ -2526,7 +2531,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             UiHelper.notifyStreamConnecting(Game.this);
 
             decoderRenderer.setRenderTarget(holder);
-            conn.start(new AndroidAudioRenderer(Game.this, prefConfig.enableAudioFx),
+            conn.start(new LowLatencyAudioRenderer(Game.this, prefConfig.enableAudioFx, prefConfig.enableAAudio),
                     decoderRenderer, Game.this);
         }
     }
@@ -2635,5 +2640,42 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             default:
                 return false;
         }
+    }
+
+    @Override
+    public boolean isPerfOverlayVisible() {
+        return requestedPerformanceOverlayVisibility == View.VISIBLE;
+    }
+
+    public void togglePerformanceOverlay() {
+        requestedPerformanceOverlayVisibility =
+                requestedPerformanceOverlayVisibility == View.VISIBLE ? View.GONE : View.VISIBLE;
+        performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
+    }
+
+    @Override
+    public void showGameMenu(GameInputDevice device) {
+        // An AlertDialog is unusable in a PiP window, and we've hidden the overlays anyway.
+        if (isHidingOverlays) {
+            return;
+        }
+
+        new GameMenu(this, conn, device);
+    }
+
+    public void disconnect() {
+        finish();
+    }
+
+    @Override
+    public void onBackPressed() {
+        // Instead of "closing" the game activity, open the game menu. The user has to select
+        // "Disconnect" within the game menu to actually disconnect from the remote host.
+        //
+        // Use onBackPressed() instead of the onKey handler, since onKey also captures events
+        // while the on-screen keyboard is open. Going through onBackPressed ensures Android
+        // handles the back key normally and we only open the menu when the activity would
+        // otherwise be closed.
+        showGameMenu(null);
     }
 }

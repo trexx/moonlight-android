@@ -1,5 +1,7 @@
 package com.limelight.binding.input.driver;
 
+import com.limelight.nvstream.jni.MoonBridge;
+
 public abstract class AbstractController {
 
     private final int deviceId;
@@ -12,6 +14,8 @@ public abstract class AbstractController {
     protected float leftTrigger, rightTrigger;
     protected float rightStickX, rightStickY;
     protected float leftStickX, leftStickY;
+    protected float gyroX, gyroY, gyroZ;
+    protected float accelX, accelY, accelZ;
     protected short capabilities;
     protected byte type;
 
@@ -51,6 +55,16 @@ public abstract class AbstractController {
     protected void reportInput() {
         listener.reportControllerState(deviceId, buttonFlags, leftStickX, leftStickY,
                 rightStickX, rightStickY, leftTrigger, rightTrigger);
+    }
+
+    /**
+     * Reports the current motion sensor state. Subclasses that set LI_CCAP_GYRO or
+     * LI_CCAP_ACCEL are responsible for populating the fields in the protocol's units:
+     * deg/s for gyro, and m/s^2 (inclusive of gravity) for accel.
+     */
+    protected void reportMotion() {
+        listener.reportControllerMotion(deviceId, MoonBridge.LI_MOTION_TYPE_GYRO, gyroX, gyroY, gyroZ);
+        listener.reportControllerMotion(deviceId, MoonBridge.LI_MOTION_TYPE_ACCEL, accelX, accelY, accelZ);
     }
 
     public abstract boolean start();

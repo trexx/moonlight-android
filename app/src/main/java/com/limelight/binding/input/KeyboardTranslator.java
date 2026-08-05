@@ -26,6 +26,9 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
     public static final int VK_0 = 48;
     public static final int VK_9 = 57;
     public static final int VK_A = 65;
+    public static final int VK_D = 68;
+    public static final int VK_G = 71;
+    public static final int VK_V = 86;
     public static final int VK_Z = 90;
     public static final int VK_NUMPAD0 = 96;
     public static final int VK_BACK_SLASH = 92;
@@ -35,7 +38,10 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
     public static final int VK_BACK_SPACE = 8;
     public static final int VK_EQUALS = 61;
     public static final int VK_ESCAPE = 27;
+    public static final int VK_RETURN = 13;
     public static final int VK_F1 = 112;
+    public static final int VK_F4 = 115;
+    public static final int VK_F11 = 122;
     public static final int VK_END = 35;
     public static final int VK_HOME = 36;
     public static final int VK_NUM_LOCK = 144;
@@ -56,6 +62,10 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
     public static final int VK_BACK_QUOTE = 192;
     public static final int VK_QUOTE = 222;
     public static final int VK_PAUSE = 19;
+    public static final int VK_LWIN = 91;
+    public static final int VK_LSHIFT = 160;
+    public static final int VK_LCONTROL = 162;
+    public static final int VK_LMENU = 164;
 
     private static class KeyboardMapping {
         private final InputDevice device;
@@ -180,7 +190,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
         else {
             switch (keycode) {
             case KeyEvent.KEYCODE_ALT_LEFT:
-                translated = 0xA4;
+                translated = VK_LMENU;
                 break;
 
             case KeyEvent.KEYCODE_ALT_RIGHT:
@@ -204,7 +214,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 break;
                 
             case KeyEvent.KEYCODE_CTRL_LEFT:
-                translated = 0xA2;
+                translated = VK_LCONTROL;
                 break;
 
             case KeyEvent.KEYCODE_CTRL_RIGHT:
@@ -241,7 +251,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 break;
 
             case KeyEvent.KEYCODE_META_LEFT:
-                translated = 0x5b;
+                translated = VK_LWIN;
                 break;
 
             case KeyEvent.KEYCODE_META_RIGHT:
@@ -293,7 +303,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 break;
                 
             case KeyEvent.KEYCODE_SHIFT_LEFT:
-                translated = 0xA0;
+                translated = VK_LSHIFT;
                 break;
 
             case KeyEvent.KEYCODE_SHIFT_RIGHT:
@@ -380,6 +390,16 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
         }
         
         return (short) ((KEY_PREFIX << 8) | translated);
+    }
+
+    /**
+     * Applies the on-the-wire key prefix to a raw Windows virtual key code, producing the same
+     * encoding {@link #translate} emits. Callers that already know the VK they want to send
+     * (rather than deriving it from a {@link KeyEvent}) should use this instead of passing the
+     * bare VK, so every keyboard packet we send is encoded identically.
+     */
+    public static short toWireKeycode(int windowsVirtualKey) {
+        return (short) ((KEY_PREFIX << 8) | windowsVirtualKey);
     }
 
     @Override
