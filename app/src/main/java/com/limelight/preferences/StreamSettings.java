@@ -1,7 +1,6 @@
 package com.limelight.preferences;
 
 import android.content.Context;
-import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -27,13 +26,11 @@ import android.view.View;
 import android.view.ViewGroup;
 
 import com.limelight.LimeLog;
-import com.limelight.PcView;
 import com.limelight.R;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.UiHelper;
 
-import java.lang.reflect.Method;
 import java.util.Arrays;
 
 public class StreamSettings extends Activity {
@@ -54,7 +51,6 @@ public class StreamSettings extends Activity {
 
         previousPrefs = PreferenceConfiguration.readPreferences(this);
 
-        UiHelper.setLocale(this);
 
         setContentView(R.layout.activity_stream_settings);
 
@@ -88,18 +84,6 @@ public class StreamSettings extends Activity {
     // NOTE: This will NOT be called on Android 13+ with android:enableOnBackInvokedCallback="true"
     public void onBackPressed() {
         finish();
-
-        // Language changes are handled via configuration changes in Android 13+,
-        // so manual activity relaunching is no longer required.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
-            PreferenceConfiguration newPrefs = PreferenceConfiguration.readPreferences(this);
-            if (!newPrefs.language.equals(previousPrefs.language)) {
-                // Restart the PC view to apply UI changes
-                Intent intent = new Intent(this, PcView.class);
-                intent.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
-                startActivity(intent, null);
-            }
-        }
     }
 
     public static class SettingsFragment extends PreferenceFragment {

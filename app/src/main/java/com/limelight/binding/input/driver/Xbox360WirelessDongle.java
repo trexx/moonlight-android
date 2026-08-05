@@ -9,7 +9,6 @@ import android.view.InputDevice;
 
 import com.limelight.LimeLog;
 
-import java.nio.ByteBuffer;
 
 public class Xbox360WirelessDongle extends AbstractController {
     private UsbDevice device;

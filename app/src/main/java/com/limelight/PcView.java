@@ -236,7 +236,6 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
 
         shortcutHelper = new ShortcutHelper(this);
 
-        UiHelper.setLocale(this);
 
         // Bind to the computer manager service
         bindService(new Intent(PcView.this, ComputerManagerService.class), serviceConnection,

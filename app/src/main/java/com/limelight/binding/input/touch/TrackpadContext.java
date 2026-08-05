@@ -3,7 +3,6 @@ package com.limelight.binding.input.touch;
 import android.os.Handler;
 import android.os.Looper;
 
-import com.limelight.LimeLog;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.MouseButtonPacket;
 

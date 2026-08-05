@@ -1,9 +1,7 @@
 package com.limelight.binding.input.driver;
 
-import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
-import android.util.Pair;
 
 import com.limelight.LimeLog;
 import com.limelight.binding.input.driver.UsbDriverListener;

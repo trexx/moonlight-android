@@ -23,7 +23,6 @@ import android.media.MediaFormat;
 import android.os.Build;
 
 import com.limelight.LimeLog;
-import com.limelight.preferences.PreferenceConfiguration;
 
 public class MediaCodecHelper {
     
