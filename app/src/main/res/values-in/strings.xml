@@ -93,7 +93,6 @@
 \n
 \nJika masalah berkelanjutan, coba install ulang GeForce Experience dan driver video grafis Anda.</string>
     <string name="help">Bantuan</string>
-    <string name="pcview_menu_eol">NVIDIA GameStream End-of-Service</string>
     <string name="applist_menu_resume">Lanjutkan Sesi</string>
     <string name="applist_menu_quit_and_start">Keluar dari Game Saat Ini dan Mulai</string>
     <string name="applist_menu_quit">Keluar dari Sesi</string>

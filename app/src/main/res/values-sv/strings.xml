@@ -17,7 +17,6 @@
     <string name="pcview_menu_delete_pc">Radera PC</string>
     <string name="pcview_menu_test_network">Testa nätverksanslutning</string>
     <string name="pcview_menu_details">Visa detaljer</string>
-    <string name="pcview_menu_eol">NVIDIA GameStream upphör att fungera</string>
     <string name="nettest_title_waiting">Testning av nätverksanslutning</string>
     <string name="nettest_text_waiting">Moonlight testar din nätverksanslutning för att avgöra om några nödvändiga portar är blockerade.
 \n

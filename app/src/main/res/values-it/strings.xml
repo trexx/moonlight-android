@@ -265,7 +265,6 @@
     <string name="title_full_range">Forza video full range (sperimentale)</string>
     <string name="title_native_fps_dialog">Avviso FPS nativi</string>
     <string name="videoformat_av1always">Preferisci AV1 (Sperimentale)</string>
-    <string name="pcview_menu_eol">Terminazione del servizio NVIDIA GameStream</string>
     <string name="title_checkbox_gamepad_motion_sensors">Permetti l\'uso dei sensori giroscopici del gamepad</string>
     <string name="summary_checkbox_gamepad_touchpad_as_mouse">Forza l\'input del touchpad del gamepad a controllare il mouse dell\'host, anche quando si sta emulando un gamepad col touchpad.</string>
     <string name="toast_controller_type_changed">Il tipo di gamepad potrebbe cambiare se è attiva l\'emulazione dei sensori giroscopici</string>

@@ -381,9 +381,6 @@ public class NvHTTP {
         details.pairState = getPairState(serverInfo);
         details.runningGameId = getCurrentGame(serverInfo);
 
-        // The MJOLNIR codename was used by GFE but never by any third-party server
-        details.nvidiaServer = getXmlString(serverInfo, "state", true).contains("MJOLNIR");
-
         // We could reach it so it's online
         details.state = ComputerDetails.State.ONLINE;
 
@@ -537,16 +534,6 @@ public class NvHTTP {
         return getXmlString(serverInfo, "GfeVersion", false);
     }
     
-    public boolean supports4K(String serverInfo) throws XmlPullParserException, IOException {
-        // Only allow 4K on GFE 3.x. GfeVersion wasn't present on very old versions of GFE.
-        String gfeVersionStr = getXmlString(serverInfo, "GfeVersion", false);
-        if (gfeVersionStr == null || gfeVersionStr.startsWith("2.")) {
-            return false;
-        }
-
-        return true;
-    }
-
     public int getCurrentGame(String serverInfo) throws IOException, XmlPullParserException {
         // GFE 2.8 started keeping currentgame set to the last game played. As a result, it no longer
         // has the semantics that its name would indicate. To contain the effects of this change as much
@@ -753,27 +740,8 @@ public class NvHTTP {
     }
     
     public boolean launchApp(ConnectionContext context, String verb, int appId, boolean enableHdr) throws IOException, XmlPullParserException {
-        // Using an FPS value over 60 causes SOPS to default to 720p60,
-        // so force it to 0 to ensure the correct resolution is set. We
-        // used to use 60 here but that locked the frame rate to 60 FPS
-        // on GFE 3.20.3.
-        int fps = context.isNvidiaServerSoftware && context.streamConfig.getLaunchRefreshRate() > 60 ?
-                0 : context.streamConfig.getLaunchRefreshRate();
-
+        int fps = context.streamConfig.getLaunchRefreshRate();
         boolean enableSops = context.streamConfig.getSops();
-        if (context.isNvidiaServerSoftware) {
-            // Using an unsupported resolution (not 720p, 1080p, or 4K) causes
-            // GFE to force SOPS to 720p60. This is fine for < 720p resolutions like
-            // 360p or 480p, but it is not ideal for 1440p and other resolutions.
-            // When we detect an unsupported resolution, disable SOPS unless it's under 720p.
-            // FIXME: Detect support resolutions using the serverinfo response, not a hardcoded list
-            if (context.negotiatedWidth * context.negotiatedHeight > 1280 * 720 &&
-                    context.negotiatedWidth * context.negotiatedHeight != 1920 * 1080 &&
-                    context.negotiatedWidth * context.negotiatedHeight != 3840 * 2160) {
-                LimeLog.info("Disabling SOPS due to non-standard resolution: "+context.negotiatedWidth+"x"+context.negotiatedHeight);
-                enableSops = false;
-            }
-        }
 
         String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), verb,
             "appid=" + appId +

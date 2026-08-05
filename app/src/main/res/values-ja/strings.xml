@@ -128,7 +128,6 @@
     <string name="scut_deleted_pc">コンピュータを検知しました</string>
     <string name="scut_pc_not_found">コンピュータが見つかりませんでした</string>
     <string name="pcview_menu_header_offline">オフライン</string>
-    <string name="pcview_menu_eol">NVIDIA GameStream はサービスが終了しています</string>
     <string name="nettest_text_waiting">Moonlight はポートがブロックされていないか確かめるためネットワーク接続をてすとしています。
 \n
 \n少々お待ちください…</string>

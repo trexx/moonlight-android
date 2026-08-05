@@ -236,7 +236,6 @@
     <string name="nettest_text_success">Wygląda na to, że sieć nie blokuje Moonlight. Jeśli nadal masz problemy z połączeniem, sprawdź ustawienia zapory sieciowej na swoim komputerze.
 \n
 \nJeśli próbujesz przesyłać strumieniowo przez Internet, zainstaluj narzędzie Moonlight Internet Hosting Tool na swoim komputerze i uruchom dołączony tester przesyłania strumieniowego przez Internet, aby sprawdzić połączenie internetowe komputera.</string>
-    <string name="pcview_menu_eol">Zakończenie usług NVIDIA GameStream</string>
     <string name="nettest_text_inconclusive">Nie można było wykonać testu sieci ponieważ żaden z serwerów testujących połączenie Moonlight nie był osiągalny. Sprawdź połączenie internetowe lub spróbuj ponownie później.</string>
     <string name="nettest_title_waiting">Testowanie połączenia sieciowego</string>
     <string name="wol_fail">Nie udało się wysłać pakietów Wake-On-LAN</string>

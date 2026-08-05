@@ -21,7 +21,6 @@
     <string name="pcview_menu_send_wol">שלח פקודת \"Wake-On-LAN\"</string>
     <string name="pcview_menu_delete_pc">מחק מחשב</string>
     <string name="pcview_menu_test_network">בדוק חיבור רשת</string>
-    <string name="pcview_menu_eol">סוף פעילות שירות NVIDIA GameStream</string>
     <string name="nettest_title_waiting">בודק חיבור רשת</string>
     <string name="nettest_title_done">בדיקת רשת הושלמה</string>
     <string name="nettest_text_inconclusive">בדיקת הרשת לא התבצעה בגלל שאין קישוריות לשרתי הבדיקה של מונלייט. בבקשה בדוק את החיבור לאינטרנט או נסה שוב מאוחר יותר.</string>
