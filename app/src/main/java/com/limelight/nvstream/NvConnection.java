@@ -45,6 +45,11 @@ public class NvConnection {
     private String uniqueId;
     private ConnectionContext context;
     private static Semaphore connectionAllowed = new Semaphore(1);
+
+    // Retry budget for the app launch stage. See the loop in start().
+    private static final int LAUNCH_ATTEMPTS = 5;
+    private static final int LAUNCH_RETRY_DELAY_MS = 2000;
+
     private final boolean isMonkey;
     private final Context appContext;
 
@@ -359,22 +364,42 @@ public class NvConnection {
 
                 context.connListener.stageStarting(appName);
 
-                try {
-                    if (!startApp()) {
-                        context.connListener.stageFailed(appName, 0, 0);
+                // A host that has just woken up can accept our connection while Sunshine is
+                // still initialising, which fails the launch in a way that succeeds moments
+                // later. Retry a few times before surfacing the failure to the user.
+                int launchAttempt = 0;
+                while (true) {
+                    boolean retry;
+
+                    try {
+                        if (startApp()) {
+                            context.connListener.stageComplete(appName);
+                            break;
+                        }
+                        retry = context.connListener.stageFailed(appName, 0, 0);
+                    } catch (HostHttpResponseException e) {
+                        e.printStackTrace();
+                        retry = context.connListener.stageFailed(appName, 0, e.getErrorCode());
+                        if (!retry) {
+                            context.connListener.displayMessage(e.getMessage());
+                        }
+                    } catch (XmlPullParserException | IOException e) {
+                        e.printStackTrace();
+                        retry = context.connListener.stageFailed(appName, MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989, 0);
+                        if (!retry) {
+                            context.connListener.displayMessage(e.getMessage());
+                        }
+                    }
+
+                    if (!retry || ++launchAttempt >= LAUNCH_ATTEMPTS) {
                         return;
                     }
-                    context.connListener.stageComplete(appName);
-                } catch (HostHttpResponseException e) {
-                    e.printStackTrace();
-                    context.connListener.displayMessage(e.getMessage());
-                    context.connListener.stageFailed(appName, 0, e.getErrorCode());
-                    return;
-                } catch (XmlPullParserException | IOException e) {
-                    e.printStackTrace();
-                    context.connListener.displayMessage(e.getMessage());
-                    context.connListener.stageFailed(appName, MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989, 0);
-                    return;
+
+                    try {
+                        Thread.sleep(LAUNCH_RETRY_DELAY_MS);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
                 }
 
                 ByteBuffer ib = ByteBuffer.allocate(16);

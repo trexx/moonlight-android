@@ -29,6 +29,17 @@
             android:summary="@string/summary_seekbar_bitrate"
             android:text="@string/suffix_seekbar_bitrate_mbps"
             android:title="@string/title_seekbar_bitrate" />
+        <com.limelight.preferences.SeekBarPreference
+            android:key="seekbar_metered_bitrate_kbps"
+            android:dialogMessage="@string/summary_seekbar_metered_bitrate"
+            seekbar:min="500"
+            android:max="150000"
+            seekbar:step="500"
+            seekbar:keyStep="1000"
+            seekbar:divisor="1000"
+            android:summary="@string/summary_seekbar_metered_bitrate"
+            android:text="@string/suffix_seekbar_bitrate_mbps"
+            android:title="@string/title_seekbar_metered_bitrate" />
         <ListPreference
             android:key="frame_pacing"
             android:title="@string/title_frame_pacing"
@@ -36,10 +47,13 @@
             android:entryValues="@array/video_frame_pacing_values"
             android:summary="@string/summary_frame_pacing"
             android:defaultValue="latency" />
-        <CheckBoxPreference
-            android:key="checkbox_stretch_video"
-            android:title="@string/title_checkbox_stretch_video"
-            android:defaultValue="false" />
+        <ListPreference
+            android:key="list_video_scale_mode"
+            android:title="@string/title_video_scale_mode"
+            android:entries="@array/video_scale_mode_names"
+            android:entryValues="@array/video_scale_mode_values"
+            android:summary="%s"
+            android:defaultValue="fit" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_audio_settings">
         <ListPreference
@@ -60,6 +74,7 @@
         <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_deadzone"
             android:defaultValue="7"
+            seekbar:min="-20"
             android:max="20"
             android:summary="@string/summary_seekbar_deadzone"
             android:text="@string/suffix_seekbar_deadzone"
@@ -129,11 +144,13 @@
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_input_settings"
         android:key="category_input_settings">
-        <CheckBoxPreference
-            android:key="checkbox_touchscreen_trackpad"
-            android:title="@string/title_checkbox_touchscreen_trackpad"
-            android:summary="@string/summary_checkbox_touchscreen_trackpad"
-            android:defaultValue="true" />
+        <ListPreference
+            android:key="list_mouse_mode"
+            android:title="@string/title_mouse_mode"
+            android:entries="@array/mouse_mode_names"
+            android:entryValues="@array/mouse_mode_values"
+            android:summary="%s"
+            android:defaultValue="relative" />
         <CheckBoxPreference
             android:key="checkbox_mouse_nav_buttons"
             android:title="@string/title_checkbox_mouse_nav_buttons"
@@ -235,6 +252,21 @@
             android:key="checkbox_reduce_refresh_rate"
             android:title="@string/title_checkbox_reduce_refresh_rate"
             android:summary="@string/summary_checkbox_reduce_refresh_rate"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_enforce_display_mode"
+            android:title="@string/title_checkbox_enforce_display_mode"
+            android:summary="@string/summary_checkbox_enforce_display_mode"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_enable_commit_text"
+            android:title="@string/title_checkbox_enable_commit_text"
+            android:summary="@string/summary_checkbox_enable_commit_text"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_resume_without_confirm"
+            android:title="@string/title_checkbox_resume_without_confirm"
+            android:summary="@string/summary_checkbox_resume_without_confirm"
             android:defaultValue="false" />
         <CheckBoxPreference
             android:key="checkbox_disable_warnings"

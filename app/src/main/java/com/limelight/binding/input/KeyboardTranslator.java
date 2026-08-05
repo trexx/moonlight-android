@@ -7,6 +7,8 @@ import android.util.SparseArray;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 
+import com.limelight.utils.KeyMapper;
+
 import java.util.Arrays;
 
 /**
@@ -127,6 +129,20 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
      * @return a GFE keycode for the given keycode
      */
     public short translate(int keycode, int deviceId) {
+        return translate(keycode, deviceId, -1);
+    }
+
+    /**
+     * Translates an Android keycode, falling back to the hardware scancode for keys
+     * that Android has no keycode for (many international and media keys). Without the
+     * fallback those keystrokes are silently dropped.
+     *
+     * @param keycode the code to be translated
+     * @param deviceId InputDevice.getId() or -1 if unknown
+     * @param scancode KeyEvent.getScanCode() or -1 if unknown
+     * @return a GFE keycode for the given keycode
+     */
+    public short translate(int keycode, int deviceId, int scancode) {
         int translated;
 
         // If a device ID was provided, look up the keyboard mapping
@@ -350,6 +366,15 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 break;
 
             default:
+                // Android has no keycode for this key. Fall back to translating the
+                // hardware scancode, which is a Linux evdev code, into a Windows VK.
+                if (scancode >= 0) {
+                    translated = KeyMapper.getWindowsKeyCode(scancode);
+                    if (translated < 0) {
+                        return 0;
+                    }
+                    break;
+                }
                 return 0;
             }
         }

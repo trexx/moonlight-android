@@ -32,6 +32,7 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Service;
 import android.content.ComponentName;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.res.Configuration;
@@ -51,6 +52,7 @@ import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
 import android.widget.ImageButton;
 import android.widget.RelativeLayout;
+import android.net.Uri;
 import android.widget.Toast;
 import android.widget.AdapterView.AdapterContextMenuInfo;
 
@@ -119,6 +121,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
     private final static int FULL_APP_LIST_ID = 9;
     private final static int TEST_NETWORK_ID = 10;
     private final static int GAMESTREAM_EOL_ID = 11;
+    private final static int MANAGEMENT_PAGE_ID = 12;
 
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view);
@@ -377,6 +380,12 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
             }
 
             menu.add(Menu.NONE, FULL_APP_LIST_ID, 4, getResources().getString(R.string.pcview_menu_app_list));
+        }
+
+        // Sunshine serves its web UI one port above the HTTP port. GeForce Experience
+        // has no such page, so only offer this for non-NVIDIA hosts.
+        if (!computer.details.nvidiaServer) {
+            menu.add(Menu.NONE, MANAGEMENT_PAGE_ID, 5, getResources().getString(R.string.pcview_menu_management_page));
         }
 
         menu.add(Menu.NONE, TEST_NETWORK_ID, 5, getResources().getString(R.string.pcview_menu_test_network));
@@ -665,6 +674,18 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
 
             case VIEW_DETAILS_ID:
                 Dialog.displayDialog(PcView.this, getResources().getString(R.string.title_details), computer.details.toString(), false);
+                return true;
+
+            case MANAGEMENT_PAGE_ID:
+                if (computer.details.activeAddress != null) {
+                    String url = "https://" + computer.details.activeAddress.address + ":" +
+                            (computer.details.activeAddress.port + 1);
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                    } catch (ActivityNotFoundException e) {
+                        Toast.makeText(PcView.this, getResources().getString(R.string.error_no_browser), Toast.LENGTH_LONG).show();
+                    }
+                }
                 return true;
 
             case TEST_NETWORK_ID:

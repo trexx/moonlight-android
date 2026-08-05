@@ -3,7 +3,9 @@ package com.limelight.nvstream;
 public interface NvConnectionListener {
     void stageStarting(String stage);
     void stageComplete(String stage);
-    void stageFailed(String stage, int portFlags, int errorCode);
+    // Returns true if the caller should retry the stage rather than give up. Only the
+    // app launch stage honours this today; see NvConnection.start().
+    boolean stageFailed(String stage, int portFlags, int errorCode);
     
     void connectionStarted();
     void connectionTerminated(int errorCode);

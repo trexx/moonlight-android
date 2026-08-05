@@ -18,6 +18,7 @@ import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.utils.TrafficStatsHelper;
 import com.limelight.preferences.PreferenceConfiguration;
 
 import android.app.Activity;
@@ -108,6 +109,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private VideoStats activeWindowVideoStats;
     private VideoStats lastWindowVideoStats;
     private VideoStats globalVideoStats;
+    private final TrafficStatsHelper trafficStats = new TrafficStatsHelper();
 
     private long lastTimestampUs;
     private int lastFrameNumber;
@@ -982,7 +984,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         // We use a separate thread to avoid any main thread delays from delaying rendering
-        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_DEFAULT + Process.THREAD_PRIORITY_MORE_FAVORABLE);
+        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_DISPLAY);
         choreographerHandlerThread.start();
 
         // Start the frame callbacks
@@ -1000,6 +1002,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         rendererThread = new Thread() {
             @Override
             public void run() {
+                // Thread.setPriority() below only sets the Java priority, which has little
+                // effect on Android. Set the real scheduler priority here instead.
+                Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
+
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
                     try {
@@ -1382,6 +1388,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         (float)lastTwo.framesLost / lastTwo.totalFrames * 100)).append('\n');
                 sb.append(context.getString(R.string.perf_overlay_netlatency,
                         (int)(rttInfo >> 32), (int)rttInfo)).append('\n');
+                trafficStats.sample();
+                sb.append(context.getString(R.string.perf_overlay_bandwidth,
+                        trafficStats.getRxKBps() / 1024.f, trafficStats.getTxKBps() / 1024.f)).append('\n');
                 long[] videoRtpStats = MoonBridge.getRTPVideoStats();
                 long[] audioRtpStats = MoonBridge.getRTPAudioStats();
                 if (videoRtpStats != null && audioRtpStats != null) {

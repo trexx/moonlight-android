@@ -9,6 +9,7 @@ import com.limelight.binding.input.capture.InputCaptureManager;
 import com.limelight.binding.input.capture.InputCaptureProvider;
 import com.limelight.binding.input.touch.AbsoluteTouchContext;
 import com.limelight.binding.input.touch.RelativeTouchContext;
+import com.limelight.binding.input.touch.TrackpadContext;
 import com.limelight.binding.input.driver.UsbDriverService;
 import com.limelight.binding.input.evdev.EvdevListener;
 import com.limelight.binding.input.touch.TouchContext;
@@ -58,6 +59,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.util.Rational;
 import android.view.Display;
 import android.view.InputDevice;
@@ -83,7 +85,10 @@ import java.lang.reflect.Method;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.Locale;
+import java.util.Queue;
 
 
 public class Game extends Activity implements SurfaceHolder.Callback,
@@ -106,6 +111,29 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private static final int STYLUS_UP_DEAD_ZONE_RADIUS = 50;
 
     private static final int THREE_FINGER_TAP_THRESHOLD = 300;
+
+    // Soft-keyboard text input. The control stream has a payload limit, so committed
+    // text is split on UTF-8 code point boundaries and drained on a timer.
+    private static final int UTF8_CHUNK_SIZE = 512;
+    private static final int UTF8_CHUNK_INTERVAL_MS = 15;
+    private final Queue<String> commitTextQueue = new ArrayDeque<>();
+    private final Handler commitTextHandler = new Handler(Looper.getMainLooper());
+
+    private final Runnable flushCommitTextQueue = new Runnable() {
+        @Override
+        public void run() {
+            String chunk = commitTextQueue.poll();
+            if (chunk == null) {
+                return;
+            }
+            if (conn != null) {
+                conn.sendUtf8Text(chunk);
+            }
+            if (!commitTextQueue.isEmpty()) {
+                commitTextHandler.postDelayed(this, UTF8_CHUNK_INTERVAL_MS);
+            }
+        }
+    };
 
     private ControllerHandler controllerHandler;
     private KeyboardTranslator keyboardTranslator;
@@ -220,7 +248,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // Enter landscape unless we're on a square screen
         setPreferredOrientationForCurrentDisplay();
 
-        if (prefConfig.stretchVideo || shouldIgnoreInsetsForResolution(prefConfig.width, prefConfig.height)) {
+        if (prefConfig.scaleMode != PreferenceConfiguration.ScaleMode.FIT ||
+                shouldIgnoreInsetsForResolution(prefConfig.width, prefConfig.height)) {
             // Allow the activity to layout under notches if the fill-screen option
             // was turned on by the user or it's a full-screen native resolution
             getWindow().getAttributes().layoutInDisplayCutoutMode =
@@ -232,6 +261,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         streamView.setOnGenericMotionListener(this);
         streamView.setOnKeyListener(this);
         streamView.setInputCallbacks(this);
+        streamView.setCommitTextEnabled(prefConfig.enableCommitText);
 
         // Listen for touch events on the background touch view to enable trackpad mode
         // to work on areas outside of the StreamView itself. We use a separate View
@@ -271,9 +301,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
         });
 
-        // Warn the user if they're on a metered connection
+        // Warn the user if they're on a metered connection, and fall back to the
+        // reduced bitrate configured for metered networks.
         ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (connMgr.isActiveNetworkMetered()) {
+        boolean meteredNetwork = connMgr.isActiveNetworkMetered();
+        if (meteredNetwork) {
             displayTransientMessage(getResources().getString(R.string.conn_metered));
         }
 
@@ -448,7 +480,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 .setLaunchRefreshRate(prefConfig.fps)
                 .setRefreshRate(chosenFrameRate)
                 .setApp(app)
-                .setBitrate(prefConfig.bitrate)
+                .setBitrate(meteredNetwork ? prefConfig.meteredBitrate : prefConfig.bitrate)
                 .setEnableSops(prefConfig.enableSops)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
                 .setMaxPacketSize(1392)
@@ -474,16 +506,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         inputManager.registerInputDeviceListener(keyboardTranslator, null);
 
         // Initialize touch contexts
-        for (int i = 0; i < touchContextMap.length; i++) {
-            if (!prefConfig.touchscreenTrackpad) {
-                touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamView);
-            }
-            else {
-                touchContextMap[i] = new RelativeTouchContext(conn, i,
-                        REFERENCE_HORIZ_RES, REFERENCE_VERT_RES,
-                        streamView, prefConfig);
-            }
-        }
+        applyMouseMode();
 
         if (prefConfig.onscreenController) {
             // create virtual onscreen controller
@@ -834,7 +857,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             // If we only changed refresh rate and we're on an OS that supports Surface.setFrameRate()
             // use that instead of using preferredDisplayModeId to avoid the possibility of triggering
             // bugs that can cause the system to switch from 4K60 to 4K24 on Chromecast 4K.
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            if (prefConfig.enforceDisplayMode ||
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
                     display.getMode().getPhysicalWidth() != bestMode.getPhysicalWidth() ||
                     display.getMode().getPhysicalHeight() != bestMode.getPhysicalHeight()) {
                 // Apply the display mode change
@@ -851,7 +875,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         displayRefreshRate = bestMode.getRefreshRate();
 
-        if (prefConfig.stretchVideo) {
+        streamView.setFillDisplay(prefConfig.scaleMode == PreferenceConfiguration.ScaleMode.FILL);
+
+        if (prefConfig.scaleMode == PreferenceConfiguration.ScaleMode.STRETCH) {
             // Set the surface to the size of the video
             streamView.getHolder().setFixedSize(prefConfig.width, prefConfig.height);
         }
@@ -1212,6 +1238,88 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return handleKeyDown(event) || super.onKeyDown(keyCode, event);
     }
 
+    /**
+     * Builds the touch contexts for the configured mouse mode. Safe to call again at
+     * any point, so the mode can be changed without restarting the stream.
+     */
+    private void applyMouseMode() {
+        for (int i = 0; i < touchContextMap.length; i++) {
+            switch (prefConfig.mouseMode) {
+                case ABSOLUTE:
+                    touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamView, false);
+                    break;
+                case ABSOLUTE_SWAPPED:
+                    touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamView, true);
+                    break;
+                case TRACKPAD:
+                    touchContextMap[i] = new TrackpadContext(conn, i);
+                    break;
+                case RELATIVE:
+                default:
+                    touchContextMap[i] = new RelativeTouchContext(conn, i,
+                            REFERENCE_HORIZ_RES, REFERENCE_VERT_RES,
+                            streamView, prefConfig);
+                    break;
+            }
+        }
+    }
+
+    @Override
+    public boolean handleCommitText(CharSequence text) {
+        if (!prefConfig.enableCommitText || conn == null || text == null) {
+            return false;
+        }
+        enqueueCommitText(text.toString());
+        return true;
+    }
+
+    @Override
+    public boolean handleDeleteSurroundingText(int beforeLength, int afterLength) {
+        if (!prefConfig.enableCommitText || conn == null) {
+            return false;
+        }
+
+        // The host has no notion of our IME's buffer, so approximate a deletion with
+        // the equivalent number of backspaces.
+        if (beforeLength > 0) {
+            short backspaceCode = keyboardTranslator.translate(KeyEvent.KEYCODE_DEL, -1);
+            for (int i = 0; i < beforeLength; i++) {
+                conn.sendKeyboardInput(backspaceCode, KeyboardPacket.KEY_DOWN, (byte)0, (byte)0);
+                conn.sendKeyboardInput(backspaceCode, KeyboardPacket.KEY_UP, (byte)0, (byte)0);
+            }
+        }
+        return true;
+    }
+
+    private void enqueueCommitText(String text) {
+        if (text.isEmpty()) {
+            return;
+        }
+
+        byte[] utf8 = text.getBytes(StandardCharsets.UTF_8);
+        int offset = 0;
+        while (offset < utf8.length) {
+            int end = Math.min(offset + UTF8_CHUNK_SIZE, utf8.length);
+
+            // Never split inside a multi-byte sequence
+            while (end < utf8.length && (utf8[end] & 0xC0) == 0x80) {
+                end--;
+            }
+            if (end <= offset) {
+                break;
+            }
+
+            commitTextQueue.add(new String(utf8, offset, end - offset, StandardCharsets.UTF_8));
+            offset = end;
+        }
+
+        // Start draining if the timer isn't already running
+        if (!commitTextQueue.isEmpty()) {
+            commitTextHandler.removeCallbacks(flushCommitTextQueue);
+            commitTextHandler.post(flushCommitTextQueue);
+        }
+    }
+
     @Override
     public boolean handleKeyDown(KeyEvent event) {
         // Pass-through virtual navigation keys
@@ -1261,7 +1369,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
             // We'll send it as a raw key event if we have a key mapping, otherwise we'll send it
             // as UTF-8 text (if it's a printable character).
-            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
+            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId(), event.getScanCode());
             if (translated == 0) {
                 // Make sure it has a valid Unicode representation and it's not a dead character
                 // (which we don't support). If those are true, we can send it as UTF-8 text.
@@ -1338,7 +1446,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 return false;
             }
 
-            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
+            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId(), event.getScanCode());
             if (translated == 0) {
                 // If we sent this event as UTF-8 on key down, also report that it was handled
                 // when we get the key up event for it.
@@ -2137,10 +2245,26 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void stageFailed(final String stage, final int portFlags, final int errorCode) {
+    public boolean stageFailed(final String stage, final int portFlags, final int errorCode) {
         // Perform a connection test if the failure could be due to a blocked port
         // This does network I/O, so don't do it on the main thread.
         final int portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER, 443, portFlags);
+
+        // A failure with no error code, on a connection where we cannot demonstrate a
+        // blocked port, is usually a host that is reachable but not ready to launch yet.
+        // Tell the caller to retry instead of tearing the session down.
+        if (errorCode == 0 &&
+                (portTestResult == MoonBridge.ML_TEST_RESULT_INCONCLUSIVE || portTestResult == 0)) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (spinner != null) {
+                        spinner.setMessage(getResources().getString(R.string.conn_starting_retry));
+                    }
+                }
+            });
+            return true;
+        }
 
         runOnUiThread(new Runnable() {
             @Override
@@ -2174,6 +2298,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 }
             }
         });
+
+        return false;
     }
 
     @Override

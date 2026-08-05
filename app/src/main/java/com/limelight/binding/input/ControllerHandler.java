@@ -111,6 +111,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final NvConnection conn;
     private final Activity activityContext;
     private final double stickDeadzone;
+
+    // Residual deadzone applied when deadzone compensation is active, to reject stick drift
+    private static final double COMPENSATED_CENTER_DEADZONE = 0.01;
     private final InputDeviceContext defaultContext = new InputDeviceContext();
     private final GameGestures gestures;
     private final InputManager inputManager;
@@ -173,11 +176,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
         }
 
-        // 1% is the lowest possible deadzone we support
-        if (deadzonePercentage <= 0) {
-            deadzonePercentage = 1;
-        }
-
+        // A negative value is deadzone *compensation* rather than a deadzone, so it is
+        // passed through unclamped. See handleDeadZone().
         this.stickDeadzone = (double)deadzonePercentage / 100.0;
 
         // Initialize the default context for events with no device
@@ -1529,7 +1529,27 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     }
 
     private void handleDeadZone(Vector2d stickVector, float deadzoneRadius) {
-        if (stickVector.getMagnitude() <= deadzoneRadius) {
+        double magnitude = stickVector.getMagnitude();
+
+        if (deadzoneRadius < 0) {
+            // Negative values mean deadzone compensation: the stick is worn and no longer
+            // reaches full deflection, so scale the magnitude up such that the reduced
+            // travel covers the full range. A small fixed deadzone still guards drift.
+            if (magnitude <= COMPENSATED_CENTER_DEADZONE) {
+                stickVector.initialize(0, 0);
+            }
+            else {
+                double scale = 1.0 / (1.0 + deadzoneRadius);
+                if (magnitude * scale > 1.0) {
+                    // Clamp to the unit circle so we never exceed full deflection
+                    scale = 1.0 / magnitude;
+                }
+                stickVector.scalarMultiply(scale);
+            }
+            return;
+        }
+
+        if (magnitude <= deadzoneRadius) {
             // Deadzone
             stickVector.initialize(0, 0);
         }

@@ -36,6 +36,11 @@ public class SeekBarPreference extends DialogPreference
     private final int divisor;
     private int currentValue;
 
+    // Android's SeekBar progress always starts at 0, so a negative minimum is represented
+    // by offsetting progress by this amount. It is 0 whenever min >= 0, which leaves the
+    // behaviour of every existing preference untouched.
+    private final int progressOffset;
+
     public SeekBarPreference(Context context, AttributeSet attrs) {
         super(context, attrs);
         this.context = context;
@@ -65,6 +70,7 @@ public class SeekBarPreference extends DialogPreference
         stepSize = attrs.getAttributeIntValue(SEEKBAR_SCHEMA_URL, "step", 1);
         divisor = attrs.getAttributeIntValue(SEEKBAR_SCHEMA_URL, "divisor", 1);
         keyStepSize = attrs.getAttributeIntValue(SEEKBAR_SCHEMA_URL, "keyStep", 0);
+        progressOffset = Math.min(minValue, 0);
     }
 
     @Override
@@ -95,15 +101,18 @@ public class SeekBarPreference extends DialogPreference
         seekBar = new SeekBar(context);
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
-            public void onProgressChanged(SeekBar seekBar, int value, boolean b) {
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean b) {
+                int value = progress + progressOffset;
+
                 if (value < minValue) {
-                    seekBar.setProgress(minValue);
+                    seekBar.setProgress(minValue - progressOffset);
                     return;
                 }
 
-                int roundedValue = ((value + (stepSize - 1))/stepSize)*stepSize;
+                // floorDiv rather than / so step rounding stays correct for negative values
+                int roundedValue = Math.floorDiv(value + (stepSize - 1), stepSize)*stepSize;
                 if (roundedValue != value) {
-                    seekBar.setProgress(roundedValue);
+                    seekBar.setProgress(roundedValue - progressOffset);
                     return;
                 }
 
@@ -131,11 +140,11 @@ public class SeekBarPreference extends DialogPreference
             currentValue = getPersistedInt(defaultValue);
         }
 
-        seekBar.setMax(maxValue);
+        seekBar.setMax(maxValue - progressOffset);
         if (keyStepSize != 0) {
             seekBar.setKeyProgressIncrement(keyStepSize);
         }
-        seekBar.setProgress(currentValue);
+        seekBar.setProgress(currentValue - progressOffset);
 
         return layout;
     }
@@ -143,11 +152,11 @@ public class SeekBarPreference extends DialogPreference
     @Override
     protected void onBindDialogView(View v) {
         super.onBindDialogView(v);
-        seekBar.setMax(maxValue);
+        seekBar.setMax(maxValue - progressOffset);
         if (keyStepSize != 0) {
             seekBar.setKeyProgressIncrement(keyStepSize);
         }
-        seekBar.setProgress(currentValue);
+        seekBar.setProgress(currentValue - progressOffset);
     }
 
     @Override
@@ -165,7 +174,7 @@ public class SeekBarPreference extends DialogPreference
     public void setProgress(int progress) {
         this.currentValue = progress;
         if (seekBar != null) {
-            seekBar.setProgress(progress);
+            seekBar.setProgress(progress - progressOffset);
         }
     }
     public int getProgress() {
@@ -181,9 +190,9 @@ public class SeekBarPreference extends DialogPreference
             @Override
             public void onClick(View view) {
                 if (shouldPersist()) {
-                    currentValue = seekBar.getProgress();
-                    persistInt(seekBar.getProgress());
-                    callChangeListener(seekBar.getProgress());
+                    currentValue = seekBar.getProgress() + progressOffset;
+                    persistInt(currentValue);
+                    callChangeListener(currentValue);
                 }
 
                 getDialog().dismiss();

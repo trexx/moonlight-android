@@ -161,6 +161,12 @@ public abstract class AbstractXboxController extends AbstractController {
             inputThread = null;
         }
 
+        // Release the interfaces we claimed, otherwise Android's own driver
+        // cannot take the device back over when it is reattached.
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            connection.releaseInterface(device.getInterface(i));
+        }
+
         // Close the USB connection
         connection.close();
 

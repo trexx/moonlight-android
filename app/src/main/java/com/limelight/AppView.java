@@ -630,9 +630,16 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                                     long id) {
                 AppObject app = (AppObject) appGridAdapter.getItem(pos);
 
-                // Only open the context menu if something is running, otherwise start it
+                // Only open the context menu if something is running, otherwise start it.
+                // Tapping the app that is already running just resumes it, if the user
+                // opted out of the confirmation.
                 if (lastRunningAppId != 0) {
-                    openContextMenu(arg1);
+                    if (lastRunningAppId == app.app.getAppId() &&
+                            PreferenceConfiguration.readPreferences(AppView.this).resumeWithoutConfirm) {
+                        ServerHelper.doStart(AppView.this, app.app, computer, managerBinder);
+                    } else {
+                        openContextMenu(arg1);
+                    }
                 } else {
                     ServerHelper.doStart(AppView.this, app.app, computer, managerBinder);
                 }
