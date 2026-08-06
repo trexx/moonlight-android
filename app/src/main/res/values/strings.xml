@@ -15,6 +15,7 @@
     <string name="pcview_menu_header_online">Online</string>
     <string name="pcview_menu_header_offline">Offline</string>
     <string name="pcview_menu_header_unknown">Refreshing</string>
+    <string name="pcview_card_not_paired">Not paired</string>
     <string name="pcview_menu_app_list">View All Apps</string>
     <string name="pcview_menu_pair_pc">Pair with PC</string>
     <string name="pcview_menu_delete_pc">Delete PC</string>
@@ -112,6 +113,7 @@
     <string name="applist_menu_details">View Details</string>
     <string name="applist_menu_scut">Create Shortcut</string>
     <string name="applist_menu_hide_app">Hide App</string>
+    <string name="applist_menu_unhide_app">Unhide App</string>
     <string name="applist_refresh_title">App List</string>
     <string name="applist_refresh_msg">Refreshing apps…</string>
     <string name="applist_quit_app">Quitting</string>
@@ -142,6 +144,7 @@
 
     <!-- Add computer manually activity -->
     <string name="title_add_pc">Add PC Manually</string>
+    <string name="title_settings">Settings</string>
     <string name="msg_add_pc">Connecting to the PC…</string>
     <string name="addpc_fail">Unable to connect to the specified computer. Make sure the required ports are allowed through the firewall.</string>
     <string name="addpc_success">Successfully added computer</string>

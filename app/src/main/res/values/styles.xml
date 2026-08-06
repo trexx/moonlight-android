@@ -1,12 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- Base application theme -->
-    <style name="AppBaseTheme" parent="android:Theme.Material">
+    <!--
+      Launcher UI theme.
+
+      Leanback supplies the D-pad focus behaviour, card metrics and overscan-safe padding the
+      browse fragments expect. Its base theme descends from android:Theme.Holo.NoActionBar, so
+      Leanback's own widgets are styled correctly but ANY framework widget shown over them -
+      most importantly AlertDialog and ProgressDialog - would inherit Holo. The two dialog
+      attribute overrides below redirect those to Material so nothing in the app renders Holo.
+      Remove them and the pairing PIN, delete confirmation, quit confirmation and network test
+      dialogs all revert to a 2011 look.
+    -->
+    <style name="AppBaseTheme" parent="Theme.Leanback">
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <!-- Avoid some systems like MIUI which break the visibility of games title -->
         <item name="android:forceDarkAllowed">false</item>
+
+        <!-- Keep dialogs off Holo (see above) -->
+        <item name="android:alertDialogTheme">@style/AppDialogTheme</item>
+        <item name="android:dialogTheme">@style/AppDialogTheme</item>
     </style>
 
     <!-- Application theme. -->
@@ -15,13 +29,39 @@
         <item name="android:windowNoTitle">true</item>
     </style>
 
+    <!-- Settings screens: Leanback preference styling, same dialog treatment. -->
+    <style name="SettingsTheme" parent="AppBaseTheme">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
+
+    <!-- Shared dialog look for every activity, Leanback-themed or not. -->
+    <style name="AppDialogTheme" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:forceDarkAllowed">false</item>
+    </style>
+
     <!--
-      Use a black background to avoid the transparent background when switching apps.
-      android:windowBackgroundFallback is supposed to do this, but it wasn't working for
-      me as of Android 7.1
+      Stream activity theme. Game is a fullscreen SurfaceView and is NOT moved onto Leanback:
+      a Leanback theme would drag the in-stream GameMenu dialog onto Holo, which is the exact
+      thing this revamp is removing. It stays Material-derived, which is what the game menu
+      and the on-screen keyboard already expect, with a black window background to avoid a
+      transparent flash when switching apps.
     -->
-    <style name="StreamBaseTheme" parent="AppBaseTheme">
+    <style name="StreamBaseTheme" parent="android:Theme.Material">
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:forceDarkAllowed">false</item>
         <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:alertDialogTheme">@style/AppDialogTheme</item>
+        <item name="android:dialogTheme">@style/AppDialogTheme</item>
+    </style>
+
+    <!--
+      Help viewer: a bare WebView with no Leanback widgets, so it uses the Material-derived
+      base rather than the Holo-based Leanback one.
+    -->
+    <style name="HelpTheme" parent="StreamBaseTheme">
+        <item name="android:windowBackground">@android:color/white</item>
     </style>
 
     <!-- Stream activity theme -->

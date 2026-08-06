@@ -7,14 +7,16 @@ import java.util.List;
 
 import com.limelight.computers.ComputerManagerListener;
 import com.limelight.computers.ComputerManagerService;
-import com.limelight.grid.AppGridAdapter;
+import androidx.fragment.app.FragmentActivity;
+import androidx.leanback.app.GuidedStepSupportFragment;
+import com.limelight.leanback.AppActionsFragment;
+import com.limelight.leanback.AppGridFragment;
+import com.limelight.leanback.AppListModel;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.http.PairingManager;
 import com.limelight.preferences.PreferenceConfiguration;
-import com.limelight.ui.AdapterFragment;
-import com.limelight.ui.AdapterFragmentCallbacks;
 import com.limelight.utils.CacheHelper;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ServerHelper;
@@ -22,7 +24,6 @@ import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
 
-import android.app.Activity;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Intent;
@@ -34,23 +35,17 @@ import android.graphics.drawable.BitmapDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
-import android.view.ContextMenu;
-import android.view.Menu;
-import android.view.MenuItem;
 import android.view.View;
-import android.view.ContextMenu.ContextMenuInfo;
-import android.widget.AbsListView;
-import android.widget.AdapterView;
-import android.widget.AdapterView.OnItemClickListener;
 import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.AdapterView.AdapterContextMenuInfo;
 
 import org.xmlpull.v1.XmlPullParserException;
 
-public class AppView extends Activity implements AdapterFragmentCallbacks {
-    private AppGridAdapter appGridAdapter;
+public class AppView extends FragmentActivity implements
+        AppGridFragment.Callbacks, AppActionsFragment.Callbacks {
+    private AppListModel appListModel;
+    private AppGridFragment appGridFragment;
     private String uuidString;
     private ShortcutHelper shortcutHelper;
 
@@ -100,21 +95,26 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                     shortcutHelper.reportComputerShortcutUsed(computer);
 
                     try {
-                        appGridAdapter = new AppGridAdapter(AppView.this,
-                                PreferenceConfiguration.readPreferences(AppView.this),
-                                computer, localBinder.getUniqueId(),
-                                showHiddenApps);
+                        appListModel = new AppListModel(AppView.this, computer,
+                                localBinder.getUniqueId(), showHiddenApps,
+                                PreferenceConfiguration.readPreferences(AppView.this).smallIconMode);
                     } catch (Exception e) {
                         e.printStackTrace();
                         finish();
                         return;
                     }
 
-                    appGridAdapter.updateHiddenApps(hiddenAppIds, true);
+                    appListModel.updateHiddenApps(hiddenAppIds, true);
+                    runOnUiThread(new Runnable() {
+                        @Override
+                        public void run() {
+                            attachGridFragment();
+                        }
+                    });
 
-                    // Now make the binder visible. We must do this after appGridAdapter
+                    // Now make the binder visible. We must do this after appListModel
                     // is set to prevent us from reaching updateUiWithServerinfo() and
-                    // touching the appGridAdapter prior to initialization.
+                    // touching the model prior to initialization.
                     managerBinder = localBinder;
 
                     // Load the app grid with cached data (if possible).
@@ -126,25 +126,6 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                     // Start updates
                     startComputerUpdates();
 
-                    runOnUiThread(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (isFinishing() || isChangingConfigurations()) {
-                                return;
-                            }
-
-                            // Despite my best efforts to catch all conditions that could
-                            // cause the activity to be destroyed when we try to commit
-                            // I haven't been able to, so we have this try-catch block.
-                            try {
-                                getFragmentManager().beginTransaction()
-                                        .replace(R.id.appFragmentContainer, new AdapterFragment())
-                                        .commitAllowingStateLoss();
-                            } catch (IllegalStateException e) {
-                                e.printStackTrace();
-                            }
-                        }
-                    });
                 }
             }.start();
         }
@@ -158,19 +139,14 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
 
-        // If appGridAdapter is initialized, let it know about the configuration change.
+        // If the model is initialized, let it know about the configuration change.
         // If not, it will pick it up when it initializes.
-        if (appGridAdapter != null) {
-            // Update the app grid adapter to create grid items with the correct layout
-            appGridAdapter.updateLayoutWithPreferences(this, PreferenceConfiguration.readPreferences(this));
-
-            try {
-                // Reinflate the app grid itself to pick up the layout change
-                getFragmentManager().beginTransaction()
-                        .replace(R.id.appFragmentContainer, new AdapterFragment())
-                        .commitAllowingStateLoss();
-            } catch (IllegalStateException e) {
-                e.printStackTrace();
+        if (appListModel != null) {
+            // Rebuild the asset loader for the new card size and re-render
+            appListModel.updateScaling(this, PreferenceConfiguration.readPreferences(this).smallIconMode);
+            if (appGridFragment != null) {
+                appGridFragment.setAssetLoader(appListModel.getAssetLoader());
+                publishApps();
             }
         }
     }
@@ -271,8 +247,8 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
             managerBinder.stopPolling();
         }
 
-        if (appGridAdapter != null) {
-            appGridAdapter.cancelQueuedOperations();
+        if (appListModel != null) {
+            appListModel.cancelQueuedOperations();
         }
     }
 
@@ -327,7 +303,8 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                 .putStringSet(uuidString, hiddenAppIdStringSet)
                 .apply();
 
-        appGridAdapter.updateHiddenApps(hiddenAppIds, hideImmediately);
+        appListModel.updateHiddenApps(hiddenAppIds, hideImmediately);
+        publishApps();
     }
 
     private void populateAppGridWithCache() {
@@ -384,57 +361,103 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         stopComputerUpdates();
     }
 
-    @Override
-    public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
-        super.onCreateContextMenu(menu, v, menuInfo);
+    private void attachGridFragment() {
+        if (isFinishing() || isChangingConfigurations()) {
+            return;
+        }
 
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) menuInfo;
-        AppObject selectedApp = (AppObject) appGridAdapter.getItem(info.position);
-
-        menu.setHeaderTitle(selectedApp.app.getAppName());
-
-        if (lastRunningAppId != 0) {
-            if (lastRunningAppId == selectedApp.app.getAppId()) {
-                menu.add(Menu.NONE, START_OR_RESUME_ID, 1, getResources().getString(R.string.applist_menu_resume));
-                menu.add(Menu.NONE, QUIT_ID, 2, getResources().getString(R.string.applist_menu_quit));
-            }
-            else {
-                menu.add(Menu.NONE, START_WITH_QUIT, 1, getResources().getString(R.string.applist_menu_quit_and_start));
+        appGridFragment = (AppGridFragment) getSupportFragmentManager()
+                .findFragmentById(R.id.appFragmentContainer);
+        if (appGridFragment == null) {
+            appGridFragment = new AppGridFragment();
+            try {
+                getSupportFragmentManager().beginTransaction()
+                        .replace(R.id.appFragmentContainer, appGridFragment)
+                        .commitAllowingStateLoss();
+            } catch (IllegalStateException e) {
+                e.printStackTrace();
+                return;
             }
         }
 
-        // Only show the hide checkbox if this is not the currently running app or it's already hidden
-        if (lastRunningAppId != selectedApp.app.getAppId() || selectedApp.isHidden) {
-            MenuItem hideAppItem = menu.add(Menu.NONE, HIDE_APP_ID, 3, getResources().getString(R.string.applist_menu_hide_app));
-            hideAppItem.setCheckable(true);
-            hideAppItem.setChecked(selectedApp.isHidden);
-        }
+        appGridFragment.setAssetLoader(appListModel.getAssetLoader());
+        appGridFragment.setRunningAppId(lastRunningAppId);
+        publishApps();
+    }
 
-        menu.add(Menu.NONE, VIEW_DETAILS_ID, 4, getResources().getString(R.string.applist_menu_details));
-
-        // Only add an option to create shortcut if box art is loaded
-        // and when we're in grid-mode (not list-mode).
-        ImageView appImageView = info.targetView.findViewById(R.id.grid_image);
-        if (appImageView != null) {
-            // We have a grid ImageView, so we must be in grid-mode
-            BitmapDrawable drawable = (BitmapDrawable)appImageView.getDrawable();
-            if (drawable != null && drawable.getBitmap() != null) {
-                // We have a bitmap loaded too
-                menu.add(Menu.NONE, CREATE_SHORTCUT_ID, 5, getResources().getString(R.string.applist_menu_scut));
-            }
+    /** Pushes the model's current visible list into the grid. Main thread only. */
+    private void publishApps() {
+        if (appGridFragment != null && appListModel != null) {
+            appGridFragment.setApps(appListModel.getVisibleApps());
         }
     }
 
     @Override
-    public void onContextMenuClosed(Menu menu) {
+    public void onAppClicked(AppObject app) {
+        if (app.app.getAppId() == lastRunningAppId) {
+            // Resume is the same as start for us
+            ServerHelper.doStart(AppView.this, app.app, computer, managerBinder);
+        }
+        else if (lastRunningAppId != 0) {
+            // A different app is running - confirm before quitting it
+            onAppActionSelected(app.app.getAppId(), AppActionsFragment.ACTION_START_WITH_QUIT);
+        }
+        else {
+            ServerHelper.doStart(AppView.this, app.app, computer, managerBinder);
+        }
     }
 
     @Override
-    public boolean onContextItemSelected(MenuItem item) {
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
-        final AppObject app = (AppObject) appGridAdapter.getItem(info.position);
-        switch (item.getItemId()) {
-            case START_WITH_QUIT:
+    public void onAppLongClicked(AppObject app) {
+        // Offer a shortcut only if box art has actually loaded, matching the old menu
+        boolean canShortcut = getLoadedBoxArt(app) != null;
+
+        GuidedStepSupportFragment.add(getSupportFragmentManager(),
+                AppActionsFragment.newInstance(app.app.getAppId(), app.app.getAppName(),
+                        app.isHidden, lastRunningAppId, canShortcut));
+    }
+
+    private AppObject findAppById(int appId) {
+        if (appListModel == null) {
+            return null;
+        }
+        for (AppObject app : appListModel.getAllApps()) {
+            if (app.app.getAppId() == appId) {
+                return app;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Returns the box art bitmap currently displayed for this app, or null if it hasn't
+     * loaded. Replaces reaching into the context menu's target view for the ImageView.
+     */
+    private Bitmap getLoadedBoxArt(AppObject app) {
+        if (appGridFragment == null || appGridFragment.getView() == null) {
+            return null;
+        }
+
+        ImageView imageView = appGridFragment.findCardImageView(app.app.getAppId());
+        if (imageView == null) {
+            return null;
+        }
+
+        if (imageView.getDrawable() instanceof BitmapDrawable) {
+            return ((BitmapDrawable) imageView.getDrawable()).getBitmap();
+        }
+        return null;
+    }
+
+    @Override
+    public void onAppActionSelected(int appId, int actionId) {
+        final AppObject app = findAppById(appId);
+        if (app == null) {
+            return;
+        }
+
+        switch (actionId) {
+            case AppActionsFragment.ACTION_START_WITH_QUIT:
                 // Display a confirmation dialog first
                 UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
                     @Override
@@ -442,14 +465,14 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                         ServerHelper.doStart(AppView.this, app.app, computer, managerBinder);
                     }
                 }, null);
-                return true;
+                break;
 
-            case START_OR_RESUME_ID:
+            case AppActionsFragment.ACTION_START_OR_RESUME:
                 // Resume is the same as start for us
                 ServerHelper.doStart(AppView.this, app.app, computer, managerBinder);
-                return true;
+                break;
 
-            case QUIT_ID:
+            case AppActionsFragment.ACTION_QUIT:
                 // Display a confirmation dialog first
                 UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
                     @Override
@@ -468,14 +491,14 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                         });
                     }
                 }, null);
-                return true;
+                break;
 
-            case VIEW_DETAILS_ID:
+            case AppActionsFragment.ACTION_VIEW_DETAILS:
                 Dialog.displayDialog(AppView.this, getResources().getString(R.string.title_details), app.app.toString(), false);
-                return true;
+                break;
 
-            case HIDE_APP_ID:
-                if (item.isChecked()) {
+            case AppActionsFragment.ACTION_HIDE_APP:
+                if (app.isHidden) {
                     // Transitioning hidden to shown
                     hiddenAppIds.remove(app.app.getAppId());
                 }
@@ -484,18 +507,17 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                     hiddenAppIds.add(app.app.getAppId());
                 }
                 updateHiddenApps(false);
-                return true;
+                break;
 
-            case CREATE_SHORTCUT_ID:
-                ImageView appImageView = info.targetView.findViewById(R.id.grid_image);
-                Bitmap appBits = ((BitmapDrawable)appImageView.getDrawable()).getBitmap();
-                if (!shortcutHelper.createPinnedGameShortcut(computer, app.app, appBits)) {
+            case AppActionsFragment.ACTION_CREATE_SHORTCUT:
+                Bitmap appBits = getLoadedBoxArt(app);
+                if (appBits == null || !shortcutHelper.createPinnedGameShortcut(computer, app.app, appBits)) {
                     Toast.makeText(AppView.this, getResources().getString(R.string.unable_to_pin_shortcut), Toast.LENGTH_LONG).show();
                 }
-                return true;
+                break;
 
             default:
-                return super.onContextItemSelected(item);
+                break;
         }
     }
 
@@ -506,8 +528,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                 boolean updated = false;
 
                     // Look through our current app list to tag the running app
-                for (int i = 0; i < appGridAdapter.getCount(); i++) {
-                    AppObject existingApp = (AppObject) appGridAdapter.getItem(i);
+                for (AppObject existingApp : appListModel.getVisibleApps()) {
 
                     // There can only be one or zero apps running.
                     if (existingApp.isRunning &&
@@ -531,7 +552,10 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                 }
 
                 if (updated) {
-                    appGridAdapter.notifyDataSetChanged();
+                    if (appGridFragment != null) {
+                        appGridFragment.setRunningAppId(details.runningGameId);
+                    }
+                    publishApps();
                 }
             }
         });
@@ -548,8 +572,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                     boolean foundExistingApp = false;
 
                     // Try to update an existing app in the list first
-                    for (int i = 0; i < appGridAdapter.getCount(); i++) {
-                        AppObject existingApp = (AppObject) appGridAdapter.getItem(i);
+                    for (AppObject existingApp : appListModel.getVisibleApps()) {
                         if (existingApp.app.getAppId() == app.getAppId()) {
                             // Found the app; update its properties
                             if (!existingApp.app.getAppName().equals(app.getAppName())) {
@@ -564,7 +587,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
 
                     if (!foundExistingApp) {
                         // This app must be new
-                        appGridAdapter.addApp(new AppObject(app));
+                        appListModel.addApp(new AppObject(app));
 
                         // We could have a leftover shortcut from last time this PC was paired
                         // or if this app was removed then added again. Enable those shortcuts
@@ -577,9 +600,9 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
 
                 // Next handle app removals
                 int i = 0;
-                while (i < appGridAdapter.getCount()) {
+                while (i < appListModel.getVisibleApps().size()) {
                     boolean foundExistingApp = false;
-                    AppObject existingApp = (AppObject) appGridAdapter.getItem(i);
+                    AppObject existingApp = appListModel.getVisibleApps().get(i);
 
                     // Check if this app is in the latest list
                     for (NvApp app : appList) {
@@ -592,7 +615,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                     // This app was removed in the latest app list
                     if (!foundExistingApp) {
                         shortcutHelper.disableAppShortcut(computer, existingApp.app, "App removed from PC");
-                        appGridAdapter.removeApp(existingApp);
+                        appListModel.removeApp(existingApp);
                         updated = true;
 
                         // Check this same index again because the item at i+1 is now at i after
@@ -605,45 +628,10 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                 }
 
                 if (updated) {
-                    appGridAdapter.notifyDataSetChanged();
+                    publishApps();
                 }
             }
         });
-    }
-
-    @Override
-    public int getAdapterFragmentLayoutId() {
-        return PreferenceConfiguration.readPreferences(AppView.this).smallIconMode ?
-                    R.layout.app_grid_view_small : R.layout.app_grid_view;
-    }
-
-    @Override
-    public void receiveAbsListView(AbsListView listView) {
-        listView.setAdapter(appGridAdapter);
-        listView.setOnItemClickListener(new OnItemClickListener() {
-            @Override
-            public void onItemClick(AdapterView<?> arg0, View arg1, int pos,
-                                    long id) {
-                AppObject app = (AppObject) appGridAdapter.getItem(pos);
-
-                // Only open the context menu if something is running, otherwise start it.
-                // Tapping the app that is already running just resumes it, if the user
-                // opted out of the confirmation.
-                if (lastRunningAppId != 0) {
-                    if (lastRunningAppId == app.app.getAppId() &&
-                            PreferenceConfiguration.readPreferences(AppView.this).resumeWithoutConfirm) {
-                        ServerHelper.doStart(AppView.this, app.app, computer, managerBinder);
-                    } else {
-                        openContextMenu(arg1);
-                    }
-                } else {
-                    ServerHelper.doStart(AppView.this, app.app, computer, managerBinder);
-                }
-            }
-        });
-        UiHelper.applyStatusBarPadding(listView);
-        registerForContextMenu(listView);
-        listView.requestFocus();
     }
 
     public static class AppObject {

@@ -1,31 +1,23 @@
 package com.limelight.preferences;
 
-import android.app.AlertDialog;
 import android.content.Context;
-import android.os.Bundle;
-import android.preference.DialogPreference;
 import android.util.AttributeSet;
-import android.view.Gravity;
-import android.view.View;
-import android.view.View.OnClickListener;
-import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.SeekBar;
-import android.widget.TextView;
 
-import java.util.Locale;
+import androidx.preference.DialogPreference;
 
 // Based on a Stack Overflow example: http://stackoverflow.com/questions/1974193/slider-on-my-preferencescreen
+//
+// Ported from android.preference.DialogPreference to androidx.preference. The attribute
+// parsing and persistence stay here; the dialog itself moved to
+// SeekBarPreferenceDialogFragment, because androidx splits DialogPreference into a
+// preference plus a PreferenceDialogFragmentCompat rather than having the preference build
+// its own view. Attributes are still read straight off the AttributeSet by namespace URL,
+// so no declare-styleable is needed.
 public class SeekBarPreference extends DialogPreference
 {
     private static final String ANDROID_SCHEMA_URL = "http://schemas.android.com/apk/res/android";
     private static final String SEEKBAR_SCHEMA_URL = "http://schemas.moonlight-stream.com/apk/res/seekbar";
 
-    private SeekBar seekBar;
-    private TextView valueText;
-    private final Context context;
-
-    private final String dialogMessage;
     private final String suffix;
     private final int defaultValue;
     private final int maxValue;
@@ -42,16 +34,9 @@ public class SeekBarPreference extends DialogPreference
 
     public SeekBarPreference(Context context, AttributeSet attrs) {
         super(context, attrs);
-        this.context = context;
 
-        // Read the message from XML
-        int dialogMessageId = attrs.getAttributeResourceValue(ANDROID_SCHEMA_URL, "dialogMessage", 0);
-        if (dialogMessageId == 0) {
-            dialogMessage = attrs.getAttributeValue(ANDROID_SCHEMA_URL, "dialogMessage");
-        }
-        else {
-            dialogMessage = context.getString(dialogMessageId);
-        }
+        // NB: android:dialogMessage is parsed by androidx DialogPreference itself, so it
+        // is read through the inherited getDialogMessage() rather than off the AttributeSet.
 
         // Get the suffix for the number displayed in the dialog
         int suffixId = attrs.getAttributeResourceValue(ANDROID_SCHEMA_URL, "text", 0);
@@ -72,130 +57,48 @@ public class SeekBarPreference extends DialogPreference
         progressOffset = Math.min(minValue, 0);
     }
 
+    String getSuffix() { return suffix; }
+    int getMaxValue() { return maxValue; }
+    int getMinValue() { return minValue; }
+    int getStepSize() { return stepSize; }
+    int getKeyStepSize() { return keyStepSize; }
+    int getDivisor() { return divisor; }
+    int getProgressOffset() { return progressOffset; }
+
     @Override
-    protected View onCreateDialogView() {
-
-        LinearLayout.LayoutParams params;
-        LinearLayout layout = new LinearLayout(context);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(6, 6, 6, 6);
-
-        TextView splashText = new TextView(context);
-        splashText.setPadding(30, 10, 30, 10);
-        if (dialogMessage != null) {
-            splashText.setText(dialogMessage);
-        }
-        layout.addView(splashText);
-
-        valueText = new TextView(context);
-        valueText.setGravity(Gravity.CENTER_HORIZONTAL);
-        valueText.setTextSize(32);
-        // Default text for value; hides bug where OnSeekBarChangeListener isn't called when opacity is 0%
-        valueText.setText("0%");
-        params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        layout.addView(valueText, params);
-
-        seekBar = new SeekBar(context);
-        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean b) {
-                int value = progress + progressOffset;
-
-                if (value < minValue) {
-                    seekBar.setProgress(minValue - progressOffset);
-                    return;
-                }
-
-                // floorDiv rather than / so step rounding stays correct for negative values
-                int roundedValue = Math.floorDiv(value + (stepSize - 1), stepSize)*stepSize;
-                if (roundedValue != value) {
-                    seekBar.setProgress(roundedValue - progressOffset);
-                    return;
-                }
-
-                String t;
-                if (divisor != 1) {
-                    float floatValue = roundedValue / (float)divisor;
-                    t = String.format((Locale)null, "%.1f", floatValue);
-                }
-                else {
-                    t = String.valueOf(value);
-                }
-                valueText.setText(suffix == null ? t : t.concat(suffix.length() > 1 ? " "+suffix : suffix));
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {}
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {}
-        });
-
-        layout.addView(seekBar, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
-
-        if (shouldPersist()) {
-            currentValue = getPersistedInt(defaultValue);
-        }
-
-        seekBar.setMax(maxValue - progressOffset);
-        if (keyStepSize != 0) {
-            seekBar.setKeyProgressIncrement(keyStepSize);
-        }
-        seekBar.setProgress(currentValue - progressOffset);
-
-        return layout;
+    protected Object onGetDefaultValue(android.content.res.TypedArray a, int index) {
+        return a.getInt(index, defaultValue);
     }
 
     @Override
-    protected void onBindDialogView(View v) {
-        super.onBindDialogView(v);
-        seekBar.setMax(maxValue - progressOffset);
-        if (keyStepSize != 0) {
-            seekBar.setKeyProgressIncrement(keyStepSize);
-        }
-        seekBar.setProgress(currentValue - progressOffset);
-    }
-
-    @Override
-    protected void onSetInitialValue(boolean restore, Object defaultValue)
-    {
-        super.onSetInitialValue(restore, defaultValue);
-        if (restore) {
+    protected void onSetInitialValue(Object defaultValue) {
+        if (defaultValue == null) {
             currentValue = shouldPersist() ? getPersistedInt(this.defaultValue) : 0;
         }
         else {
-            currentValue = (Integer) defaultValue;
+            currentValue = shouldPersist()
+                    ? getPersistedInt((Integer) defaultValue)
+                    : (Integer) defaultValue;
         }
     }
 
     public void setProgress(int progress) {
         this.currentValue = progress;
-        if (seekBar != null) {
-            seekBar.setProgress(progress - progressOffset);
+        if (shouldPersist()) {
+            persistInt(progress);
         }
     }
+
     public int getProgress() {
         return currentValue;
     }
 
-    @Override
-    public void showDialog(Bundle state) {
-        super.showDialog(state);
-
-        Button positiveButton = ((AlertDialog) getDialog()).getButton(AlertDialog.BUTTON_POSITIVE);
-        positiveButton.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                if (shouldPersist()) {
-                    currentValue = seekBar.getProgress() + progressOffset;
-                    persistInt(currentValue);
-                    callChangeListener(currentValue);
-                }
-
-                getDialog().dismiss();
-            }
-        });
+    /** Called by the dialog fragment when the user confirms a new value. */
+    void commitProgress(int progress) {
+        if (shouldPersist()) {
+            currentValue = progress;
+            persistInt(currentValue);
+            callChangeListener(currentValue);
+        }
     }
 }

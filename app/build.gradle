@@ -26,6 +26,11 @@ android {
         // runs a 32-bit userspace despite its 64-bit Amlogic S905X4. x86/x86_64 have no
         // consumer, since no Android TV box or phone is x86.
         ndk.abiFilters 'arm64-v8a', 'armeabi-v7a'
+
+        // This fork ships English only (non-English locales were removed in 7a9d6f85), but
+        // the AndroidX artifacts bring ~80 translated locales of their own. Strip them back
+        // out so the dependency doesn't silently reintroduce what was deleted.
+        resourceConfigurations += ['en']
     }
 
     buildFeatures {
@@ -132,4 +137,17 @@ dependencies {
     implementation 'org.jcodec:jcodec:0.2.5'
     implementation 'com.squareup.okhttp3:okhttp:5.4.0'
     implementation 'com.github.cgutman:ShieldControllerExtensions:1.0.1'
+
+    // Android TV UI. Leanback pulls in appcompat, fragment and recyclerview transitively.
+    implementation 'androidx.leanback:leanback:1.2.0'
+    implementation 'androidx.leanback:leanback-preference:1.2.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.preference:preference:1.2.1'
+
+    // NB: no image loading library. Box art is fetched by NvHTTP.getBoxArt() over HTTPS
+    // authenticated with the paired client certificate against a per-host pinned server
+    // certificate, so a general-purpose loader (Coil, Glide) cannot fetch it without a
+    // custom per-host Fetcher. grid/assets/ already handles this, and DiskAssetLoader must
+    // survive regardless because PosterContentProvider serves the TV recommendation row
+    // from stable file paths in its cache.
 }

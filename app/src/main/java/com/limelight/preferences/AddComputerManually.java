@@ -9,7 +9,10 @@ import java.net.URISyntaxException;
 import java.util.Collections;
 import java.util.concurrent.LinkedBlockingQueue;
 
+import androidx.fragment.app.FragmentActivity;
+import androidx.leanback.app.GuidedStepSupportFragment;
 import com.limelight.computers.ComputerManagerService;
+import com.limelight.leanback.AddPcFragment;
 import com.limelight.R;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvHTTP;
@@ -17,9 +20,7 @@ import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.SpinnerDialog;
-import com.limelight.utils.UiHelper;
 
-import android.app.Activity;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Context;
@@ -29,13 +30,9 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.view.KeyEvent;
 import android.view.View;
-import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputMethodManager;
-import android.widget.TextView;
 import android.widget.Toast;
 
-public class AddComputerManually extends Activity {
-    private TextView hostText;
+public class AddComputerManually extends FragmentActivity implements AddPcFragment.Callbacks {
     private ComputerManagerService.ComputerManagerBinder managerBinder;
     private final LinkedBlockingQueue<String> computersToAdd = new LinkedBlockingQueue<>();
     private Thread addThread;
@@ -265,54 +262,22 @@ public class AddComputerManually extends Activity {
         super.onCreate(savedInstanceState);
 
 
-        setContentView(R.layout.activity_add_computer_manually);
-
-        UiHelper.notifyNewRootView(this);
-
-        this.hostText = findViewById(R.id.hostTextView);
-        hostText.setImeOptions(EditorInfo.IME_ACTION_DONE);
-        hostText.setOnEditorActionListener(new TextView.OnEditorActionListener() {
-            @Override
-            public boolean onEditorAction(TextView textView, int actionId, KeyEvent keyEvent) {
-                if (actionId == EditorInfo.IME_ACTION_DONE ||
-                        (keyEvent != null &&
-                                keyEvent.getAction() == KeyEvent.ACTION_DOWN &&
-                                keyEvent.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
-                    return handleDoneEvent();
-                }
-                else if (actionId == EditorInfo.IME_ACTION_PREVIOUS) {
-                    // This is how the Fire TV dismisses the keyboard
-                    InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
-                    imm.hideSoftInputFromWindow(hostText.getWindowToken(), 0);
-                    return false;
-                }
-
-                return false;
-            }
-        });
-
-        findViewById(R.id.addPcButton).setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                handleDoneEvent();
-            }
-        });
+        if (savedInstanceState == null) {
+            GuidedStepSupportFragment.addAsRoot(this, new AddPcFragment(), android.R.id.content);
+        }
 
         // Bind to the ComputerManager service
         bindService(new Intent(AddComputerManually.this,
                     ComputerManagerService.class), serviceConnection, Service.BIND_AUTO_CREATE);
     }
 
-    // Returns true if the event should be eaten
-    private boolean handleDoneEvent() {
-        String hostAddress = hostText.getText().toString().trim();
-
-        if (hostAddress.length() == 0) {
+    @Override
+    public void onHostEntered(String hostAddress) {
+        if (hostAddress == null || hostAddress.trim().isEmpty()) {
             Toast.makeText(AddComputerManually.this, getResources().getString(R.string.addpc_enter_ip), Toast.LENGTH_LONG).show();
-            return true;
+            return;
         }
 
-        computersToAdd.add(hostAddress);
-        return false;
+        computersToAdd.add(hostAddress.trim());
     }
 }

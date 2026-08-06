@@ -1,21 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  App browser. The grid is a Leanback VerticalGridSupportFragment placed in
+  appFragmentContainer; only the PC name header lives here.
+-->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     tools:context=".AppView" >
 
-    <FrameLayout
-        android:id="@+id/appFragmentContainer"
-        android:layout_width="fill_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center"
-        android:layout_alignParentLeft="true"
-        android:layout_alignParentStart="true"
-        android:layout_alignParentRight="true"
-        android:layout_alignParentEnd="true"
-        android:layout_alignParentBottom="true"
-        android:layout_below="@+id/appListText"/>
-    
     <TextView
         android:id="@+id/appListText"
         android:layout_width="wrap_content"
@@ -27,5 +20,11 @@
         android:paddingBottom="5dp"
         android:preferKeepClear="true"
         android:textSize="28sp"/>
+
+    <FrameLayout
+        android:id="@+id/appFragmentContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_below="@+id/appListText"/>
 
 </RelativeLayout>

@@ -8,9 +8,10 @@ import com.limelight.binding.PlatformBinding;
 import com.limelight.binding.crypto.AndroidCryptoProvider;
 import com.limelight.computers.ComputerManagerListener;
 import com.limelight.computers.ComputerManagerService;
-import com.limelight.grid.PcGridAdapter;
 import com.limelight.grid.assets.DiskAssetLoader;
 import com.limelight.nvstream.http.ComputerDetails;
+import com.limelight.leanback.PcActionsFragment;
+import com.limelight.leanback.PcGridFragment;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.http.PairingManager;
@@ -19,15 +20,12 @@ import com.limelight.preferences.AddComputerManually;
 import com.limelight.preferences.GlPreferences;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.StreamSettings;
-import com.limelight.ui.AdapterFragment;
-import com.limelight.ui.AdapterFragmentCallbacks;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.HelpLauncher;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.UiHelper;
 
-import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Service;
 import android.content.ComponentName;
@@ -35,34 +33,27 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.res.Configuration;
+import androidx.fragment.app.FragmentActivity;
+import androidx.leanback.app.GuidedStepSupportFragment;
 import android.opengl.GLSurfaceView;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
-import android.preference.PreferenceManager;
-import android.view.ContextMenu;
-import android.view.Menu;
-import android.view.MenuItem;
+import androidx.preference.PreferenceManager;
 import android.view.View;
-import android.view.ContextMenu.ContextMenuInfo;
 import android.view.View.OnClickListener;
-import android.widget.AbsListView;
-import android.widget.AdapterView;
-import android.widget.AdapterView.OnItemClickListener;
 import android.widget.ImageButton;
-import android.widget.RelativeLayout;
 import android.net.Uri;
 import android.widget.Toast;
-import android.widget.AdapterView.AdapterContextMenuInfo;
 
 import org.xmlpull.v1.XmlPullParserException;
 
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
-public class PcView extends Activity implements AdapterFragmentCallbacks {
-    private RelativeLayout noPcFoundLayout;
-    private PcGridAdapter pcGridAdapter;
+public class PcView extends FragmentActivity implements
+        PcGridFragment.Callbacks, PcActionsFragment.Callbacks {
+    private PcGridFragment pcGridFragment;
     private ShortcutHelper shortcutHelper;
     private ComputerManagerService.ComputerManagerBinder managerBinder;
     private boolean freezeUpdates, runningPolling, inForeground, completeOnCreateCalled;
@@ -130,9 +121,6 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         // Set default preferences if we've never been run
         PreferenceManager.setDefaultValues(this, R.xml.preferences, false);
 
-        // Set the correct layout for the PC grid
-        pcGridAdapter.updateLayoutWithPreferences(this, PreferenceConfiguration.readPreferences(this));
-
         // Setup the list view
         ImageButton settingsButton = findViewById(R.id.settingsButton);
         ImageButton addComputerButton = findViewById(R.id.manuallyAddPc);
@@ -165,18 +153,27 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
             helpButton.setVisibility(View.GONE);
         }
 
-        getFragmentManager().beginTransaction()
-            .replace(R.id.pcFragmentContainer, new AdapterFragment())
-            .commitAllowingStateLoss();
+        // Re-use the existing grid fragment across config changes so the PC list and the
+        // current D-pad focus survive.
+        pcGridFragment = (PcGridFragment) getSupportFragmentManager()
+                .findFragmentById(R.id.pcFragmentContainer);
+        if (pcGridFragment == null) {
+            pcGridFragment = new PcGridFragment();
+            getSupportFragmentManager().beginTransaction()
+                    .replace(R.id.pcFragmentContainer, pcGridFragment)
+                    .commitAllowingStateLoss();
+        }
 
-        noPcFoundLayout = findViewById(R.id.no_pc_found_layout);
-        if (pcGridAdapter.getCount() == 0) {
-            noPcFoundLayout.setVisibility(View.VISIBLE);
+        updateEmptyStateVisibility();
+    }
+
+    private void updateEmptyStateVisibility() {
+        View emptyState = findViewById(R.id.no_pc_found_layout);
+        if (emptyState != null) {
+            emptyState.setVisibility(
+                    (pcGridFragment == null || pcGridFragment.getCount() == 0)
+                            ? View.VISIBLE : View.INVISIBLE);
         }
-        else {
-            noPcFoundLayout.setVisibility(View.INVISIBLE);
-        }
-        pcGridAdapter.notifyDataSetChanged();
     }
 
     @Override
@@ -235,8 +232,6 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         // Bind to the computer manager service
         bindService(new Intent(PcView.this, ComputerManagerService.class), serviceConnection,
                 Service.BIND_AUTO_CREATE);
-
-        pcGridAdapter = new PcGridAdapter(this, PreferenceConfiguration.readPreferences(this));
 
         initializeViews();
     }
@@ -322,63 +317,25 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
     }
 
     @Override
-    public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
-        stopComputerUpdates(false);
-
-        // Call superclass
-        super.onCreateContextMenu(menu, v, menuInfo);
-                
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) menuInfo;
-        ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(info.position);
-
-        // Add a header with PC status details
-        menu.clearHeader();
-        String headerTitle = computer.details.name + " - ";
-        switch (computer.details.state)
-        {
-            case ONLINE:
-                headerTitle += getResources().getString(R.string.pcview_menu_header_online);
-                break;
-            case OFFLINE:
-                menu.setHeaderIcon(R.drawable.ic_pc_offline);
-                headerTitle += getResources().getString(R.string.pcview_menu_header_offline);
-                break;
-            case UNKNOWN:
-                headerTitle += getResources().getString(R.string.pcview_menu_header_unknown);
-                break;
+    public void onComputerClicked(ComputerObject computer) {
+        if (computer.details.state == ComputerDetails.State.UNKNOWN ||
+            computer.details.state == ComputerDetails.State.OFFLINE) {
+            // Offline or still refreshing: the actions sheet is the only useful thing to show
+            onComputerLongClicked(computer);
+        } else if (computer.details.pairState != PairState.PAIRED) {
+            // Pair an unpaired machine by default
+            doPair(computer.details);
+        } else {
+            doAppList(computer.details, false, false);
         }
-
-        menu.setHeaderTitle(headerTitle);
-
-        // Inflate the context menu
-        if (computer.details.state != ComputerDetails.State.OFFLINE &&
-            computer.details.state != ComputerDetails.State.UNKNOWN &&
-            computer.details.pairState != PairState.PAIRED) {
-            menu.add(Menu.NONE, PAIR_ID, 1, getResources().getString(R.string.pcview_menu_pair_pc));
-        }
-        else {
-            if (computer.details.runningGameId != 0) {
-                menu.add(Menu.NONE, RESUME_ID, 1, getResources().getString(R.string.applist_menu_resume));
-                menu.add(Menu.NONE, QUIT_ID, 2, getResources().getString(R.string.applist_menu_quit));
-            }
-
-            menu.add(Menu.NONE, FULL_APP_LIST_ID, 4, getResources().getString(R.string.pcview_menu_app_list));
-        }
-
-        // Sunshine serves its web UI one port above the HTTP port
-        menu.add(Menu.NONE, MANAGEMENT_PAGE_ID, 5, getResources().getString(R.string.pcview_menu_management_page));
-
-        menu.add(Menu.NONE, TEST_NETWORK_ID, 5, getResources().getString(R.string.pcview_menu_test_network));
-        menu.add(Menu.NONE, DELETE_ID, 6, getResources().getString(R.string.pcview_menu_delete_pc));
-        menu.add(Menu.NONE, VIEW_DETAILS_ID, 7,  getResources().getString(R.string.pcview_menu_details));
     }
 
     @Override
-    public void onContextMenuClosed(Menu menu) {
-        // For some reason, this gets called again _after_ onPause() is called on this activity.
-        // startComputerUpdates() manages this and won't actual start polling until the activity
-        // returns to the foreground.
-        startComputerUpdates();
+    public void onComputerLongClicked(ComputerObject computer) {
+        // Pause polling while the sheet is up, matching the old context menu behaviour
+        stopComputerUpdates(false);
+        GuidedStepSupportFragment.add(getSupportFragmentManager(),
+                PcActionsFragment.newInstance(computer.details));
     }
 
     private void doPair(final ComputerDetails computer) {
@@ -557,22 +514,24 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
     }
 
     @Override
-    public boolean onContextItemSelected(MenuItem item) {
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
-        final ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(info.position);
-        switch (item.getItemId()) {
-            case PAIR_ID:
+    public void onPcActionSelected(String uuid, int actionId) {
+        // The sheet has been dismissed, so resume polling regardless of the action taken
+        startComputerUpdates();
+
+        final ComputerObject computer = findComputerByUuid(uuid);
+        if (computer == null) {
+            return;
+        }
+
+        switch (actionId) {
+            case PcActionsFragment.ACTION_PAIR:
                 doPair(computer.details);
-                return true;
+                break;
 
-            case UNPAIR_ID:
-                doUnpair(computer.details);
-                return true;
-
-            case DELETE_ID:
+            case PcActionsFragment.ACTION_DELETE:
                 if (ActivityManager.isUserAMonkey()) {
                     LimeLog.info("Ignoring delete PC request from monkey");
-                    return true;
+                    break;
                 }
                 UiHelper.displayDeletePcConfirmationDialog(this, computer.details, new Runnable() {
                     @Override
@@ -584,28 +543,25 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
                         removeComputer(computer.details);
                     }
                 }, null);
-                return true;
+                break;
 
-            case FULL_APP_LIST_ID:
+            case PcActionsFragment.ACTION_FULL_APP_LIST:
                 doAppList(computer.details, false, true);
-                return true;
+                break;
 
-            case RESUME_ID:
+            case PcActionsFragment.ACTION_RESUME:
                 if (managerBinder == null) {
                     Toast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
-                    return true;
+                    break;
                 }
-
                 ServerHelper.doStart(this, new NvApp("app", computer.details.runningGameId, false), computer.details, managerBinder);
-                return true;
+                break;
 
-            case QUIT_ID:
+            case PcActionsFragment.ACTION_QUIT:
                 if (managerBinder == null) {
                     Toast.makeText(PcView.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
-                    return true;
+                    break;
                 }
-
-                // Display a confirmation dialog first
                 UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
                     @Override
                     public void run() {
@@ -613,14 +569,15 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
                                 new NvApp("app", 0, false), managerBinder, null);
                     }
                 }, null);
-                return true;
+                break;
 
-            case VIEW_DETAILS_ID:
+            case PcActionsFragment.ACTION_VIEW_DETAILS:
                 Dialog.displayDialog(PcView.this, getResources().getString(R.string.title_details), computer.details.toString(), false);
-                return true;
+                break;
 
-            case MANAGEMENT_PAGE_ID:
+            case PcActionsFragment.ACTION_MANAGEMENT_PAGE:
                 if (computer.details.activeAddress != null) {
+                    // Sunshine serves its web UI one port above the HTTP port
                     String url = "https://" + computer.details.activeAddress.address + ":" +
                             (computer.details.activeAddress.port + 1);
                     try {
@@ -629,17 +586,25 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
                         Toast.makeText(PcView.this, getResources().getString(R.string.error_no_browser), Toast.LENGTH_LONG).show();
                     }
                 }
-                return true;
+                break;
 
-            case TEST_NETWORK_ID:
+            case PcActionsFragment.ACTION_TEST_NETWORK:
                 ServerHelper.doNetworkTest(PcView.this);
-                return true;
+                break;
 
             default:
-                return super.onContextItemSelected(item);
+                break;
         }
     }
-    
+
+    private ComputerObject findComputerByUuid(String uuid) {
+        if (managerBinder == null) {
+            return null;
+        }
+        ComputerDetails details = managerBinder.getComputer(uuid);
+        return details != null ? new ComputerObject(details) : null;
+    }
+
     private void removeComputer(ComputerDetails details) {
         managerBinder.removeComputer(details);
 
@@ -651,83 +616,21 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
                 .remove(details.uuid)
                 .apply();
 
-        for (int i = 0; i < pcGridAdapter.getCount(); i++) {
-            ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(i);
+        // Disable or delete shortcuts referencing this PC
+        shortcutHelper.disableComputerShortcut(details,
+                getResources().getString(R.string.scut_deleted_pc));
 
-            if (details.equals(computer.details)) {
-                // Disable or delete shortcuts referencing this PC
-                shortcutHelper.disableComputerShortcut(details,
-                        getResources().getString(R.string.scut_deleted_pc));
-
-                pcGridAdapter.removeComputer(computer);
-                pcGridAdapter.notifyDataSetChanged();
-
-                if (pcGridAdapter.getCount() == 0) {
-                    // Show the "Discovery in progress" view
-                    noPcFoundLayout.setVisibility(View.VISIBLE);
-                }
-
-                break;
-            }
+        if (pcGridFragment != null) {
+            pcGridFragment.removeComputer(details.uuid);
         }
+        updateEmptyStateVisibility();
     }
-    
+
     private void updateComputer(ComputerDetails details) {
-        ComputerObject existingEntry = null;
-
-        for (int i = 0; i < pcGridAdapter.getCount(); i++) {
-            ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(i);
-
-            // Check if this is the same computer
-            if (details.uuid.equals(computer.details.uuid)) {
-                existingEntry = computer;
-                break;
-            }
+        if (pcGridFragment != null) {
+            pcGridFragment.addOrUpdateComputer(new ComputerObject(details));
         }
-
-        if (existingEntry != null) {
-            // Replace the information in the existing entry
-            existingEntry.details = details;
-        }
-        else {
-            // Add a new entry
-            pcGridAdapter.addComputer(new ComputerObject(details));
-
-            // Remove the "Discovery in progress" view
-            noPcFoundLayout.setVisibility(View.INVISIBLE);
-        }
-
-        // Notify the view that the data has changed
-        pcGridAdapter.notifyDataSetChanged();
-    }
-
-    @Override
-    public int getAdapterFragmentLayoutId() {
-        return R.layout.pc_grid_view;
-    }
-
-    @Override
-    public void receiveAbsListView(AbsListView listView) {
-        listView.setAdapter(pcGridAdapter);
-        listView.setOnItemClickListener(new OnItemClickListener() {
-            @Override
-            public void onItemClick(AdapterView<?> arg0, View arg1, int pos,
-                                    long id) {
-                ComputerObject computer = (ComputerObject) pcGridAdapter.getItem(pos);
-                if (computer.details.state == ComputerDetails.State.UNKNOWN ||
-                    computer.details.state == ComputerDetails.State.OFFLINE) {
-                    // Open the context menu if a PC is offline or refreshing
-                    openContextMenu(arg1);
-                } else if (computer.details.pairState != PairState.PAIRED) {
-                    // Pair an unpaired machine by default
-                    doPair(computer.details);
-                } else {
-                    doAppList(computer.details, false, false);
-                }
-            }
-        });
-        UiHelper.applyStatusBarPadding(listView);
-        registerForContextMenu(listView);
+        updateEmptyStateVisibility();
     }
 
     public static class ComputerObject {

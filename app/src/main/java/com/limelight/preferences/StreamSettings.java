@@ -9,16 +9,17 @@ import android.media.MediaCodecInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.app.Activity;
+import androidx.fragment.app.FragmentActivity;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Vibrator;
-import android.preference.CheckBoxPreference;
-import android.preference.ListPreference;
-import android.preference.Preference;
-import android.preference.PreferenceCategory;
-import android.preference.PreferenceFragment;
-import android.preference.PreferenceManager;
-import android.preference.PreferenceScreen;
+import androidx.preference.CheckBoxPreference;
+import androidx.preference.ListPreference;
+import androidx.preference.Preference;
+import androidx.preference.PreferenceCategory;
+import androidx.leanback.preference.LeanbackPreferenceFragmentCompat;
+import androidx.preference.PreferenceManager;
+import androidx.preference.PreferenceScreen;
 import android.util.DisplayMetrics;
 import android.util.Range;
 import android.view.Display;
@@ -35,7 +36,7 @@ import com.limelight.utils.UiHelper;
 
 import java.util.Arrays;
 
-public class StreamSettings extends Activity {
+public class StreamSettings extends FragmentActivity {
     private PreferenceConfiguration previousPrefs;
     private int previousDisplayPixelCount;
 
@@ -61,7 +62,7 @@ public class StreamSettings extends Activity {
     void reloadSettings() {
         Display.Mode mode = getActivityDisplay().getMode();
         previousDisplayPixelCount = mode.getPhysicalWidth() * mode.getPhysicalHeight();
-        getFragmentManager().beginTransaction().replace(
+        getSupportFragmentManager().beginTransaction().replace(
                 R.id.stream_settings, new SettingsFragment()
         ).commitAllowingStateLoss();
     }
@@ -107,7 +108,7 @@ public class StreamSettings extends Activity {
         finish();
     }
 
-    public static class SettingsFragment extends PreferenceFragment {
+    public static class SettingsFragment extends LeanbackPreferenceFragmentCompat {
         private int nativeResolutionStartIndex = Integer.MAX_VALUE;
         private boolean nativeFramerateShown = false;
 
@@ -257,10 +258,8 @@ public class StreamSettings extends Activity {
         }
 
         @Override
-        public void onCreate(Bundle savedInstanceState) {
-            super.onCreate(savedInstanceState);
-
-            addPreferencesFromResource(R.xml.preferences);
+        public void onCreatePreferences(Bundle savedInstanceState, String rootKey) {
+            setPreferencesFromResource(R.xml.preferences, rootKey);
             PreferenceScreen screen = getPreferenceScreen();
 
             // Hide remote desktop mouse mode on NVIDIA SHIELD devices
@@ -610,5 +609,28 @@ public class StreamSettings extends Activity {
                 }
             });
         }
+
+        @Override
+        public void onDisplayPreferenceDialog(androidx.preference.Preference preference) {
+            // androidx does not know how to build our custom seek bar dialog, so route it
+            // to the fragment that does. Everything else keeps the default handling.
+            if (preference instanceof SeekBarPreference) {
+                if (getParentFragmentManager().findFragmentByTag(SEEKBAR_DIALOG_TAG) != null) {
+                    return;
+                }
+
+                SeekBarPreferenceDialogFragment fragment =
+                        SeekBarPreferenceDialogFragment.newInstance(preference.getKey());
+                fragment.setTargetFragment(this, 0);
+                fragment.show(getParentFragmentManager(), SEEKBAR_DIALOG_TAG);
+                return;
+            }
+
+            super.onDisplayPreferenceDialog(preference);
+        }
+
+        private static final String SEEKBAR_DIALOG_TAG =
+                "com.limelight.preferences.SEEKBAR_DIALOG";
+
     }
 }
