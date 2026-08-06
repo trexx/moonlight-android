@@ -290,11 +290,6 @@ public class TvChannelHelper {
             return this;
         }
 
-        public PreviewProgramBuilder setIntentUri(Uri uri) {
-            mValues.put(TvContract.PreviewPrograms.COLUMN_INTENT_URI, toValueString(uri));
-            return this;
-        }
-
         public PreviewProgramBuilder setInternalProviderId(String id) {
             mValues.put(TvContract.PreviewPrograms.COLUMN_INTERNAL_PROVIDER_ID, id);
             return this;

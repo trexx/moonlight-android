@@ -21,21 +21,12 @@ public class Vector2d {
         return magnitude;
     }
     
-    public void getNormalized(Vector2d vector) {
-        vector.initialize((float)(x / magnitude), (float)(y / magnitude));
-    }
     
     public void scalarMultiply(double factor) {
         initialize((float)(x * factor), (float)(y * factor));
     }
     
-    public void setX(float x) {
-        initialize(x, this.y);
-    }
     
-    public void setY(float y) {
-        initialize(this.x, y);
-    }
     
     public float getX() {
         return x;

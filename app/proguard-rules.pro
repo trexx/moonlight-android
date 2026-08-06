@@ -22,7 +22,3 @@
 -keep class org.bouncycastle.jcajce.spec.* {*;}
 -keep class org.bouncycastle.jce.** {*;}
 -dontwarn javax.naming.**
-
-# jMDNS
--dontwarn javax.jmdns.impl.DNSCache
--dontwarn org.slf4j.**

@@ -30,10 +30,6 @@ public class CacheHelper {
         return f;
     }
 
-    public static long getFileSize(File root, String... path) {
-        return openPath(false, root, path).length();
-    }
-
     public static boolean deleteCacheFile(File root, String... path) {
         return openPath(false, root, path).delete();
     }

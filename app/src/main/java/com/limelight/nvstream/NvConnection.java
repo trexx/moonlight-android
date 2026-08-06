@@ -561,7 +561,4 @@ public class NvConnection {
         }
     }
 
-    public static String findExternalAddressForMdns(String stunHostname, int stunPort) {
-        return MoonBridge.findExternalAddressIP4(stunHostname, stunPort);
-    }
 }

@@ -34,6 +34,8 @@ import android.os.HandlerThread;
 import android.os.Process;
 import android.os.SystemClock;
 import android.util.Range;
+import android.hardware.display.DisplayManager;
+import android.view.Display;
 import android.view.Choreographer;
 import android.view.SurfaceHolder;
 
@@ -114,6 +116,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long lastTimestampUs;
     private int lastFrameNumber;
     private int refreshRate;
+    private volatile Display vsyncDisplay;
     private PreferenceConfiguration prefs;
 
     private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
@@ -937,7 +940,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-        frameTimeNanos -= activity.getWindowManager().getDefaultDisplay().getAppVsyncOffsetNanos();
+        // Queried per frame on purpose: see startChoreographerThread(). getDisplay() can
+        // return null where the old getDefaultDisplay() could not, so tolerate that.
+        Display display = vsyncDisplay;
+        if (display != null) {
+            frameTimeNanos -= display.getAppVsyncOffsetNanos();
+        }
 
         // Don't render unless a new frame is due. This prevents microstutter when streaming
         // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
@@ -989,6 +997,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Start the frame callbacks
         choreographerHandler = new Handler(choreographerHandlerThread.getLooper());
+
+        // Resolve the Display handle once. The handle is stable; the DisplayInfo behind it is
+        // refreshed by the platform on every getter call, which is what makes the per-frame
+        // getAppVsyncOffsetNanos() in doFrame() correct across display mode changes.
+        //
+        // Do NOT cache the offset value itself. It is a property of the active display
+        // configuration, and Android models refresh-rate switches (60<->120,
+        // Surface.setFrameRate(), HDR mode changes on some TVs) as mode changes. Caching it
+        // and refreshing via DisplayManager.DisplayListener does not work: that callback is
+        // posted to a Handler, so doFrame() would keep applying a stale offset for the frames
+        // between the actual switch and the callback running - i.e. wrong exactly during a
+        // VRR transition. The per-frame call is a lock plus a cached lookup, which is
+        // nothing against a frame budget.
+        vsyncDisplay = activity.getDisplay();
+        if (vsyncDisplay == null) {
+            vsyncDisplay = activity.getSystemService(DisplayManager.class)
+                    .getDisplay(Display.DEFAULT_DISPLAY);
+        }
+
         choreographerHandler.post(new Runnable() {
             @Override
             public void run() {

@@ -19,7 +19,4 @@ public class LimeLog {
         LOGGER.severe(msg);
     }
     
-    public static void setFileHandler(String fileName) throws IOException {
-        LOGGER.addHandler(new FileHandler(fileName));
-    }
 }

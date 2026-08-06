@@ -90,10 +90,6 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
         }
 
         @TargetApi(33)
-        public int getDeviceKeyCodeForQwertyKeyCode(int qwertyKeyCode) {
-            return device.getKeyCodeForKeyLocation(qwertyKeyCode);
-        }
-
         public int getQwertyKeyCodeForDeviceKeyCode(int deviceKeyCode) {
             if (deviceKeyCode > KeyEvent.getMaxKeyCode()) {
                 return KeyEvent.KEYCODE_UNKNOWN;

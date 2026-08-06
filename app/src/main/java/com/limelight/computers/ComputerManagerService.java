@@ -3,38 +3,26 @@ package com.limelight.computers;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.StringReader;
-import java.net.Inet4Address;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
 
 import com.limelight.LimeLog;
 import com.limelight.binding.PlatformBinding;
-import com.limelight.discovery.DiscoveryService;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.http.PairingManager;
-import com.limelight.nvstream.mdns.MdnsComputer;
-import com.limelight.nvstream.mdns.MdnsDiscoveryListener;
 import com.limelight.utils.CacheHelper;
-import com.limelight.utils.NetHelper;
 import com.limelight.utils.ServerHelper;
 
 import android.app.Service;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
-import android.content.ServiceConnection;
 import android.net.ConnectivityManager;
 import android.net.Network;
-import android.net.NetworkCapabilities;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.SystemClock;
@@ -45,7 +33,6 @@ public class ComputerManagerService extends Service {
     private static final int SERVERINFO_POLLING_PERIOD_MS = 1500;
     private static final int APPLIST_POLLING_PERIOD_MS = 30000;
     private static final int APPLIST_FAILED_POLLING_RETRY_MS = 2000;
-    private static final int MDNS_QUERY_PERIOD_MS = 1000;
     private static final int OFFLINE_POLL_TRIES = 3;
     private static final int INITIAL_POLL_TRIES = 2;
     private static final int EMPTY_LIST_THRESHOLD = 3;
@@ -61,29 +48,8 @@ public class ComputerManagerService extends Service {
     private ComputerManagerListener listener = null;
     private final AtomicInteger activePolls = new AtomicInteger(0);
     private boolean pollingActive = false;
-    private final Lock defaultNetworkLock = new ReentrantLock();
 
     private ConnectivityManager.NetworkCallback networkCallback;
-
-    private DiscoveryService.DiscoveryBinder discoveryBinder;
-    private final ServiceConnection discoveryServiceConnection = new ServiceConnection() {
-        public void onServiceConnected(ComponentName className, IBinder binder) {
-            synchronized (discoveryServiceConnection) {
-                DiscoveryService.DiscoveryBinder privateBinder = ((DiscoveryService.DiscoveryBinder)binder);
-
-                // Set us as the event listener
-                privateBinder.setListener(createDiscoveryListener());
-
-                // Signal a possible waiter that we're all setup
-                discoveryBinder = privateBinder;
-                discoveryServiceConnection.notifyAll();
-            }
-        }
-
-        public void onServiceDisconnected(ComponentName className) {
-            discoveryBinder = null;
-        }
-    };
 
     // Returns true if the details object was modified
     private boolean runPoll(ComputerDetails details, boolean newPc, int offlineCount) throws InterruptedException {
@@ -126,27 +92,14 @@ public class ComputerManagerService extends Service {
                 return false;
             }
 
-            // If we already have an entry for this computer in the DB, we must
-            // combine the existing data with this new data (which may be partially available
-            // due to detecting the PC via mDNS) without the saved external address. If we
-            // write to the DB without doing this first, we can overwrite our existing data.
+            // If we already have an entry for this computer in the DB, we must combine the
+            // existing data with this new data. If we write to the DB without doing this
+            // first, we can overwrite our existing data.
             if (existingComputer != null) {
                 existingComputer.update(details);
                 dbManager.updateComputer(existingComputer);
             }
             else {
-                try {
-                    // If the active address is a site-local address (RFC 1918),
-                    // then use STUN to populate the external address field if
-                    // it's not set already.
-                    if (details.remoteAddress == null) {
-                        InetAddress addr = InetAddress.getByName(details.activeAddress.address);
-                        if (addr.isSiteLocalAddress()) {
-                            populateExternalAddress(details);
-                        }
-                    }
-                } catch (UnknownHostException ignored) {}
-
                 dbManager.updateComputer(details);
             }
         }
@@ -200,9 +153,6 @@ public class ComputerManagerService extends Service {
             // Set the listener
             ComputerManagerService.this.listener = listener;
 
-            // Start mDNS autodiscovery too
-            discoveryBinder.startDiscovery(MDNS_QUERY_PERIOD_MS);
-
             synchronized (pollingTuples) {
                 for (PollingTuple tuple : pollingTuples) {
                     // Enforce the poll data TTL
@@ -219,24 +169,6 @@ public class ComputerManagerService extends Service {
                         tuple.thread = createPollingThread(tuple);
                         tuple.thread.start();
                     }
-                }
-            }
-        }
-
-        public void waitForReady() {
-            synchronized (discoveryServiceConnection) {
-                try {
-                    while (discoveryBinder == null) {
-                        // Wait for the bind notification
-                        discoveryServiceConnection.wait(1000);
-                    }
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-
-                    // InterruptedException clears the thread's interrupt status. Since we can't
-                    // handle that here, we will re-interrupt the thread to set the interrupt
-                    // status back to true.
-                    Thread.currentThread().interrupt();
                 }
             }
         }
@@ -306,11 +238,6 @@ public class ComputerManagerService extends Service {
 
     @Override
     public boolean onUnbind(Intent intent) {
-        if (discoveryBinder != null) {
-            // Stop mDNS autodiscovery
-            discoveryBinder.stopDiscovery();
-        }
-
         // Stop polling
         pollingActive = false;
         synchronized (pollingTuples) {
@@ -327,102 +254,6 @@ public class ComputerManagerService extends Service {
         listener = null;
 
         return false;
-    }
-
-    private void populateExternalAddress(ComputerDetails details) {
-        boolean boundToNetwork = false;
-        boolean activeNetworkIsVpn = NetHelper.isActiveNetworkVpn(this);
-        ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-
-        // Check if we're currently connected to a VPN which may send our
-        // STUN request from an unexpected interface
-        if (activeNetworkIsVpn) {
-            // Acquire the default network lock since we could be changing global process state
-            defaultNetworkLock.lock();
-
-            // On Lollipop or later, we can bind our process to the underlying interface
-            // to ensure our STUN request goes out on that interface or not at all (which is
-            // preferable to getting a VPN endpoint address back).
-            Network[] networks = connMgr.getAllNetworks();
-            for (Network net : networks) {
-                NetworkCapabilities netCaps = connMgr.getNetworkCapabilities(net);
-                if (netCaps != null) {
-                    if (!netCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) &&
-                            !netCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) {
-                        // This network looks like an underlying multicast-capable transport,
-                        // so let's guess that it's probably where our mDNS response came from.
-                        if (connMgr.bindProcessToNetwork(net)) {
-                            boundToNetwork = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // Perform the STUN request if we're not on a VPN or if we bound to a network
-            if (!activeNetworkIsVpn || boundToNetwork) {
-                String stunResolvedAddress = NvConnection.findExternalAddressForMdns("stun.moonlight-stream.org", 3478);
-                if (stunResolvedAddress != null) {
-                    // We don't know for sure what the external port is, so we will have to guess.
-                    // When we contact the PC (if we haven't already), it will update the port.
-                    details.remoteAddress = new ComputerDetails.AddressTuple(stunResolvedAddress, details.guessExternalPort());
-                }
-            }
-
-            // Unbind from the network
-            if (boundToNetwork) {
-                connMgr.bindProcessToNetwork(null);
-            }
-
-            // Unlock the network state
-            if (activeNetworkIsVpn) {
-                defaultNetworkLock.unlock();
-            }
-        }
-    }
-
-    private MdnsDiscoveryListener createDiscoveryListener() {
-        return new MdnsDiscoveryListener() {
-            @Override
-            public void notifyComputerAdded(MdnsComputer computer) {
-                ComputerDetails details = new ComputerDetails();
-
-                // Populate the computer template with mDNS info
-                if (computer.getLocalAddress() != null) {
-                    details.localAddress = new ComputerDetails.AddressTuple(computer.getLocalAddress().getHostAddress(), computer.getPort());
-
-                    // Since we're on the same network, we can use STUN to find
-                    // our WAN address, which is also very likely the WAN address
-                    // of the PC. We can use this later to connect remotely.
-                    if (computer.getLocalAddress() instanceof Inet4Address) {
-                        populateExternalAddress(details);
-                    }
-                }
-                if (computer.getIpv6Address() != null) {
-                    details.ipv6Address = new ComputerDetails.AddressTuple(computer.getIpv6Address().getHostAddress(), computer.getPort());
-                }
-
-                try {
-                    // Kick off a blocking serverinfo poll on this machine
-                    if (!addComputerBlocking(details)) {
-                        LimeLog.warning("Auto-discovered PC failed to respond: "+details);
-                    }
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-
-                    // InterruptedException clears the thread's interrupt status. Since we can't
-                    // handle that here, we will re-interrupt the thread to set the interrupt
-                    // status back to true.
-                    Thread.currentThread().interrupt();
-                }
-            }
-
-            @Override
-            public void notifyDiscoveryFailure(Exception e) {
-                LimeLog.severe("mDNS discovery failed");
-                e.printStackTrace();
-            }
-        };
     }
 
     private void addTuple(ComputerDetails details) {
@@ -617,7 +448,6 @@ public class ComputerManagerService extends Service {
     private ComputerDetails parallelPollPc(ComputerDetails details) throws InterruptedException {
         ParallelPollTuple localInfo = new ParallelPollTuple(details.localAddress, details);
         ParallelPollTuple manualInfo = new ParallelPollTuple(details.manualAddress, details);
-        ParallelPollTuple remoteInfo = new ParallelPollTuple(details.remoteAddress, details);
         ParallelPollTuple ipv6Info = new ParallelPollTuple(details.ipv6Address, details);
 
         // These must be started in order of precedence for the deduplication algorithm
@@ -625,7 +455,6 @@ public class ComputerManagerService extends Service {
         HashSet<ComputerDetails.AddressTuple> uniqueAddresses = new HashSet<>();
         startParallelPollThread(localInfo, uniqueAddresses);
         startParallelPollThread(manualInfo, uniqueAddresses);
-        startParallelPollThread(remoteInfo, uniqueAddresses);
         startParallelPollThread(ipv6Info, uniqueAddresses);
 
         try {
@@ -653,18 +482,6 @@ public class ComputerManagerService extends Service {
                 }
             }
 
-            // Now remote IPv4
-            synchronized (remoteInfo) {
-                while (!remoteInfo.complete) {
-                    remoteInfo.wait();
-                }
-
-                if (remoteInfo.returnedDetails != null) {
-                    remoteInfo.returnedDetails.activeAddress = remoteInfo.address;
-                    return remoteInfo.returnedDetails;
-                }
-            }
-
             // Now global IPv6
             synchronized (ipv6Info) {
                 while (!ipv6Info.complete) {
@@ -681,7 +498,6 @@ public class ComputerManagerService extends Service {
             // interrupted by an attempt to stop polling.
             localInfo.interrupt();
             manualInfo.interrupt();
-            remoteInfo.interrupt();
             ipv6Info.interrupt();
         }
 
@@ -690,7 +506,7 @@ public class ComputerManagerService extends Service {
 
     private boolean pollComputer(ComputerDetails details) throws InterruptedException {
         // Poll all addresses in parallel to speed up the process
-        LimeLog.info("Starting parallel poll for "+details.name+" ("+details.localAddress +", "+details.remoteAddress +", "+details.manualAddress+", "+details.ipv6Address+")");
+        LimeLog.info("Starting parallel poll for "+details.name+" ("+details.localAddress +", "+details.manualAddress+", "+details.ipv6Address+")");
         ComputerDetails polledDetails = parallelPollPc(details);
         LimeLog.info("Parallel poll for "+details.name+" returned address: "+details.activeAddress);
 
@@ -705,10 +521,6 @@ public class ComputerManagerService extends Service {
 
     @Override
     public void onCreate() {
-        // Bind to the discovery service
-        bindService(new Intent(this, DiscoveryService.class),
-                discoveryServiceConnection, Service.BIND_AUTO_CREATE);
-
         // Lookup or generate this device's UID
         idManager = new IdentityManager(this);
 
@@ -765,11 +577,6 @@ public class ComputerManagerService extends Service {
     public void onDestroy() {
         ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         connMgr.unregisterNetworkCallback(networkCallback);
-
-        if (discoveryBinder != null) {
-            // Unbind from the discovery service
-            unbindService(discoveryServiceConnection);
-        }
 
         // FIXME: Should await termination here but we have timeout issues in HttpURLConnection
 

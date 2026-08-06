@@ -88,16 +88,6 @@ public class StreamConfiguration {
             return this;
         }
 
-        public StreamConfiguration.Builder setAttachedGamepadMaskByCount(int gamepadCount) {
-            config.attachedGamepadMask = 0;
-            for (int i = 0; i < 4; i++) {
-                if (gamepadCount > i) {
-                    config.attachedGamepadMask |= 1 << i;
-                }
-            }
-            return this;
-        }
-
         public StreamConfiguration.Builder setPersistGamepadsAfterDisconnect(boolean value) {
             config.persistGamepadsAfterDisconnect = value;
             return this;
@@ -182,9 +172,6 @@ public class StreamConfiguration {
         return sops;
     }
     
-    public boolean getAdaptiveResolutionEnabled() {
-        return enableAdaptiveResolution;
-    }
     
     public boolean getPlayLocalAudio() {
         return playLocalAudio;

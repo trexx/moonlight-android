@@ -4,11 +4,13 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.hardware.display.DisplayManager;
 import android.media.MediaCodecInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.app.Activity;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Vibrator;
 import android.preference.CheckBoxPreference;
 import android.preference.ListPreference;
@@ -37,8 +39,27 @@ public class StreamSettings extends Activity {
     private PreferenceConfiguration previousPrefs;
     private int previousDisplayPixelCount;
 
+    /**
+     * Returns the display the given activity is attached to.
+     *
+     * Replaces the deprecated getWindowManager().getDefaultDisplay(). Activity.getDisplay()
+     * can return null when the activity isn't attached to a display, which the old API never
+     * did, so fall back to the default display to preserve the previous non-null contract.
+     */
+    static Display getActivityDisplay(Activity activity) {
+        Display display = activity.getDisplay();
+        if (display == null) {
+            display = activity.getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
+        }
+        return display;
+    }
+
+    private Display getActivityDisplay() {
+        return getActivityDisplay(this);
+    }
+
     void reloadSettings() {
-        Display.Mode mode = getWindowManager().getDefaultDisplay().getMode();
+        Display.Mode mode = getActivityDisplay().getMode();
         previousDisplayPixelCount = mode.getPhysicalWidth() * mode.getPhysicalHeight();
         getFragmentManager().beginTransaction().replace(
                 R.id.stream_settings, new SettingsFragment()
@@ -68,7 +89,7 @@ public class StreamSettings extends Activity {
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
 
-        Display.Mode mode = getWindowManager().getDefaultDisplay().getMode();
+        Display.Mode mode = getActivityDisplay().getMode();
 
         // If the display's physical pixel count has changed, we consider that it's a new display
         // and we should reload our settings (which include display-dependent values).
@@ -242,13 +263,6 @@ public class StreamSettings extends Activity {
             addPreferencesFromResource(R.xml.preferences);
             PreferenceScreen screen = getPreferenceScreen();
 
-            // hide on-screen controls category on non touch screen devices
-            if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)) {
-                PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_onscreen_controls");
-                screen.removePreference(category);
-            }
-
             // Hide remote desktop mouse mode on NVIDIA SHIELD devices
             // (which support raw mouse input in pointer capture mode)
             if (getActivity().getPackageManager().hasSystemFeature("com.nvidia.feature.shield")) {
@@ -302,18 +316,13 @@ public class StreamSettings extends Activity {
             if (!((Vibrator)getActivity().getSystemService(Context.VIBRATOR_SERVICE)).hasVibrator()) {
                 category_gamepad_settings.removePreference(findPreference("checkbox_vibrate_fallback"));
                 category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
-                // The entire OSC category may have already been removed by the touchscreen check above
-                PreferenceCategory category = (PreferenceCategory) findPreference("category_onscreen_controls");
-                if (category != null) {
-                    category.removePreference(findPreference("checkbox_vibrate_osc"));
-                }
             }
             else if (!((Vibrator)getActivity().getSystemService(Context.VIBRATOR_SERVICE)).hasAmplitudeControl()) {
                 // Remove the vibration strength selector of the device doesn't have amplitude control
                 category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
             }
 
-            Display display = getActivity().getWindowManager().getDefaultDisplay();
+            Display display = getActivityDisplay(getActivity());
             float maxSupportedFps = display.getRefreshRate();
 
             // Hide non-supported resolution/FPS combinations
@@ -495,7 +504,7 @@ public class StreamSettings extends Activity {
                 public boolean onPreferenceChange(Preference preference, Object newValue) {
                     // HACK: We need to let the preference change succeed before reinitializing to ensure
                     // it's reflected in the new layout.
-                    final Handler h = new Handler();
+                    final Handler h = new Handler(Looper.getMainLooper());
                     h.postDelayed(new Runnable() {
                         @Override
                         public void run() {

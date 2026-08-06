@@ -367,14 +367,8 @@ public class NvHTTP {
 
         details.httpsPort = getHttpsPort(serverInfo);
 
-        details.macAddress = getXmlString(serverInfo, "mac", false);
-
         // FIXME: Do we want to use the current port?
         details.localAddress = makeTuple(getXmlString(serverInfo, "LocalIP", false), baseUrlHttp.port());
-
-        // This is missing on on recent GFE versions, but it's present on Sunshine
-        details.externalPort = getExternalPort(serverInfo);
-        details.remoteAddress = makeTuple(getXmlString(serverInfo, "ExternalIP", false), details.externalPort);
 
         details.pairState = getPairState(serverInfo);
         details.runningGameId = getCurrentGame(serverInfo);
@@ -484,26 +478,7 @@ public class NvHTTP {
                 PairState.PAIRED : PairState.NOT_PAIRED;
     }
     
-    public long getMaxLumaPixelsH264(String serverInfo) throws XmlPullParserException, IOException {
-        // MaxLumaPixelsH264 wasn't present on old GFE versions
-        String str = getXmlString(serverInfo, "MaxLumaPixelsH264", false);
-        if (str != null) {
-            return Long.parseLong(str);
-        } else {
-            return 0;
-        }
-    }
     
-    public long getMaxLumaPixelsHEVC(String serverInfo) throws XmlPullParserException, IOException {
-        // MaxLumaPixelsHEVC wasn't present on old GFE versions
-        String str = getXmlString(serverInfo, "MaxLumaPixelsHEVC", false);
-        if (str != null) {
-            return Long.parseLong(str);
-        } else {
-            return 0;
-        }
-    }
-
     // Possible meaning of bits
     // Bit 0: H.264 Baseline
     // Bit 1: H.264 High
@@ -522,11 +497,6 @@ public class NvHTTP {
         }
     }
     
-    public String getGpuType(String serverInfo) throws XmlPullParserException, IOException {
-        // ServerCodecModeSupport wasn't present on old GFE versions
-        return getXmlString(serverInfo, "gputype", false);
-    }
-
     public String getGfeVersion(String serverInfo) throws XmlPullParserException, IOException {
         // ServerCodecModeSupport wasn't present on old GFE versions
         return getXmlString(serverInfo, "GfeVersion", false);
@@ -556,19 +526,6 @@ public class NvHTTP {
         }
     }
 
-    public int getExternalPort(String serverInfo) {
-        // This is an extension which is not present in GFE. It is present for Sunshine to be able
-        // to support dynamic HTTP WAN ports without requiring the user to manually enter the port.
-        try {
-            return Integer.parseInt(getXmlString(serverInfo, "ExternalPort", true));
-        } catch (XmlPullParserException e) {
-            // Expected on non-Sunshine servers
-            return baseUrlHttp.port();
-        } catch (IOException e) {
-            e.printStackTrace();
-            return baseUrlHttp.port();
-        }
-    }
 
     /**
      * Get an app by ID

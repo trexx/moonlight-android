@@ -19,47 +19,46 @@
 #include "log.h"
 #include "bytes.h"
 
-#include <sstream>
-#include <iomanip>
+#include <cstdio>
+
+// NB: deliberately no <sstream>/<iomanip>/<ostream> here. This is the only C++ module in
+// the project and APP_STL is c++_static, so anything that touches iostreams statically
+// links libc++'s locale machinery into libxow-driver.so - which measured at roughly
+// 800 KB per ABI. The formatting below is snprintf-based for that reason. Keep it that
+// way: reintroducing a std::ostringstream anywhere in this driver brings all of it back.
 
 namespace Log
 {
     std::string formatBytes(const Bytes &bytes)
     {
-        std::ostringstream stream;
-
-        stream << std::hex << std::setfill('0');
-
-        for (uint8_t byte : bytes)
+        if (bytes.size() == 0)
         {
-            stream << std::setw(2);
-            stream << static_cast<uint32_t>(byte) << ':';
+            return std::string();
         }
 
-        std::string output = stream.str();
+        // Two hex digits per byte plus a separating colon between each pair
+        std::string output;
+        output.resize(bytes.size() * 3 - 1);
 
-        // Remove trailing colon
-        output.pop_back();
+        char *out = &output[0];
+        size_t remaining = output.size() + 1;
+
+        for (size_t i = 0; i < bytes.size(); i++)
+        {
+            // Every byte but the last is followed by a colon
+            int written = snprintf(out, remaining,
+                i + 1 < bytes.size() ? "%02x:" : "%02x",
+                static_cast<uint32_t>(bytes.raw()[i]));
+
+            if (written <= 0 || static_cast<size_t>(written) >= remaining)
+            {
+                break;
+            }
+
+            out += written;
+            remaining -= written;
+        }
 
         return output;
-    }
-
-    std::string formatLog(std::string level, std::string message)
-    {
-        std::ostringstream stream;
-        std::time_t time = std::time(nullptr);
-        std::tm localTime = {};
-
-        // Add local time to output if available
-        if (localtime_r(&time, &localTime))
-        {
-            stream << std::put_time(&localTime, "%F %T") << " ";
-        }
-
-        stream << std::left << std::setw(5);
-        stream << level << " - ";
-        stream << message << std::endl;
-
-        return stream.str();
     }
 }

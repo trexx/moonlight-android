@@ -17,9 +17,6 @@ public class HostHttpResponseException extends IOException {
         return errorCode;
     }
     
-    public String getErrorMessage() {
-        return errorMsg;
-    }
     
     @Override
     public String getMessage() {

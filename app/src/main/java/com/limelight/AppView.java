@@ -88,9 +88,6 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
             new Thread() {
                 @Override
                 public void run() {
-                    // Wait for the binder to be ready
-                    localBinder.waitForReady();
-
                     // Get the computer object
                     computer = localBinder.getComputer(uuidString);
                     if (computer == null) {
