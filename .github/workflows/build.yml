@@ -13,16 +13,16 @@ jobs:
       - name: Setup Java JDK
         uses: actions/setup-java@v5
         with:
-          java-version: 21
+          java-version: 25
           distribution: 'corretto'
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
         with:
             packages: ''
 
       - name: Checkout Repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           submodules: recursive
 
