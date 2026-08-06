@@ -10,32 +10,48 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/setup-java@v5
+      - name: Setup Java JDK
+        uses: actions/setup-java@v5
         with:
-          java-version: 25
+          java-version: 21
           distribution: 'corretto'
 
-      - uses: android-actions/setup-android@v4
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
         with:
             packages: ''
 
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Checkout Repo
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Build artifact
-        run: ./gradlew build connectedCheck
-
-      - name: Debug Sign
-        run: jarsigner -verbose -keystore ~/.android/debug.keystore -storepass android -keypass android -signedjar app/build/outputs/apk/release/app-release-debugsigned.apk app/build/outputs/apk/release/app-release-unsigned.apk androiddebugkey
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
+      - name: Build Moonlight
+        uses: burrunan/gradle-cache-action@v3
         with:
-          name: moonlight-android
-          path: app/build/outputs/apk/release/app-release-unsigned.apk
-          if-no-files-found: error
+          arguments: assembleNonRoot
+
+      - name: Align APK
+        run: |
+          $ANDROID_HOME/build-tools/34.0.0/zipalign -v 4 \
+          ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk \
+          ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-aligned.apk
+
+      - name: Decode Keystore
+        run: echo "${{ secrets.KEYSTORE }}" | base64 -d > /tmp/debug.keystore
+
+      - name: Sign APK With Key
+        run: |
+          $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
+            --ks /tmp/debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --out ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk \
+            ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-aligned.apk
+
+      - name: Upload Signed APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: moonlight-android.apk
+          path: ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk
