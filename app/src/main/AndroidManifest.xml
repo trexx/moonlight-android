@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- INTERNET and ACCESS_NETWORK_STATE reach hosts; ACCESS_WIFI_STATE backs the high
+         performance and low latency Wi-Fi locks taken during a stream. VIBRATE serves rumble
+         fallback on devices without a controller motor, WAKE_LOCK keeps the screen on while
+         streaming, and the TV EPG permissions are for the Android TV channel. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -9,6 +13,10 @@
     <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA"/>
     <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA"/>
 
+    <!-- All optional: the app runs on phones, tablets and TV boxes, and requiring any of these
+         would hide it in the Play Store from devices it works perfectly well on. Notably
+         touchscreen must be optional for TV, and leanback must not be required or phones are
+         excluded. -->
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
@@ -36,6 +44,16 @@
         android:name="android.hardware.type.pc"
         android:required="false"/>
 
+    <!--
+      gwpAsanMode samples native allocations for heap corruption, which is how memory bugs in the
+      native decode path get caught in the field.
+
+      enableOnBackInvokedCallback is off at the application level: the browsing activities opt in
+      individually, while Game and its dialogs keep the classic onBackPressed() path.
+
+      Every activity below declares configChanges for rotation and resize so Android does not
+      recreate it - for Game that would mean tearing down and rebuilding the stream.
+    -->
     <application
         android:label="@string/app_label"
         android:allowBackup="true"
@@ -52,6 +70,8 @@
         android:supportsRtl="false"
         android:theme="@style/AppTheme">
 
+        <!-- Exported so the Android TV launcher process can read cached box art for the channel.
+             It serves nothing else; see PosterContentProvider. -->
         <provider
             android:name=".PosterContentProvider"
             android:authorities="poster.${applicationId}"
@@ -136,6 +156,11 @@
             <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
             <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
+        <!-- The streaming activity. singleTask plus noHistory means a second launch (from a
+             shortcut, say) reuses the running stream rather than stacking another one, and
+             excludeFromRecents keeps a dead stream out of the recents list.
+             preferMinimalPostProcessing asks the display to use game mode, which cuts the TV's
+             own image processing latency. -->
         <activity
             android:name=".Game"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
@@ -161,6 +186,7 @@
                 android:value="true" />
         </activity>
 
+        <!-- Neither service is exported: both are bound only from within this app -->
         <service
             android:name=".computers.ComputerManagerService"
             android:label="Computer Management Service" />

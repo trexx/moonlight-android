@@ -57,6 +57,19 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 
+/**
+ * HTTPS client for the host's control API: server info, app lists, launching, resuming and
+ * quitting.
+ *
+ * <p>Two channels exist. Plain HTTP serves only the unauthenticated server info used before
+ * pairing; everything else goes over HTTPS authenticated with this client's certificate, pinned to
+ * the host's own certificate learned at pairing time. Pinning rather than trusting the system
+ * store is the point — hosts use self-signed certificates, and the pairing exchange is what
+ * establishes trust.
+ *
+ * <p>Responses are XML with the error status inside the body, so every call goes through
+ * {@code verifyResponseStatus} rather than relying on HTTP status codes.
+ */
 public class NvHTTP {
     private String uniqueId;
     private PairingManager pm;
@@ -186,6 +199,11 @@ public class NvHTTP {
                 .build();
     }
 
+    /**
+     * @param likelyOnline the host is expected to respond, which selects longer timeouts. Polling a
+     *                     host that is probably offline uses short ones instead, so the grid isn't
+     *                     held up waiting on machines that are switched off.
+     */
     public HttpUrl getHttpsUrl(boolean likelyOnline) throws IOException {
         if (httpsPort == 0) {
             // Fetch the HTTPS port if we don't have it already
@@ -196,6 +214,11 @@ public class NvHTTP {
         return new HttpUrl.Builder().scheme("https").host(baseUrlHttp.host()).port(httpsPort).build();
     }
     
+    /**
+     * @param serverCert     the host's certificate learned at pairing, pinned for this connection,
+     *                       or null for a host we have not paired with yet
+     * @param cryptoProvider supplies this client's own certificate and key
+     */
     public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
         // Use the same UID for all Moonlight clients so we can quit games
         // started by other Moonlight clients.
@@ -233,6 +256,12 @@ public class NvHTTP {
         this.pm = new PairingManager(this, cryptoProvider);
     }
 
+    /**
+     * Pulls one tag's text out of an XML response.
+     *
+     * @param throwIfMissing fail rather than return null when the tag is absent, for fields whose
+     *                       absence means the response is unusable
+     */
     static String getXmlString(Reader r, String tagname, boolean throwIfMissing) throws XmlPullParserException, IOException {
         XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
         factory.setNamespaceAware(true);
@@ -277,6 +306,7 @@ public class NvHTTP {
         return getXmlString(new StringReader(str), tagname, throwIfMissing);
     }
     
+    /** @throws HostHttpResponseException if the response body carries a host-side error status */
     private static void verifyResponseStatus(XmlPullParser xpp) throws HostHttpResponseException {
         // We use Long.parseLong() because in rare cases GFE can send back a status code of
         // 0xFFFFFFFF, which will cause Integer.parseInt() to throw a NumberFormatException due
@@ -295,6 +325,13 @@ public class NvHTTP {
         }
     }
     
+    /**
+     * Fetches the host's server info, the response every other operation depends on: version,
+     * pairing state, current app, and supported display modes.
+     *
+     * <p>Tried over HTTPS first and falls back to HTTP, since an unpaired host will reject the
+     * client certificate but still answer the unauthenticated query.
+     */
     public String getServerInfo(boolean likelyOnline) throws IOException, XmlPullParserException {
         String resp;
 
@@ -354,6 +391,7 @@ public class NvHTTP {
         return new ComputerDetails.AddressTuple(address, port);
     }
 
+    /** Parses a server info response into a {@link ComputerDetails}. */
     public ComputerDetails getComputerDetails(String serverInfo) throws IOException, XmlPullParserException {
         ComputerDetails details = new ComputerDetails();
 
@@ -379,12 +417,17 @@ public class NvHTTP {
         return details;
     }
     
+    /** Fetches and parses the host's details in one call. */
     public ComputerDetails getComputerDetails(boolean likelyOnline) throws IOException, XmlPullParserException {
         return getComputerDetails(getServerInfo(likelyOnline));
     }
 
     // This hack is Android-specific but we do it on all platforms
     // because it doesn't really matter
+    /**
+     * Installs a trust manager that accepts the host's pinned self-signed certificate, which
+     * Android's default one will not.
+     */
     private OkHttpClient performAndroidTlsHack(OkHttpClient client) {
         // Doing this each time we create a socket is required
         // to avoid the SSLv3 fallback that causes connection failures
@@ -463,15 +506,18 @@ public class NvHTTP {
         }
     }
 
+    /** @return the host software's version string */
     public String getServerVersion(String serverInfo) throws XmlPullParserException, IOException {
         // appversion is present in all supported GFE versions
         return getXmlString(serverInfo, "appversion", true);
     }
 
+    /** @return whether this client is paired with the host, which costs a server info round trip */
     public PairingManager.PairState getPairState() throws IOException, XmlPullParserException {
         return getPairState(getServerInfo(true));
     }
 
+    /** @return whether this client is paired, from an already-fetched server info response */
     public PairingManager.PairState getPairState(String serverInfo) throws IOException, XmlPullParserException {
         // appversion is present in all supported GFE versions
         return NvHTTP.getXmlString(serverInfo, "PairStatus", true).equals("1") ?
@@ -487,6 +533,7 @@ public class NvHTTP {
     // Bit 9: HEVC Main10
     // Bit 10: HEVC Main10 4:4:4
     // Bit 11: ???
+    /** @return bitmask of the codecs the host can encode, which constrains format negotiation */
     public long getServerCodecModeSupport(String serverInfo) throws XmlPullParserException, IOException {
         // ServerCodecModeSupport wasn't present on old GFE versions
         String str = getXmlString(serverInfo, "ServerCodecModeSupport", false);
@@ -497,11 +544,13 @@ public class NvHTTP {
         }
     }
     
+    /** @return the GeForce Experience version, or empty on hosts that are not GFE */
     public String getGfeVersion(String serverInfo) throws XmlPullParserException, IOException {
         // ServerCodecModeSupport wasn't present on old GFE versions
         return getXmlString(serverInfo, "GfeVersion", false);
     }
     
+    /** @return the app ID currently running on the host, or 0 if it is idle */
     public int getCurrentGame(String serverInfo) throws IOException, XmlPullParserException {
         // GFE 2.8 started keeping currentgame set to the last game played. As a result, it no longer
         // has the semantics that its name would indicate. To contain the effects of this change as much
@@ -514,6 +563,7 @@ public class NvHTTP {
         }
     }
 
+    /** @return the HTTPS port the host advertises, which need not be the default */
     public int getHttpsPort(String serverInfo) {
         try {
             return Integer.parseInt(getXmlString(serverInfo, "HttpsPort", true));
@@ -562,10 +612,12 @@ public class NvHTTP {
         return null;
     }
 
+    /** @return the pairing manager bound to this connection */
     public PairingManager getPairingManager() {
         return pm;
     }
     
+    /** @return the apps parsed from an app list response */
     public static LinkedList<NvApp> getAppListByReader(Reader r) throws XmlPullParserException, IOException {
         XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
         factory.setNamespaceAware(true);
@@ -628,10 +680,12 @@ public class NvHTTP {
         return appList;
     }
     
+    /** @return the raw app list XML, kept so it can be cached to disk verbatim */
     public String getAppListRaw() throws IOException {
         return openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "applist");
     }
     
+    /** @return the host's app list. Slow enough that callers cache it and refresh in the background. */
     public LinkedList<NvApp> getAppList() throws HostHttpResponseException, IOException, XmlPullParserException {
         if (verbose) {
             // Use the raw function so the app list is printed
@@ -654,19 +708,23 @@ public class NvHTTP {
                 "pair", "devicename=roth&updateState=1&phrase=pairchallenge");
     }
 
+    /** Asks the host to forget this client. */
     public void unpair() throws IOException {
         openHttpConnectionToString(httpClientLongConnectTimeout, baseUrlHttp, "unpair");
     }
     
+    /** @return a stream of the app's box art; the caller owns and must close it */
     public InputStream getBoxArt(NvApp app) throws IOException {
         ResponseBody resp = openHttpConnection(httpClientLongConnectTimeout, getHttpsUrl(true), "appasset", "appid=" + app.getAppId() + "&AssetType=2&AssetIdx=0");
         return resp.byteStream();
     }
     
+    /** @return the host's major version, which gates protocol features */
     public int getServerMajorVersion(String serverInfo) throws XmlPullParserException, IOException {
         return getServerAppVersionQuad(serverInfo)[0];
     }
     
+    /** @return the host's four-part version, for comparisons finer than the major version */
     public int[] getServerAppVersionQuad(String serverInfo) throws XmlPullParserException, IOException {
         String serverVersion = getServerVersion(serverInfo);
         if (serverVersion == null) {
@@ -694,6 +752,12 @@ public class NvHTTP {
         return new String(hexChars);
     }
     
+    /**
+     * Launches or resumes an app.
+     *
+     * @param verb "launch" for a new session or "resume" for one already running
+     * @return true if the host started it
+     */
     public boolean launchApp(ConnectionContext context, String verb, int appId, boolean enableHdr) throws IOException, XmlPullParserException {
         int fps = context.streamConfig.getLaunchRefreshRate();
         boolean enableSops = context.streamConfig.getSops();
@@ -722,6 +786,7 @@ public class NvHTTP {
         }
     }
     
+    /** Asks the host to quit whatever is running. @return true if it did */
     public boolean quitApp() throws IOException, XmlPullParserException {
         String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "cancel");
         if (getXmlString(xmlStr, "cancel", true).equals("0")) {

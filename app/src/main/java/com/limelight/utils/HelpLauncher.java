@@ -7,7 +7,12 @@ import android.net.Uri;
 
 import com.limelight.HelpActivity;
 
+/**
+ * Opens help pages, preferring an external browser and falling back to the in-app
+ * {@link com.limelight.HelpActivity} on devices that have none — which is most TV devices.
+ */
 public class HelpLauncher {
+    /** Opens a URL externally, falling back to the in-app help activity if nothing handles it. */
     public static void launchUrl(Context context, String url) {
         // Try to launch the default browser
         try {
@@ -37,10 +42,12 @@ public class HelpLauncher {
         context.startActivity(i);
     }
 
+    /** Opens the setup guide. */
     public static void launchSetupGuide(Context context) {
         launchUrl(context, "https://github.com/moonlight-stream/moonlight-docs/wiki/Setup-Guide");
     }
 
+    /** Opens the troubleshooting page. */
     public static void launchTroubleshooting(Context context) {
         launchUrl(context, "https://github.com/moonlight-stream/moonlight-docs/wiki/Troubleshooting");
     }

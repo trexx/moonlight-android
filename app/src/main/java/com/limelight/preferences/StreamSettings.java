@@ -35,6 +35,16 @@ import com.limelight.utils.UiHelper;
 
 import java.util.Arrays;
 
+/**
+ * The settings screen.
+ *
+ * <p>Most of the logic here is making the options reflect the device: resolution and frame rate
+ * lists are filtered to what the display and decoders can actually do, and options whose hardware
+ * support is missing are removed rather than shown and ignored.
+ *
+ * <p>Some changes require rebuilding the whole preference tree, which is why the fragment is
+ * recreated rather than updated in place after those.
+ */
 public class StreamSettings extends Activity {
     private PreferenceConfiguration previousPrefs;
     private int previousDisplayPixelCount;
@@ -66,6 +76,7 @@ public class StreamSettings extends Activity {
         ).commitAllowingStateLoss();
     }
 
+    /** {@inheritDoc} Builds the preference tree, filtered to the device's real capabilities. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -78,6 +89,7 @@ public class StreamSettings extends Activity {
         UiHelper.notifyNewRootView(this);
     }
 
+    /** {@inheritDoc} */
     @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
@@ -85,6 +97,7 @@ public class StreamSettings extends Activity {
         reloadSettings();
     }
 
+    /** {@inheritDoc} */
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
@@ -103,10 +116,12 @@ public class StreamSettings extends Activity {
 
     @Override
     // NOTE: This will NOT be called on Android 13+ with android:enableOnBackInvokedCallback="true"
+    /** {@inheritDoc} Applies pending changes before leaving. */
     public void onBackPressed() {
         finish();
     }
 
+    /** Builds the preference tree and filters it against the device's real capabilities. */
     public static class SettingsFragment extends PreferenceFragment {
         private int nativeResolutionStartIndex = Integer.MAX_VALUE;
         private boolean nativeFramerateShown = false;

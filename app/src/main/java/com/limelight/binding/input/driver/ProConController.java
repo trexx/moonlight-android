@@ -21,17 +21,35 @@ import java.util.Locale;
  * Android's built-in hid-nintendo driver handles this controller's buttons and sticks, but it
  * doesn't expose the motion sensors. Claiming the device ourselves lets us report gyro and
  * accelerometer data (and drive rumble) to the host.
+ *
+ * <p>The protocol is Nintendo's undocumented one, reverse engineered by the community and
+ * documented at <a href="https://github.com/dekuNukem/Nintendo_Switch_Reverse_Engineering">
+ * dekuNukem/Nintendo_Switch_Reverse_Engineering</a>, which is where the command IDs, report
+ * layouts and SPI flash addresses below come from. Two command families are involved: bare
+ * handshake commands (report 0x80) that set up the USB link, and subcommands (report 0x01) that
+ * configure the controller and read its flash.
+ *
+ * <p>Everything happens on the reader thread created by {@link #start()}: initialisation runs
+ * first, then the thread loops reading 0x30 input reports until stopped. Rumble is the exception,
+ * arriving from the host's callback thread and writing to the same endpoint.
  */
 public class ProConController extends AbstractController {
 
+    // Every report to and from this controller is a fixed 64 bytes
     private static final int PACKET_SIZE = 64;
+    // Stick calibration lives in the controller's SPI flash. The factory pair is always present;
+    // the user pair is only valid when preceded by the 0xB2 0xA1 magic, written when someone runs
+    // the Switch's own stick calibration.
     private static final int FACTORY_LS_CALIBRATION_OFFSET = 0x603D;
     private static final int FACTORY_RS_CALIBRATION_OFFSET = 0x6046;
     private static final int USER_LS_MAGIC_OFFSET = 0x8010;
     private static final int USER_LS_CALIBRATION_OFFSET = 0x8012;
     private static final int USER_RS_MAGIC_OFFSET = 0x801B;
     private static final int USER_RS_CALIBRATION_OFFSET = 0x801D;
+    // Three 12-bit pairs per stick, packed into 9 bytes
     private static final int STICK_CALIBRATION_LENGTH = 9;
+    // Initialisation commands are unreliable while the controller is still settling, so each one
+    // is retried rather than failing the whole handshake
     private static final int COMMAND_RETRIES = 10;
 
     // The accelerometer reports at 1/4096 g per LSB, but the protocol wants m/s^2.
@@ -45,14 +63,17 @@ public class ProConController extends AbstractController {
     private UsbEndpoint inEndpt, outEndpt;
     private Thread inputThread;
     private boolean stopped = false;
+    // Rolling 4-bit sequence number the controller expects on every outgoing report
     private byte sendPacketCount = 0;
     private final int[][][] stickCalibration = new int[2][2][3]; // [stick][axis][min, center, max]
     private final float[][][] stickExtends = new float[2][2][2]; // Pre-calculated scale for each axis
 
+    /** @return true if this is a Nintendo (0x057e) Switch Pro Controller (0x2009) */
     public static boolean canClaimDevice(UsbDevice device) {
         return device.getVendorId() == 0x057e && device.getProductId() == 0x2009;
     }
 
+    /** Declares gyro, accelerometer and rumble support, which is the reason for claiming this pad. */
     public ProConController(UsbDevice device, UsbDeviceConnection connection, int deviceId, UsbDriverListener listener) {
         super(deviceId, listener, device.getVendorId(), device.getProductId());
         this.device = device;
@@ -61,6 +82,11 @@ public class ProConController extends AbstractController {
         this.capabilities = MoonBridge.LI_CCAP_GYRO | MoonBridge.LI_CCAP_ACCEL | MoonBridge.LI_CCAP_RUMBLE;
     }
 
+    /**
+     * Builds the reader thread: initialise the controller, announce it, then loop on the input
+     * endpoint until stopped. The initialisation order matters — the handshake has to precede
+     * everything, and the input report mode has to be set before 0x30 reports start arriving.
+     */
     private Thread createInputThread() {
         return new Thread(() -> {
             // The controller isn't ready to answer commands the instant it enumerates.
@@ -98,6 +124,9 @@ public class ProConController extends AbstractController {
                     if (res == 0) {
                         res = -1;
                     }
+                    // A failure that came back faster than the timeout is a real I/O error
+                    // (usually the cable being pulled); one that took the full second is just
+                    // an idle controller with nothing to report, so keep waiting
                     if (res == -1 && SystemClock.uptimeMillis() - lastMillis < 1000) {
                         LimeLog.warning("Detected device I/O error");
                         ProConController.this.stop();
@@ -117,10 +146,18 @@ public class ProConController extends AbstractController {
         });
     }
 
+    /** @return true if the whole buffer reached the controller */
     private boolean sendData(byte[] data, int size) {
         return connection.bulkTransfer(outEndpt, data, size, 100) == size;
     }
 
+    /**
+     * Sends a bare 0x80 handshake command.
+     *
+     * @param id        command byte (0x02 handshake, 0x03 baud rate, 0x04 disable USB timeout)
+     * @param waitReply wait for the matching 0x81 acknowledgement before returning
+     * @return true if the command was sent and, when requested, acknowledged
+     */
     private boolean sendCommand(byte id, boolean waitReply) {
         byte[] data = new byte[] {(byte) 0x80, id};
         for (int i = 0; i < COMMAND_RETRIES; i++) {
@@ -146,6 +183,16 @@ public class ProConController extends AbstractController {
         return false;
     }
 
+    /**
+     * Sends a 0x01 subcommand and waits for its 0x21 reply.
+     *
+     * <p>The reply is matched by echoed subcommand ID at byte 14, and any subcommand payload
+     * (such as SPI flash contents) starts at byte 20 of {@code buffer}.
+     *
+     * @param payload subcommand arguments, placed after the 11-byte header
+     * @param buffer  scratch buffer of {@link #PACKET_SIZE} bytes that receives the reply
+     * @return true if a matching reply arrived
+     */
     private boolean sendSubcommand(byte subcommand, byte[] payload, byte[] buffer) {
         byte[] data = new byte[11 + payload.length];
         data[0] = 0x01;  // Rumble and subcommand
@@ -181,38 +228,58 @@ public class ProConController extends AbstractController {
         return false;
     }
 
+    /** Requests the controller's MAC and device type, which also brings up the USB link. */
     private boolean handshake() {
         return sendCommand((byte) 0x02, true);
     }
 
+    /** Switches the link to 3 Mbit baud. Requires a second {@link #handshake()} afterwards. */
     private boolean highSpeed() {
         return sendCommand((byte) 0x03, true);
     }
 
+    /**
+     * Disables the controller's USB timeout, which would otherwise drop it back to Bluetooth
+     * when the host stops polling.
+     */
     private boolean forceUSB() {
         return sendCommand((byte) 0x04, true);
     }
 
+    /**
+     * @param mode report mode; 0x30 is the full report carrying sticks, buttons and motion,
+     *             as opposed to the cut-down default that omits the sensors
+     */
     private boolean setInputReportMode(byte mode) {
         final byte[] data = new byte[] {mode};
         return sendSubcommand((byte) 0x03, data, new byte[PACKET_SIZE]);
     }
 
+    /** @param id player number as a bitmask of the four front LEDs */
     private boolean setPlayerLED(int id) {
         final byte[] data = new byte[] {(byte) (id & 0b1111)};
         return sendSubcommand((byte) 0x30, data, new byte[PACKET_SIZE]);
     }
 
+    /** Enables the gyro and accelerometer, which are off until asked for. */
     private boolean enableIMU(boolean enable) {
         byte[] data = new byte[] {(byte) (enable ? 0x01 : 0x00)};
         return sendSubcommand((byte) 0x40, data, new byte[PACKET_SIZE]);
     }
 
+    /** Enables the rumble motors, without which {@link #rumble} is ignored. */
     private boolean enableVibration(boolean enable) {
         byte[] data = new byte[] {(byte) (enable ? 0x01 : 0x00)};
         return sendSubcommand((byte) 0x48, data, new byte[PACKET_SIZE]);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Claims every interface and locates the bulk endpoints. Initialisation itself is left to
+     * the reader thread, because the controller needs a moment after enumeration before it will
+     * answer commands.
+     */
     @Override
     public boolean start() {
         for (int i = 0; i < device.getInterfaceCount(); i++) {
@@ -244,6 +311,7 @@ public class ProConController extends AbstractController {
         return true;
     }
 
+    /** {@inheritDoc} */
     @Override
     public void stop() {
         if (stopped) {
@@ -270,6 +338,13 @@ public class ProConController extends AbstractController {
         notifyDeviceRemoved();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Encodes the two amplitudes into the controller's packed frequency/amplitude rumble
+     * format and sends a bare 0x10 rumble report, which needs no reply. Zero amplitudes are
+     * left as the zero-filled default, which the controller reads as "motor off".
+     */
     @Override
     public void rumble(short lowFreqMotor, short highFreqMotor) {
         byte[] data = new byte[10];
@@ -298,11 +373,23 @@ public class ProConController extends AbstractController {
         sendData(data, data.length);
     }
 
+    /** {@inheritDoc} */
     @Override
     public void rumbleTriggers(short leftTrigger, short rightTrigger) {
         // ProCon does not support trigger-specific rumble
     }
 
+    /**
+     * Parses a 0x30 full input report into the inherited state fields.
+     *
+     * <p>Byte offsets are fixed by the protocol: 3 to 5 are the button bitmaps, 6 to 11 pack the
+     * four 12-bit stick axes, and 37 onwards carry three sets of IMU samples (only the first is
+     * used, since the host wants one sample per report rather than the controller's 5 ms
+     * history). Stick Y axes are negated and offset by one because the controller reports Y
+     * increasing downwards.
+     *
+     * @return true if this was a full report and the state was updated
+     */
     protected boolean handleRead(ByteBuffer buffer) {
         if (buffer.remaining() < PACKET_SIZE) {
             return false;
@@ -355,6 +442,12 @@ public class ProConController extends AbstractController {
         return true;
     }
 
+    /**
+     * Reads from the controller's internal SPI flash via subcommand 0x10.
+     *
+     * @param buffer receives the reply; the flash contents begin at byte 20
+     * @return true if the read succeeded
+     */
     private boolean spiFlashRead(int offset, int length, byte[] buffer) {
         // SPI Read Address (Little Endian)
         byte[] address = {
@@ -373,6 +466,10 @@ public class ProConController extends AbstractController {
         return true;
     }
 
+    /**
+     * @return true if the 0xB2 0xA1 magic is present, meaning the user calibration that follows
+     *         it has actually been written and isn't just erased flash
+     */
     private boolean checkUserCalMagic(int offset) {
         byte[] buffer = new byte[PACKET_SIZE];
 
@@ -383,6 +480,16 @@ public class ProConController extends AbstractController {
         return ((buffer[20] & 0xFF) == 0xB2) && ((buffer[21] & 0xFF) == 0xA1);
     }
 
+    /**
+     * Loads both sticks' calibration from flash, preferring the user's own over the factory
+     * values, and falls back to nominal 12-bit ranges for any stick that can't be read.
+     *
+     * <p>The two sticks store their three 12-bit pairs in a different order, which is why the
+     * unpacking below is duplicated rather than shared.
+     *
+     * @return always true; a failed read degrades to the default calibration rather than
+     *         failing initialisation, since an uncalibrated stick still works
+     */
     private boolean loadStickCalibration() {
         byte[] buffer = new byte[PACKET_SIZE];
 
@@ -438,6 +545,13 @@ public class ProConController extends AbstractController {
         return true;
     }
 
+    /**
+     * Converts one stick's raw calibration triple into absolute bounds and usable extents.
+     *
+     * <p>The flash values are deltas from centre rather than absolute positions, and the Y axis
+     * is stored inverted relative to the direction {@link #handleRead} produces, hence the
+     * subtractions from 0x1000.
+     */
     private void applyCalibration(int stick, int xMin, int xCenter, int xMax, int yMin, int yCenter, int yMax) {
         stickCalibration[stick][0][0] = xCenter - xMin;
         stickCalibration[stick][0][1] = xCenter;
@@ -455,6 +569,7 @@ public class ProConController extends AbstractController {
         stickExtends[stick][1][1] = (float) ((stickCalibration[stick][1][2] - yCenter) * 0.7);
     }
 
+    /** Nominal full-scale 12-bit calibration, used when flash can't be read. */
     private void applyDefaultCalibration(int stick) {
         for (int axis = 0; axis < 2; axis++) {
             stickCalibration[stick][axis][0] = 0x000;  // Min
@@ -466,9 +581,21 @@ public class ProConController extends AbstractController {
         }
     }
 
+    /**
+     * Normalises a raw axis reading to -1.0 to 1.0 using the loaded calibration.
+     *
+     * <p>Self-widening: a reading beyond the current extent becomes the new extent and reports
+     * full deflection. That absorbs sticks whose real range differs from what flash claims, at
+     * the cost of the range only being fully learned once the stick has been pushed to its
+     * corners. It also means the extents are per-session and never shrink back.
+     *
+     * @param stick 0 left, 1 right
+     * @param axis  0 X, 1 Y
+     */
     private float applyStickCalibration(int value, int stick, int axis) {
         int center = stickCalibration[stick][axis][1];
 
+        // handleRead() negates the Y axes, so wrap them back into the unsigned 12-bit range
         if (value < 0) {
             value += 0x1000;
         }

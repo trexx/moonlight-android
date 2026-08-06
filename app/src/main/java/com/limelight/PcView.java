@@ -59,6 +59,16 @@ import org.xmlpull.v1.XmlPullParserException;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
+/**
+ * The app's launcher screen: the grid of known hosts.
+ *
+ * <p>Hosts are owned by {@link com.limelight.computers.ComputerManagerService}, which this activity
+ * binds to for the duration it is visible. The service polls each host's reachability and pairing
+ * state in the background, and the grid simply reflects the state it publishes.
+ *
+ * <p>Pairing, unpairing, waking and removing hosts are all driven from the per-host context menu
+ * here, which is why so much of this class is dialog and menu handling rather than view code.
+ */
 public class PcView extends Activity implements AdapterFragmentCallbacks {
     // Typed as View, not the concrete widget: this is only ever used to toggle
     // visibility, and the empty state is a plain TextView since the wrapper layout
@@ -94,6 +104,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         }
     };
 
+    /** {@inheritDoc} Rebuilds the grid layout for the new configuration. */
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
@@ -119,6 +130,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
     private final static int TEST_NETWORK_ID = 10;
     private final static int MANAGEMENT_PAGE_ID = 12;
 
+    /** Wires up the grid, the empty-state text and the add-computer affordances. */
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view);
 
@@ -181,6 +193,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         pcGridAdapter.notifyDataSetChanged();
     }
 
+    /** {@inheritDoc} Binds the computer manager and builds the grid. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -228,6 +241,10 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /**
+     * Finishes setup once the required permissions are settled. Split out of {@code onCreate}
+     * because a permission prompt can defer it to a later callback.
+     */
     private void completeOnCreate() {
         completeOnCreateCalled = true;
 
@@ -243,6 +260,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         initializeViews();
     }
 
+    /** Starts polling hosts and receiving state updates. Bound to the activity being visible. */
     private void startComputerUpdates() {
         // Only allow polling to start if we're bound to CMS, polling is not already running,
         // and our activity is in the foreground.
@@ -270,6 +288,12 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /**
+     * Stops polling hosts.
+     *
+     * @param wait block until in-flight polls have finished, which is required before the process
+     *             can safely tear down the service binding
+     */
     private void stopComputerUpdates(boolean wait) {
         if (managerBinder != null) {
             if (!runningPolling) {
@@ -288,6 +312,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /** {@inheritDoc} Unbinds the computer manager. */
     @Override
     public void onDestroy() {
         super.onDestroy();
@@ -297,6 +322,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /** {@inheritDoc} Resumes polling and refreshes shortcut state. */
     @Override
     protected void onResume() {
         super.onResume();
@@ -308,6 +334,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         startComputerUpdates();
     }
 
+    /** {@inheritDoc} */
     @Override
     protected void onPause() {
         super.onPause();
@@ -316,6 +343,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         stopComputerUpdates(false);
     }
 
+    /** {@inheritDoc} Stops polling, since nothing is visible to update. */
     @Override
     protected void onStop() {
         super.onStop();
@@ -323,6 +351,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         Dialog.closeDialogs();
     }
 
+    /** {@inheritDoc} Builds the per-host menu, whose entries depend on pairing and online state. */
     @Override
     public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
         stopComputerUpdates(false);
@@ -375,6 +404,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         menu.add(Menu.NONE, VIEW_DETAILS_ID, 7,  getResources().getString(R.string.pcview_menu_details));
     }
 
+    /** {@inheritDoc} */
     @Override
     public void onContextMenuClosed(Menu menu) {
         // For some reason, this gets called again _after_ onPause() is called on this activity.
@@ -383,6 +413,12 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         startComputerUpdates();
     }
 
+    /**
+     * Runs the pairing exchange with a host and shows the PIN the user must type there.
+     *
+     * <p>Runs off the UI thread: pairing is a multi-step network exchange that waits on the user
+     * entering the PIN on the host.
+     */
     private void doPair(final ComputerDetails computer) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
             Toast.makeText(PcView.this, getResources().getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
@@ -488,6 +524,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         }).start();
     }
 
+    /** Asks the host to forget this client, off the UI thread. */
     private void doUnpair(final ComputerDetails computer) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
             Toast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
@@ -540,6 +577,12 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         }).start();
     }
 
+    /**
+     * Opens the app list for a host.
+     *
+     * @param newlyPaired     true if pairing just completed, which affects how failures are reported
+     * @param showHiddenGames include apps the user has hidden
+     */
     private void doAppList(ComputerDetails computer, boolean newlyPaired, boolean showHiddenGames) {
         if (computer.state == ComputerDetails.State.OFFLINE) {
             Toast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
@@ -558,6 +601,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         startActivity(i);
     }
 
+    /** {@inheritDoc} Dispatches the per-host actions: pair, unpair, wake, view apps, delete. */
     @Override
     public boolean onContextItemSelected(MenuItem item) {
         AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
@@ -642,6 +686,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         }
     }
     
+    /** Removes a host from the grid, the database and any launcher shortcuts pointing at it. */
     private void removeComputer(ComputerDetails details) {
         managerBinder.removeComputer(details);
 
@@ -674,6 +719,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         }
     }
     
+    /** Applies a state update from the polling service to the grid entry for this host. */
     private void updateComputer(ComputerDetails details) {
         ComputerObject existingEntry = null;
 
@@ -703,11 +749,13 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
         pcGridAdapter.notifyDataSetChanged();
     }
 
+    /** {@inheritDoc} */
     @Override
     public int getAdapterFragmentLayoutId() {
         return R.layout.pc_grid_view;
     }
 
+    /** {@inheritDoc} Attaches the grid once its fragment is ready. */
     @Override
     public void receiveAbsListView(AbsListView listView) {
         listView.setAdapter(pcGridAdapter);

@@ -24,8 +24,25 @@ import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
 
+/**
+ * Bound service that owns every USB controller this app drives itself.
+ *
+ * <p>It watches for USB attachments, decides which devices are worth claiming from Android's
+ * input stack ({@link #shouldClaimDevice}), requests permission, constructs the matching
+ * {@link AbstractController} and forwards its events to the bound client — normally {@code Game},
+ * which passes them to {@code ControllerHandler}.
+ *
+ * <p>It exists as a service rather than living in the activity because claiming a USB device is
+ * process-wide state: the permission grant, the claimed interfaces and the reader threads all
+ * have to survive configuration changes and outlive any single activity instance.
+ *
+ * <p>Note that claiming is deliberately conservative. Taking a device Android already supports
+ * would replace a working driver with ours for no gain, so most claims are conditional on the
+ * kernel not handling the device — or on the user forcing it with the "bind all USB" preference.
+ */
 public class UsbDriverService extends Service implements UsbDriverListener {
 
+    // Private action for the USB permission dialog result, delivered to our own receiver
     private static final String ACTION_USB_PERMISSION =
             "com.limelight.USB_PERMISSION";
 
@@ -38,10 +55,14 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
     private final ArrayList<AbstractController> controllers = new ArrayList<>();
 
+    // Client callbacks, null when nothing is bound
     private UsbDriverListener listener;
     private UsbDriverStateListener stateListener;
+    // Monotonic ID handed to each new controller; never reused within a process
     private int nextDeviceId;
 
+    // Dongles are tracked separately: one dongle produces several controllers of its own, so it
+    // isn't an AbstractController itself but still needs stopping when the service shuts down
     private final ArrayList<XboxWirelessDongle> xboxWirelessDongles = new ArrayList<>();
 
     @Override
@@ -53,6 +74,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     public void reportControllerMotion(int controllerId, byte motionType, float motionX, float motionY, float motionZ) {
         // Call through to the client's listener
@@ -61,6 +83,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /** {@inheritDoc} Also drops the controller from our own list before forwarding. */
     @Override
     public void deviceRemoved(AbstractController controller) {
         // Remove the the controller from our list (if not removed already)
@@ -72,6 +95,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     public void deviceAdded(AbstractController controller) {
         // Call through to the client's listener
@@ -80,6 +104,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /** Receives USB attach broadcasts and the result of our permission dialog. */
     public class UsbEventReceiver extends BroadcastReceiver {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -121,7 +146,12 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /** Control surface handed to bound clients. */
     public class UsbDriverBinder extends Binder {
+        /**
+         * Installs the input event sink. Controllers claimed before binding are replayed to the
+         * new listener immediately, so a client that binds late still learns about them.
+         */
         public void setListener(UsbDriverListener listener) {
             UsbDriverService.this.listener = listener;
 
@@ -133,19 +163,26 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             }
         }
 
+        /** Installs the sink for permission dialog notifications; see {@link UsbDriverStateListener}. */
         public void setStateListener(UsbDriverStateListener stateListener) {
             UsbDriverService.this.stateListener = stateListener;
         }
 
+        /** Begins watching for devices and claims any that are already attached. */
         public void start() {
             UsbDriverService.this.start();
         }
 
+        /** Stops watching and releases every claimed device. */
         public void stop() {
             UsbDriverService.this.stop();
         }
     }
 
+    /**
+     * Advances a device through claim, permission and construction. Re-entered after the
+     * permission dialog completes, hence the repeated eligibility check.
+     */
     private void handleUsbDeviceState(UsbDevice device) {
         // Are we able to operate it?
         if (shouldClaimDevice(device, prefConfig.bindAllUsb)) {
@@ -232,6 +269,10 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /**
+     * @return true if Android has already enumerated an input device with this VID/PID, meaning
+     *         a kernel driver is handling it and we should leave it alone
+     */
     public static boolean isRecognizedInputDevice(UsbDevice device) {
         // Determine if this VID and PID combo matches an existing input device
         // and defer to the built-in controller support in that case.
@@ -251,6 +292,11 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         return false;
     }
 
+    /**
+     * @return true if this kernel's xpad driver is expected to handle Xbox One pads correctly.
+     *         Inferred from the kernel version because there is no way to interrogate the driver
+     *         directly from an app sandbox.
+     */
     public static boolean kernelSupportsXboxOne() {
         String kernelVersion = System.getProperty("os.version");
         LimeLog.info("Kernel Version: "+kernelVersion);
@@ -275,6 +321,11 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /**
+     * @return true if this kernel's xpad driver is expected to set the Xbox 360 wireless
+     *         controller's player LEDs. Without that, the pad's ring keeps flashing and the
+     *         player number is never assigned, so we claim the dongle ourselves instead.
+     */
     public static boolean kernelSupportsXbox360W() {
         // Check if this kernel is 4.2+ to see if the xpad driver sets Xbox 360 wireless LEDs
         // https://github.com/torvalds/linux/commit/75b7f05d2798ee3a1cc5bbdd54acd0e318a80396
@@ -296,6 +347,14 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         return true;
     }
 
+    /**
+     * Decides whether to take a device over from Android's input stack. Each supported family
+     * has its own reason for being claimed, and every one of them can be forced by the user.
+     *
+     * @param claimAllAvailable the "bind all USB devices" preference, which overrides the
+     *                          kernel-support heuristics for devices we can drive at all
+     * @return true if this device should be claimed
+     */
     public static boolean shouldClaimDevice(UsbDevice device, boolean claimAllAvailable) {
         return ((!kernelSupportsXboxOne() || !isRecognizedInputDevice(device) || claimAllAvailable) && XboxOneController.canClaimDevice(device)) ||
                 ((!isRecognizedInputDevice(device) || claimAllAvailable) && Xbox360Controller.canClaimDevice(device)) ||
@@ -307,6 +366,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                 ((!isRecognizedInputDevice(device) || claimAllAvailable) && ProConController.canClaimDevice(device));
     }
 
+    /** Registers for attach broadcasts, then sweeps the devices that are already plugged in. */
     @SuppressLint("UnspecifiedRegisterReceiverFlag")
     private void start() {
         if (started || usbManager == null) {
@@ -335,6 +395,11 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /**
+     * Releases everything claimed. Each {@code stop()} call removes the controller from
+     * {@link #controllers} via {@link #deviceRemoved}, so the lists are drained from the front
+     * rather than iterated.
+     */
     private void stop() {
         if (!started) {
             return;
@@ -358,12 +423,14 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /** {@inheritDoc} Resolves the USB manager and reads preferences; nothing is claimed until start(). */
     @Override
     public void onCreate() {
         this.usbManager = (UsbManager) getSystemService(Context.USB_SERVICE);
         this.prefConfig = PreferenceConfiguration.readPreferences(this);
     }
 
+    /** {@inheritDoc} Releases every claimed device and drops the listeners. */
     @Override
     public void onDestroy() {
         stop();
@@ -373,11 +440,19 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         stateListener = null;
     }
 
+    /** {@inheritDoc} @return the binder clients use to start, stop and listen */
     @Override
     public IBinder onBind(Intent intent) {
         return binder;
     }
 
+    /**
+     * Notifies the client that the system permission dialog is coming up or has closed.
+     *
+     * <p>{@code Game} uses this to suppress picture-in-picture and its idle timers while the
+     * dialog has focus, so a permission prompt during a stream doesn't look like the user
+     * leaving the app.
+     */
     public interface UsbDriverStateListener {
         void onUsbPermissionPromptStarting();
         void onUsbPermissionPromptCompleted();

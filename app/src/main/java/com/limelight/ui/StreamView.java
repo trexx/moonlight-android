@@ -9,20 +9,38 @@ import android.view.inputmethod.BaseInputConnection;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 
+/**
+ * The surface the stream is decoded into, plus the input plumbing that has to live on the view.
+ *
+ * <p>Three things beyond a plain {@link SurfaceView}:
+ * <ul>
+ *   <li>Aspect-ratio-preserving measurement, either letterboxed or overscanned to fill the display
+ *       ({@link #setFillDisplay(boolean)}).</li>
+ *   <li>Key events intercepted before the IME sees them, so the host receives them intact.</li>
+ *   <li>An {@link InputConnection} that turns soft keyboard text into host input, when commit-text
+ *       mode is enabled ({@link #setCommitTextEnabled(boolean)}).</li>
+ * </ul>
+ */
 public class StreamView extends SurfaceView {
     private double desiredAspectRatio;
     private boolean fillDisplay;
     private boolean commitTextEnabled;
     private InputCallbacks inputCallbacks;
 
+    /** Sets the stream's aspect ratio, which drives measurement. */
     public void setDesiredAspectRatio(double aspectRatio) {
         this.desiredAspectRatio = aspectRatio;
     }
 
+    /** @param fillDisplay overscan to fill the display and crop the surplus, instead of letterboxing */
     public void setFillDisplay(boolean fillDisplay) {
         this.fillDisplay = fillDisplay;
     }
 
+    /**
+     * Enables soft keyboard text input. When on, the view becomes an IME target and committed text
+     * is forwarded to the host as UTF-8 rather than as individual key events.
+     */
     public void setCommitTextEnabled(boolean enabled) {
         this.commitTextEnabled = enabled;
         // Request focus so that the IME targets this view when enabled
@@ -32,26 +50,37 @@ public class StreamView extends SurfaceView {
         }
     }
 
+    /** Sets the sink for key and text events this view intercepts. */
     public void setInputCallbacks(InputCallbacks callbacks) {
         this.inputCallbacks = callbacks;
     }
 
+    /** {@inheritDoc} */
     public StreamView(Context context) {
         super(context);
     }
 
+    /** {@inheritDoc} */
     public StreamView(Context context, AttributeSet attrs) {
         super(context, attrs);
     }
 
+    /** {@inheritDoc} */
     public StreamView(Context context, AttributeSet attrs, int defStyleAttr) {
         super(context, attrs, defStyleAttr);
     }
 
+    /** {@inheritDoc} */
     public StreamView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Sizes the surface to the stream's aspect ratio, letterboxing or overscanning per
+     * {@link #setFillDisplay(boolean)}.
+     */
     @Override
     protected void onMeasure(int widthMeasureSpec, int heightMeasureSpec) {
         // If no fixed aspect ratio has been provided, simply use the default onMeasure() behavior
@@ -87,6 +116,12 @@ public class StreamView extends SurfaceView {
         setMeasuredDimension(measuredWidth, measuredHeight);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Intercepts keys before the IME so they reach the host. Back is the exception: it has to
+     * dismiss the soft keyboard when one is open.
+     */
     @Override
     public boolean onKeyPreIme(int keyCode, KeyEvent event) {
         // This callbacks allows us to override dumb IME behavior like when
@@ -107,11 +142,18 @@ public class StreamView extends SurfaceView {
         return super.onKeyPreIme(keyCode, event);
     }
 
+    /** {@inheritDoc} True only in commit-text mode, which is what makes the IME target this view. */
     @Override
     public boolean onCheckIsTextEditor() {
         return commitTextEnabled || super.onCheckIsTextEditor();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>In commit-text mode, returns a connection that forwards committed text and deletions to
+     * the host instead of editing a local buffer.
+     */
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
         if (!commitTextEnabled) {
@@ -141,6 +183,7 @@ public class StreamView extends SurfaceView {
         };
     }
 
+    /** Sink for the input this view intercepts before Android's normal handling. */
     public interface InputCallbacks {
         boolean handleKeyUp(KeyEvent event);
         boolean handleKeyDown(KeyEvent event);

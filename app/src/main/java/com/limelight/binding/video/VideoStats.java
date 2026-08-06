@@ -2,21 +2,44 @@ package com.limelight.binding.video;
 
 import android.os.SystemClock;
 
+/**
+ * Counters for one measurement window, as displayed by the performance overlay and the
+ * end-of-stream summary.
+ *
+ * <p>Totals only — rates are derived on demand by {@link #getFps()} — which is what allows windows
+ * to be summed together via {@link #add(VideoStats)}. The decoder keeps three of these: the window
+ * being filled, the last completed one, and a running total for the session.
+ *
+ * <p>Not synchronised. The instances are written by the decoder threads and read when a window
+ * rolls over; the values are statistics, so a torn read costs nothing worse than a slightly odd
+ * number on screen.
+ */
 class VideoStats {
 
+    // Time inside the decoder, and time from frame arrival to presentation
     long decoderTimeMs;
     long totalTimeMs;
+    // Frames the host says it sent, including ones lost in transit
     int totalFrames;
+    // Frames that actually arrived, and of those, the ones presented rather than dropped
     int totalFramesReceived;
     int totalFramesRendered;
+    // Loss episodes, and total frames lost across them. Both matter: one long outage and many
+    // short ones lose the same frames but look very different to the user.
     int frameLossEvents;
     int framesLost;
+    // Host-reported encode latency in tenths of a millisecond, only counted for frames that
+    // carried it — hence the separate frame counter
     char minHostProcessingLatency;
     char maxHostProcessingLatency;
     int totalHostProcessingLatency;
     int framesWithHostProcessingLatency;
     long measurementStartTimestamp;
 
+    /**
+     * Merges another window into this one. Minimums treat 0 as "unset" rather than as a real
+     * value, since a window with no host latency data would otherwise pin the minimum at zero.
+     */
     void add(VideoStats other) {
         this.decoderTimeMs += other.decoderTimeMs;
         this.totalTimeMs += other.totalTimeMs;
@@ -42,6 +65,7 @@ class VideoStats {
         assert other.measurementStartTimestamp >= this.measurementStartTimestamp;
     }
 
+    /** Overwrites this window with another's values, including its start timestamp. */
     void copy(VideoStats other) {
         this.decoderTimeMs = other.decoderTimeMs;
         this.totalTimeMs = other.totalTimeMs;
@@ -57,6 +81,7 @@ class VideoStats {
         this.measurementStartTimestamp = other.measurementStartTimestamp;
     }
 
+    /** Resets every counter, ready for a new window. */
     void clear() {
         this.decoderTimeMs = 0;
         this.totalTimeMs = 0;
@@ -72,6 +97,10 @@ class VideoStats {
         this.measurementStartTimestamp = 0;
     }
 
+    /**
+     * @return frame rates derived from the counters and the time since the window opened. All
+     *         zero until the window has been open for a measurable interval.
+     */
     VideoStatsFps getFps() {
         float elapsed = (SystemClock.uptimeMillis() - this.measurementStartTimestamp) / (float) 1000;
 
@@ -85,6 +114,12 @@ class VideoStats {
     }
 }
 
+/**
+ * Frame rates derived from a {@link VideoStats} window.
+ *
+ * <p>Three of them, because the gaps between them are diagnostic: total above received means
+ * network loss, received above rendered means the device can't keep up.
+ */
 class VideoStatsFps {
 
     float totalFps;

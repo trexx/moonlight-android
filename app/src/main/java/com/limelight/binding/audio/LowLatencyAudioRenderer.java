@@ -28,12 +28,18 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     private int sampleRate;
     private int samplesPerFrame;
 
+    /**
+     * @param enableAudioFx pass through to {@link AndroidAudioRenderer}; also disqualifies AAudio
+     * @param enableAAudio  user opt-in. AAudio is never used without it, since the AudioTrack
+     *                      path is the better-tested one on most devices.
+     */
     public LowLatencyAudioRenderer(Context context, boolean enableAudioFx, boolean enableAAudio) {
         this.context = context;
         this.enableAudioFx = enableAudioFx;
         this.enableAAudio = enableAAudio;
     }
 
+    /** @return true if every precondition for the AAudio path holds for this stream */
     private boolean shouldTryAAudio(MoonBridge.AudioConfiguration audioConfiguration) {
         if (!enableAAudio) {
             return false;
@@ -58,6 +64,13 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         return true;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Picks the backing renderer. AAudio is attempted first when eligible; anything short of
+     * a working stream falls through to {@link AndroidAudioRenderer}, whose result is returned
+     * as this renderer's own.
+     */
     @Override
     public int setup(MoonBridge.AudioConfiguration audioConfiguration, int sampleRate, int samplesPerFrame) {
         this.audioConfiguration = audioConfiguration;
@@ -81,6 +94,12 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         return renderer.setup(audioConfiguration, sampleRate, samplesPerFrame);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Also where a dead AAudio stream is noticed and swapped out, since this is the only
+     * method called often enough to detect it promptly.
+     */
     @Override
     public void playDecodedAudio(short[] audioData) {
         // A route change we couldn't recover from leaves the AAudio stream unusable. Rather than
@@ -106,6 +125,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
+    /** {@inheritDoc} Forwarded to whichever renderer {@link #setup} selected. */
     @Override
     public void start() {
         if (renderer != null) {
@@ -113,6 +133,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
+    /** {@inheritDoc} Forwarded to whichever renderer is currently active. */
     @Override
     public void stop() {
         if (renderer != null) {
@@ -120,6 +141,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
+    /** {@inheritDoc} Releases the active renderer, whichever one the session ended up on. */
     @Override
     public void cleanup() {
         if (renderer != null) {

@@ -43,6 +43,7 @@ public class GameMenu {
     private final NvConnection conn;
     private final GameInputDevice device;
 
+    /** Building the menu shows it immediately; there is no separate show call. */
     public GameMenu(Game game, NvConnection conn, GameInputDevice device) {
         this.game = game;
         this.conn = conn;

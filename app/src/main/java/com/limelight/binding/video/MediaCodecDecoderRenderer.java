@@ -40,23 +40,61 @@ import android.view.Display;
 import android.view.Choreographer;
 import android.view.SurfaceHolder;
 
+/**
+ * Hardware video decoder and presenter, built on {@link MediaCodec}.
+ *
+ * <p>This is where stream latency is won or lost, so most of what looks like complexity here is
+ * latency work or device workarounds:
+ *
+ * <ul>
+ *   <li><b>Decoder selection.</b> Not every decoder that advertises a codec can actually keep up,
+ *       and some are outright broken. {@link MediaCodecHelper} holds the blacklists and quirk
+ *       tables; the {@code find*Decoder()} methods below combine those with the platform's own
+ *       performance points to pick a codec.</li>
+ *   <li><b>Frame pacing.</b> Four modes, chosen by preference. In
+ *       {@code FRAME_PACING_BALANCED} a dedicated Choreographer thread presents at most one frame
+ *       per vsync via {@link #doFrame}; every other mode presents from the renderer thread as
+ *       soon as frames come out, dropping all but the newest to stay current.</li>
+ *   <li><b>Scheduler hints.</b> An ADPF hint session ({@link #createPerformanceHintSession()})
+ *       tells the platform the per-frame deadline so CPU clocks are held where they need to be
+ *       rather than ramped reactively after frames have already been missed.</li>
+ *   <li><b>Codec recovery.</b> Decoders die mid-stream, particularly on cheap TV boxes. Rather
+ *       than dropping the connection, the three threads that touch the codec are quiesced, the
+ *       codec is flushed, restarted or reset, and streaming resumes — see
+ *       {@link #doCodecRecoveryIfRequired(int)}.</li>
+ * </ul>
+ *
+ * <h2>Threads</h2>
+ * Four, and the {@code CR_FLAG_*} constants exist because three of them touch the codec:
+ * <ol>
+ *   <li>The decode thread from moonlight-common-c, which calls {@link #submitDecodeUnit}.</li>
+ *   <li>The renderer thread, which dequeues output buffers and (outside balanced pacing) presents
+ *       them.</li>
+ *   <li>The Choreographer thread, in balanced pacing only, which presents on vsync.</li>
+ *   <li>The UI thread, which constructs this object and drives {@link #setup} and {@link #stop}.</li>
+ * </ol>
+ */
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
 
+    // Debug switches for measuring decoder latency via onFrameRendered() instead of estimating it
     private static final boolean USE_FRAME_RENDER_TIME = false;
     private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
 
-    // Used on versions < 5.0
-
+    // Decoder chosen for each codec at construction time, or null if there's no usable one
     private MediaCodecInfo avcDecoder;
     private MediaCodecInfo hevcDecoder;
     private MediaCodecInfo av1Decoder;
 
+    // Codec-specific data (parameter sets) retained so they can be replayed after a codec
+    // restart, since the host won't resend them unless asked
     private final ArrayList<byte[]> vpsBuffers = new ArrayList<>();
     private final ArrayList<byte[]> spsBuffers = new ArrayList<>();
     private final ArrayList<byte[]> ppsBuffers = new ArrayList<>();
     private boolean submittedCsd;
     private byte[] currentHdrMetadata;
 
+    // Input buffer currently being filled by submitDecodeUnit(), held across calls because one
+    // frame can arrive as several decode units
     private int nextInputBufferIndex = -1;
     private ByteBuffer nextInputBuffer;
 
@@ -64,23 +102,30 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private Activity activity;
     private MediaCodec videoDecoder;
     private Thread rendererThread;
+
+    // Device quirks resolved from MediaCodecHelper; see the corresponding methods there
     private boolean needsSpsBitstreamFixup, isExynos4;
     private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
     private boolean constrainedHighProfile;
     private boolean refFrameInvalidationAvc, refFrameInvalidationHevc, refFrameInvalidationAv1;
     private byte optimalSlicesPerFrame;
     private boolean refFrameInvalidationActive;
+
     private int initialWidth, initialHeight;
     private int videoFormat;
     private SurfaceHolder renderTarget;
+    // Set on the UI thread, read by the decode and renderer threads to wind themselves down
     private volatile boolean stopping;
     private CrashListener crashListener;
     private boolean reportedCrash;
+    // Crashes in previous sessions, used to progressively disable risky features
     private int consecutiveCrashCount;
     private String glRenderer;
     private boolean foreground = true;
     private PerfOverlayListener perfListener;
 
+    // Codec recovery. Escalating strategies, tried in order of how much they disturb the stream:
+    // flush keeps the codec configured, restart stops and starts it, reset rebuilds it entirely.
     private static final int CR_MAX_TRIES = 10;
     private static final int CR_RECOVERY_TYPE_NONE = 0;
     private static final int CR_RECOVERY_TYPE_FLUSH = 1;
@@ -105,10 +150,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean needsBaselineSpsHack;
     private SeqParameterSet savedSps;
 
+    // First exception seen, held back briefly in case a more informative one follows: the initial
+    // failure is often a generic IllegalStateException while the real cause surfaces moments later
     private RendererException initialException;
     private long initialExceptionTimestamp;
     private static final int EXCEPTION_REPORT_DELAY_MS = 3000;
 
+    // Stats for the current one-second window, the previous one (what the overlay displays), and
+    // the whole session (what the post-stream summary displays)
     private VideoStats activeWindowVideoStats;
     private VideoStats lastWindowVideoStats;
     private VideoStats globalVideoStats;
@@ -116,6 +165,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private long lastTimestampUs;
     private int lastFrameNumber;
+    // The stream's frame rate, not the display's, despite the name
     private int refreshRate;
     private volatile Display vsyncDisplay;
     private volatile int rendererTid;
@@ -123,6 +173,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long targetFrameTimeNanos;
     private PreferenceConfiguration prefs;
 
+    // Decoded frames waiting for a vsync to present on, in balanced pacing mode only. Bounded at
+    // two: enough to absorb jitter, few enough not to starve the decoder of output buffers or add
+    // a frame of latency.
     private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2;
     private long lastRenderedFrameTimeNanos;
@@ -143,6 +196,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return decoder;
     }
 
+    /**
+     * @return true if the decoder claims it can handle the configured resolution and frame rate.
+     *         Uses the platform's performance points where the device publishes them, and falls
+     *         back to the achievable frame rate range otherwise.
+     */
     private boolean decoderCanMeetPerformancePoint(MediaCodecInfo.VideoCapabilities caps, PreferenceConfiguration prefs) {
         MediaCodecInfo.VideoCapabilities.PerformancePoint targetPerfPoint = new MediaCodecInfo.VideoCapabilities.PerformancePoint(prefs.width, prefs.height, prefs.fps);
         List<MediaCodecInfo.VideoCapabilities.PerformancePoint> perfPoints = caps.getSupportedPerformancePoints();
@@ -180,6 +238,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return caps.areSizeAndRateSupported(prefs.width, prefs.height, prefs.fps);
     }
 
+    /**
+     * @return true if HEVC is the only one of the two that can sustain the configured settings,
+     *         which is grounds for using a HEVC decoder that isn't otherwise whitelisted
+     */
     private boolean decoderCanMeetPerformancePointWithHevcAndNotAvc(MediaCodecInfo hevcDecoderInfo, MediaCodecInfo avcDecoderInfo, PreferenceConfiguration prefs) {
         MediaCodecInfo.VideoCapabilities avcCaps = avcDecoderInfo.getCapabilitiesForType("video/avc").getVideoCapabilities();
         MediaCodecInfo.VideoCapabilities hevcCaps = hevcDecoderInfo.getCapabilitiesForType("video/hevc").getVideoCapabilities();
@@ -187,6 +249,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return !decoderCanMeetPerformancePoint(avcCaps, prefs) && decoderCanMeetPerformancePoint(hevcCaps, prefs);
     }
 
+    /** @return true if AV1 can sustain the configured settings where HEVC cannot */
     private boolean decoderCanMeetPerformancePointWithAv1AndNotHevc(MediaCodecInfo av1DecoderInfo, MediaCodecInfo hevcDecoderInfo, PreferenceConfiguration prefs) {
         MediaCodecInfo.VideoCapabilities av1Caps = av1DecoderInfo.getCapabilitiesForType("video/av01").getVideoCapabilities();
         MediaCodecInfo.VideoCapabilities hevcCaps = hevcDecoderInfo.getCapabilitiesForType("video/hevc").getVideoCapabilities();
@@ -194,6 +257,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return !decoderCanMeetPerformancePoint(hevcCaps, prefs) && decoderCanMeetPerformancePoint(av1Caps, prefs);
     }
 
+    /** @return true if AV1 can sustain the configured settings where H.264 cannot */
     private boolean decoderCanMeetPerformancePointWithAv1AndNotAvc(MediaCodecInfo av1DecoderInfo, MediaCodecInfo avcDecoderInfo, PreferenceConfiguration prefs) {
         MediaCodecInfo.VideoCapabilities avcCaps = avcDecoderInfo.getCapabilitiesForType("video/avc").getVideoCapabilities();
         MediaCodecInfo.VideoCapabilities av1Caps = av1DecoderInfo.getCapabilitiesForType("video/av01").getVideoCapabilities();
@@ -201,6 +265,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return !decoderCanMeetPerformancePoint(avcCaps, prefs) && decoderCanMeetPerformancePoint(av1Caps, prefs);
     }
 
+    /**
+     * Chooses an HEVC decoder, or null to stay on H.264.
+     *
+     * <p>HEVC is not taken just because a decoder exists: many report support they can't deliver,
+     * so a decoder has to be whitelisted in {@link MediaCodecHelper} or justified by something
+     * that H.264 can't do — HDR, resolutions above 4K, an explicit user choice, or H.264 being
+     * unable to meet the performance point.
+     *
+     * @param requestedHdr HDR was requested, which mandates HEVC Main10
+     */
     private MediaCodecInfo findHevcDecoder(PreferenceConfiguration prefs, boolean meteredNetwork, boolean requestedHdr) {
         // Don't return anything if H.264 is forced
         if (prefs.videoFormat == PreferenceConfiguration.FormatOption.FORCE_H264) {
@@ -242,6 +316,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return hevcDecoderInfo;
     }
 
+    /**
+     * Chooses an AV1 decoder, or null. Opt-in only: AV1 hardware decoding is new enough that it
+     * is never selected automatically, however capable the decoder claims to be.
+     */
     private MediaCodecInfo findAv1Decoder(PreferenceConfiguration prefs) {
         // For now, don't use AV1 unless explicitly requested
         if (prefs.videoFormat != PreferenceConfiguration.FormatOption.FORCE_AV1) {
@@ -274,10 +352,24 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return decoderInfo;
     }
 
+    /** Sets the surface frames are presented to. Must be called before {@link #setup}. */
     public void setRenderTarget(SurfaceHolder renderTarget) {
         this.renderTarget = renderTarget;
     }
 
+    /**
+     * Selects decoders and resolves device quirks, but does not create a codec — that happens in
+     * {@link #setup}. Constructed early so the capabilities it discovers can shape the stream
+     * configuration that is then negotiated with the host.
+     *
+     * @param consecutiveCrashCount crashes in previous sessions; risky features are disabled as
+     *                              this rises, so a device that crashes repeatedly degrades into
+     *                              a working configuration instead of failing forever
+     * @param meteredData           the connection is metered, which biases toward the more
+     *                              efficient codec
+     * @param requestedHdr          HDR was requested, which forces HEVC
+     * @param glRenderer            GL renderer string, used for GPU-specific quirks
+     */
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
                                      CrashListener crashListener, int consecutiveCrashCount,
                                      boolean meteredData, boolean requestedHdr,
@@ -368,14 +460,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    /** @return true if an HEVC decoder was selected; see {@link #findHevcDecoder} for the criteria */
     public boolean isHevcSupported() {
         return hevcDecoder != null;
     }
 
+    /** @return true if an H.264 decoder was found. False here means streaming is impossible. */
     public boolean isAvcSupported() {
         return avcDecoder != null;
     }
 
+    /** @return true if the selected HEVC decoder supports Main10 HDR10, a prerequisite for HDR */
     public boolean isHevcMain10Hdr10Supported() {
         if (hevcDecoder == null) {
             return false;
@@ -391,10 +486,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return false;
     }
 
+    /** @return true if an AV1 decoder was selected, which requires the user to have opted in */
     public boolean isAv1Supported() {
         return av1Decoder != null;
     }
 
+    /** @return true if the selected AV1 decoder supports Main 10 HDR10 */
     public boolean isAv1Main10Supported() {
         if (av1Decoder == null) {
             return false;
@@ -410,6 +507,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return false;
     }
 
+    /** @return the colorspace to ask the host to encode in, as a {@code MoonBridge.COLORSPACE_*} */
     public int getPreferredColorSpace() {
         // Default to Rec 709 which is probably better supported on modern devices.
         //
@@ -421,6 +519,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return MoonBridge.COLORSPACE_REC_709;
     }
 
+    /**
+     * @return full or limited range, per the user's preference. Getting this wrong shows up as
+     *         washed out or crushed blacks, so it is negotiated rather than assumed.
+     */
     public int getPreferredColorRange() {
         if (prefs.fullRange) {
             return MoonBridge.COLOR_RANGE_FULL;
@@ -430,22 +532,36 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    /**
+     * The stream is visible again. Decoder failures while backgrounded are expected — the
+     * surface goes away — so this distinction decides whether a failure is reported as a crash.
+     */
     public void notifyVideoForeground() {
         foreground = true;
     }
 
+    /** The stream is no longer visible; see {@link #notifyVideoForeground()}. */
     public void notifyVideoBackground() {
         foreground = false;
     }
 
+    /** @return the {@code MoonBridge.VIDEO_FORMAT_*} currently being decoded */
     public int getActiveVideoFormat() {
         return this.videoFormat;
     }
 
+    /**
+     * Builds the {@link MediaFormat} common to all codecs: dimensions, frame rate, adaptive
+     * playback bounds and colour information.
+     *
+     * <p>Colour keys are only set when the stream is SDR. In HDR the decoder detects transitions
+     * in the bitstream itself, and hardcoding them here would fight that.
+     */
     private MediaFormat createBaseMediaFormat(String mimeType) {
         MediaFormat videoFormat = MediaFormat.createVideoFormat(mimeType, initialWidth, initialHeight);
 
-        // Avoid setting KEY_FRAME_RATE on Lollipop and earlier to reduce compatibility risk
+        // Hint the stream's frame rate so the decoder can size its internal buffering.
+        // (Upstream gated this on API 23+; unconditional now that minSdk is 30.)
         videoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, refreshRate);
 
         // Populate keys for adaptive playback
@@ -454,7 +570,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             videoFormat.setInteger(MediaFormat.KEY_MAX_HEIGHT, initialHeight);
         }
 
-        // Android 7.0 adds color options to the MediaFormat
+        // Colour options on the MediaFormat, available since Android 7.0
         videoFormat.setInteger(MediaFormat.KEY_COLOR_RANGE,
                 getPreferredColorRange() == MoonBridge.COLOR_RANGE_FULL ?
                 MediaFormat.COLOR_RANGE_FULL : MediaFormat.COLOR_RANGE_LIMITED);
@@ -480,6 +596,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return videoFormat;
     }
 
+    /**
+     * Configures the codec against the render surface and starts it.
+     *
+     * <p>Also resets the codec-specific data state, since a freshly configured codec has to be
+     * given the parameter sets again before it will decode anything.
+     *
+     * @throws IllegalStateException if the codec rejects the format, which the caller turns into
+     *                               a fallback or a recovery attempt
+     */
     private void configureAndStartDecoder(MediaFormat format) {
         // Set HDR metadata if present
         if (currentHdrMetadata != null) {
@@ -530,6 +655,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         videoDecoder.start();
     }
 
+    /**
+     * Attempts one codec configuration, releasing the codec again if it fails.
+     *
+     * @param throwOnCodecError rethrow instead of returning false. Used when the caller has run
+     *                          out of fallback formats and wants the real exception surfaced.
+     * @return true if the codec is configured and running
+     */
     private boolean tryConfigureDecoder(MediaCodecInfo selectedDecoderInfo, MediaFormat format, boolean throwOnCodecError) {
         boolean configured = false;
         try {
@@ -561,6 +693,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return configured;
     }
 
+    /**
+     * Picks the decoder for the negotiated video format, resolves its quirks, and configures it,
+     * retrying with progressively more conservative formats if the first attempt is rejected.
+     *
+     * @param throwOnCodecError propagate codec exceptions instead of reporting failure
+     * @return 0 on success, or a negative code identifying which decoder was missing or which
+     *         format was unusable
+     */
     public int initializeDecoder(boolean throwOnCodecError) {
         String mimeType;
         MediaCodecInfo selectedDecoderInfo;
@@ -667,6 +807,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return 0;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Called by moonlight-common-c once the stream format has been negotiated with the host.
+     * Codec errors are swallowed here so that a failure surfaces as a return code the connection
+     * logic can act on, rather than as an exception out of native code.
+     */
     @Override
     public int setup(int format, int width, int height, int redrawRate) {
         this.initialWidth = width;
@@ -677,6 +824,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return initializeDecoder(false);
     }
 
+    /**
+     * Rendezvous point for codec recovery, and the reason every codec-touching thread has a
+     * {@code CR_FLAG_*} of its own.
+     *
+     * <p>{@link MediaCodec} cannot be recovered while other threads are inside it, so recovery is
+     * a barrier: each thread marks itself quiesced here and blocks, and whichever thread is last
+     * in performs the recovery on everyone's behalf before waking the others. Recovery escalates
+     * — flush, restart, reset, and finally recreating the decoder from scratch — with each step
+     * falling through to the next if it throws.
+     *
+     * <p>Deliberately does not check {@code stopping}: bailing out mid-barrier would leave the
+     * already-quiesced threads waiting for a signal that never comes.
+     *
+     * @param quiescenceFlag the calling thread's {@code CR_FLAG_*}
+     * @return true if recovery took place, meaning the caller's codec state is now invalid and
+     *         any buffer it was holding is gone
+     */
     // All threads that interact with the MediaCodec instance must call this function regularly!
     private boolean doCodecRecoveryIfRequired(int quiescenceFlag) {
         // NB: We cannot check 'stopping' here because we could end up bailing in a partially
@@ -823,6 +987,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return true;
     }
 
+    /**
+     * Classifies a codec exception and schedules recovery if it looks survivable.
+     *
+     * <p>Recovery is capped at {@link #CR_MAX_TRIES}, past which the exception is treated as
+     * fatal — a codec that has failed ten times is not going to start working, and retrying
+     * forever would leave the user watching a frozen frame instead of an error.
+     *
+     * @return true if the exception was transient and the caller should simply carry on
+     */
     // Returns true if the exception is transient
     private boolean handleDecoderException(IllegalStateException e) {
         // Eat decoder exceptions if we're in the process of stopping
@@ -937,6 +1110,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return false;
     }
 
+    /**
+     * Vsync callback, used in balanced frame pacing only.
+     *
+     * <p>Presents at most one queued frame per vsync and re-arms itself. Presenting on the vsync
+     * rather than as soon as frames arrive is what removes the microstutter you get when the
+     * stream rate doesn't divide into the display rate, at the cost of up to one frame of
+     * latency — which is why it isn't the default.
+     *
+     * <p>Runs on the dedicated Choreographer thread; see {@link #startChoreographerThread()}.
+     */
     @Override
     public void doFrame(long frameTimeNanos) {
         // Do nothing if we're stopping
@@ -1050,6 +1233,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    /**
+     * Starts the vsync-driven presentation thread, in balanced pacing mode only. In every other
+     * mode the renderer thread presents directly and this returns immediately.
+     */
     private void startChoreographerThread() {
         if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
             // Not using Choreographer in this pacing mode
@@ -1090,6 +1277,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         });
     }
 
+    /**
+     * Starts the thread that drains decoded frames.
+     *
+     * <p>Outside balanced pacing it also presents them, dropping everything but the newest frame
+     * so the display always shows the most recent one the decoder has produced. In balanced
+     * pacing it only queues them for {@link #doFrame} to present on vsync.
+     */
     private void startRendererThread()
     {
         rendererThread = new Thread() {
@@ -1220,6 +1414,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         rendererThread.start();
     }
 
+    /**
+     * Obtains an input buffer to write the next decode unit into, blocking until one is free.
+     *
+     * <p>A decoder that stops returning input buffers is hung, and how long that is tolerated
+     * depends on why: briefly while the app is in the foreground, since the user is watching a
+     * frozen picture, and much longer in the background where the decoder is expected to stall.
+     *
+     * @return true if {@link #nextInputBuffer} is ready to be filled
+     */
     private boolean fetchNextInputBuffer() {
         long startTime;
         boolean codecRecovered;
@@ -1286,12 +1489,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return true;
     }
 
+    /** {@inheritDoc} Starts the presentation threads; the codec itself is already running. */
     @Override
     public void start() {
         startRendererThread();
         startChoreographerThread();
     }
 
+    /**
+     * First half of teardown: signals the threads to wind down and releases the resources that
+     * reference them, without touching the codec itself.
+     *
+     * <p>Separate from {@link #stop()} because moonlight-common-c may still be submitting decode
+     * units when the UI decides to leave; this lets the UI stop the presentation side promptly
+     * while the connection unwinds at its own pace.
+     */
     // !!! May be called even if setup()/start() fails !!!
     public void prepareForStop() {
         // Let the decoding code know to ignore codec exceptions now
@@ -1333,6 +1545,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Joins the presentation threads so that nothing is inside the codec by the time
+     * {@link #cleanup()} releases it.
+     */
     @Override
     public void stop() {
         // May be called already, but we'll call it now to be safe
@@ -1365,11 +1583,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    /** {@inheritDoc} Releases the codec. Only safe once {@link #stop()} has joined the threads. */
     @Override
     public void cleanup() {
         videoDecoder.release();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The mastering metadata is part of the codec configuration, so a change means restarting
+     * the codec. The early returns matter: HDR mode is re-announced routinely, and restarting on
+     * every announcement would drop frames for no reason.
+     *
+     * @param hdrMetadata CTA-861.3 mastering display metadata, or null when HDR is off
+     */
     @Override
     public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
         // HDR metadata is only supported in Android 7.0 and later, so don't bother
@@ -1398,6 +1626,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    /**
+     * Submits the filled input buffer to the decoder.
+     *
+     * @param timestampUs presentation timestamp, also used to measure decoder latency
+     * @param codecFlags  {@code MediaCodec.BUFFER_FLAG_*} for this buffer
+     * @return true if the buffer was accepted. False means the caller must request an IDR frame,
+     *         because whatever was queued before it can no longer be decoded.
+     */
     private boolean queueNextInputBuffer(long timestampUs, int codecFlags) {
         boolean codecRecovered;
 
@@ -1442,6 +1678,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return fetchNextInputBuffer();
     }
 
+    /**
+     * Rewrites the SPS constraint flags to advertise Constrained High Profile where that helps.
+     *
+     * <p>Telling the decoder there will be no B-frames lets it stop buffering for reordering,
+     * which is worth a frame or two of latency — but only on decoders confirmed to handle it, so
+     * the flags are explicitly cleared everywhere else rather than left at their defaults.
+     */
     private void doProfileSpecificSpsPatching(SeqParameterSet sps) {
         // Some devices benefit from setting constraint flags 4 & 5 to make this Constrained
         // High Profile which allows the decoder to assume there will be no B-frames and
@@ -1459,6 +1702,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The hot path: called from moonlight-common-c's decode thread for every decode unit, and
+     * responsible for stats, parameter-set handling, the per-device bitstream fixups, and getting
+     * the data into the codec.
+     *
+     * <p>Parameter sets get special treatment. They are cached so they can be replayed after a
+     * codec restart, and on decoders with known quirks the SPS is parsed, patched and re-emitted
+     * — bitstream restrictions that some decoders need, and the baseline-profile hack for
+     * decoders that reject High profile at configuration time.
+     *
+     * @return {@code MoonBridge.DR_OK}, or {@code DR_NEED_IDR} to ask the host for a fresh IDR
+     *         frame when the decoder has lost its state
+     */
     @SuppressWarnings("deprecation")
     @Override
     public int submitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
@@ -1803,6 +2061,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return MoonBridge.DR_OK;
     }
 
+    /**
+     * Re-submits the saved SPS with High profile restored, completing the baseline SPS hack.
+     *
+     * <p>Some decoders reject a High profile SPS at configuration time but accept it once
+     * running, so configuration is done with a doctored baseline SPS and the real one is replayed
+     * here immediately afterwards.
+     *
+     * @return true if the patched SPS was queued
+     */
     private boolean replaySps() {
         if (!fetchNextInputBuffer()) {
             return false;
@@ -1829,6 +2096,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Advertises the latency features this decoder can handle: slices per frame, reference
+     * frame invalidation (recovering from packet loss without a full IDR frame) and direct
+     * submit. Note that this can be called before {@link #setup}, so it reports capabilities for
+     * every codec rather than only the one in use — which is why the constructor resolves them.
+     */
     @Override
     public int getCapabilities() {
         int capabilities = 0;
@@ -1855,6 +2130,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return capabilities;
     }
 
+    /**
+     * @return mean milliseconds from a frame arriving to it being presented, over the whole
+     *         session, or 0 if no frames have been received
+     */
     public int getAverageEndToEndLatency() {
         if (globalVideoStats.totalFramesReceived == 0) {
             return 0;
@@ -1862,6 +2141,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return (int)(globalVideoStats.totalTimeMs / globalVideoStats.totalFramesReceived);
     }
 
+    /**
+     * @return mean milliseconds spent inside the decoder per frame, over the whole session, or 0
+     *         if no frames have been received
+     */
     public int getAverageDecoderLatency() {
         if (globalVideoStats.totalFramesReceived == 0) {
             return 0;
@@ -1869,6 +2152,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         return (int)(globalVideoStats.decoderTimeMs / globalVideoStats.totalFramesReceived);
     }
 
+    /** Raised when the decoder stops accepting input buffers entirely; see {@link #fetchNextInputBuffer()}. */
     static class DecoderHungException extends RuntimeException {
         private int hangTimeMs;
 
@@ -1886,6 +2170,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
     }
 
+    /**
+     * Wraps a decoder failure together with a snapshot of how far the stream had progressed.
+     *
+     * <p>The message is built at construction time rather than lazily, and starts with a
+     * classification of the failure stage (pre-SPS, pre-IDR, and so on) followed by decoder name,
+     * format and counters. Crash reports on a device you don't have in front of you are nearly
+     * useless without that context.
+     */
     static class RendererException extends RuntimeException {
         private static final long serialVersionUID = 8985937536997012406L;
         protected static final String DELIMITER = BuildConfig.DEBUG ? "\n" : " | ";

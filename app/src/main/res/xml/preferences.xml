@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Every key here is read by PreferenceConfiguration.readPreferences(), which is the only place
+  they are interpreted - defaults declared here and defaults declared there must agree, since a
+  preference the user has never touched is read from the code-side default.
+
+  The seekbar: namespace belongs to com.limelight.preferences.SeekBarPreference. It adds min,
+  step, keyStep (the increment for a d-pad or keyboard press) and divisor (a display-only
+  divisor, so a value stored in Kbps can be shown in Mbps).
+-->
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:seekbar="http://schemas.moonlight-stream.com/apk/res/seekbar">
 
@@ -18,6 +27,8 @@
             android:entries="@array/fps_names"
             android:entryValues="@array/fps_values"
             android:defaultValue="60" />
+        <!-- Stored in Kbps and displayed in Mbps via divisor. The code-side default is not fixed:
+             getDefaultBitrate() computes it from the chosen resolution and frame rate. -->
         <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_bitrate_kbps"
             android:dialogMessage="@string/summary_seekbar_bitrate"
@@ -40,6 +51,9 @@
             android:summary="@string/summary_seekbar_metered_bitrate"
             android:text="@string/suffix_seekbar_bitrate_mbps"
             android:title="@string/title_seekbar_metered_bitrate" />
+        <!-- Maps to PreferenceConfiguration.framePacing. 'latency' presents frames as soon as they
+             decode; 'balanced' presents on vsync via the Choreographer path in
+             MediaCodecDecoderRenderer, trading up to a frame of latency for smoothness. -->
         <ListPreference
             android:key="frame_pacing"
             android:title="@string/title_frame_pacing"
@@ -76,6 +90,9 @@
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_gamepad_settings"
         android:key="category_gamepad_settings">
+        <!-- Percentage, and the sign is meaningful: positive values are a stick deadzone, negative
+             values are deadzone *compensation* for worn sticks that no longer reach full
+             deflection. See ControllerHandler.handleDeadZone(). -->
         <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_deadzone"
             android:defaultValue="7"
@@ -149,6 +166,9 @@
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_input_settings"
         android:key="category_input_settings">
+        <!-- Maps to PreferenceConfiguration.mouseMode, which selects the TouchContext
+             implementation in Game.applyMouseMode(). Migrated from the older
+             checkbox_touchscreen_trackpad boolean on first read. -->
         <ListPreference
             android:key="list_mouse_mode"
             android:title="@string/title_mouse_mode"
@@ -208,6 +228,8 @@
             android:title="@string/title_checkbox_enforce_display_mode"
             android:summary="@string/summary_checkbox_enforce_display_mode"
             android:defaultValue="false" />
+        <!-- Routes soft keyboard text through StreamView's InputConnection and on to the host as
+             UTF-8, instead of synthesising key events -->
         <CheckBoxPreference
             android:key="checkbox_enable_commit_text"
             android:title="@string/title_checkbox_enable_commit_text"

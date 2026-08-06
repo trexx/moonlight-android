@@ -29,6 +29,19 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Entry point for launcher shortcuts and TV channel programs, which start a stream directly
+ * without going through {@link PcView}.
+ *
+ * <p>It exists because a shortcut carries only a host UUID and an app ID, while starting a stream
+ * needs a paired, reachable host and its certificate. So this activity binds to the computer
+ * manager, waits for that host to come online, and only then launches {@link Game} — showing the
+ * user a spinner meanwhile, and a useful error rather than a silent failure if the host never
+ * appears.
+ *
+ * <p>It also builds the back stack the user would have had if they had navigated here manually, so
+ * backing out of the stream lands on the app list rather than on the launcher.
+ */
 public class ShortcutTrampoline extends Activity {
     private String uuidString;
     private NvApp app;
@@ -200,6 +213,12 @@ public class ShortcutTrampoline extends Activity {
         }
     };
 
+    /**
+     * Validates the extras a shortcut supplied.
+     *
+     * @return true if they are usable. Shortcuts outlive the data they point at — hosts get
+     *         removed, apps disappear — so the failure path here is routine, not exceptional.
+     */
     protected boolean validateInput(String uuidString, String appIdString, String nameString) {
         // Validate PC UUID/Name
         if (uuidString == null && nameString == null) {
@@ -247,6 +266,7 @@ public class ShortcutTrampoline extends Activity {
         return true;
     }
 
+    /** {@inheritDoc} Validates the shortcut's extras and binds the computer manager. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -341,6 +361,7 @@ public class ShortcutTrampoline extends Activity {
                 getResources().getString(R.string.applist_connect_msg), true);
     }
 
+    /** {@inheritDoc} Unbinds and dismisses the spinner if the user leaves before the host appears. */
     @Override
     protected void onStop() {
         super.onStop();

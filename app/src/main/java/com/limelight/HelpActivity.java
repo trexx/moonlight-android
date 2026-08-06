@@ -11,6 +11,12 @@ import android.window.OnBackInvokedDispatcher;
 
 import com.limelight.utils.SpinnerDialog;
 
+/**
+ * In-app browser for the project's help pages.
+ *
+ * <p>Uses a {@link android.webkit.WebView} rather than an external browser so that help is
+ * reachable on TV devices, which frequently have no browser installed at all.
+ */
 public class HelpActivity extends Activity {
 
     private SpinnerDialog loadingDialog;
@@ -19,6 +25,7 @@ public class HelpActivity extends Activity {
     private boolean backCallbackRegistered;
     private OnBackInvokedCallback onBackInvokedCallback;
 
+    /** {@inheritDoc} Configures the WebView and loads the requested page. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -76,6 +83,10 @@ public class HelpActivity extends Activity {
         webView.loadUrl(getIntent().getData().toString());
     }
 
+    /**
+     * Keeps the back behaviour in step with the WebView's history: back navigates within the help
+     * pages while there is history, and leaves the activity once there isn't.
+     */
     private void refreshBackDispatchState() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (webView.canGoBack() && !backCallbackRegistered) {
@@ -90,6 +101,7 @@ public class HelpActivity extends Activity {
         }
     }
 
+    /** {@inheritDoc} Destroys the WebView so it does not outlive the activity. */
     @Override
     protected void onDestroy() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -103,6 +115,7 @@ public class HelpActivity extends Activity {
 
     @Override
     // NOTE: This will NOT be called on Android 13+ with android:enableOnBackInvokedCallback="true"
+    /** {@inheritDoc} Navigates back through the page history before leaving. */
     public void onBackPressed() {
         // Back goes back through the WebView history
         // until no more history remains

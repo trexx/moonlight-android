@@ -1,3 +1,13 @@
+// Thin JNI wrappers over moonlight-common-c's client API.
+//
+// Everything here is a direct forward from a MoonBridge native method to the matching Li* function,
+// with no logic of its own - the input path calls these per event, so anything more would be
+// overhead on the hot path.
+//
+// The exception is guessControllerType(), which maps a USB VID/PID onto a controller type using
+// SDL's controller database (vendored as controller_list.h). That lets the host show the right
+// button glyphs for a pad we are driving ourselves.
+
 #include <Limelight.h>
 
 #include <jni.h>
@@ -232,6 +242,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_getLaunchUrlQueryParameters(JNIEnv *e
     return (*env)->NewStringUTF(env, LiGetLaunchUrlQueryParameters());
 }
 
+// Maps a USB VID/PID to a LI_CTYPE_* value via SDL's controller database, so the host knows which
+// button glyphs to display. Returns LI_CTYPE_UNKNOWN for devices the database doesn't list.
 JNIEXPORT jbyte JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_guessControllerType(JNIEnv *env, jclass clazz, jint vendorId, jint productId) {
     unsigned int unDeviceID = MAKE_CONTROLLER_ID(vendorId, productId);

@@ -23,6 +23,14 @@ import com.limelight.nvstream.http.NvApp;
 import java.io.IOException;
 import java.io.OutputStream;
 
+/**
+ * Publishes a host's games to the Android TV home screen as a channel.
+ *
+ * <p>Programs in the channel launch straight into a game via
+ * {@link com.limelight.ShortcutTrampoline}, and their artwork is served through
+ * {@link com.limelight.PosterContentProvider} — the launcher renders in its own process and cannot
+ * read this app's files.
+ */
 public class TvChannelHelper {
 
     private static final int ASPECT_RATIO_MOVIE_POSTER = 5;
@@ -32,6 +40,7 @@ public class TvChannelHelper {
     private static final int ID_INDEX = 0;
     private Activity context;
 
+    /** @param context used to talk to the TV provider, which requires an activity context */
     public TvChannelHelper(Activity context) {
         this.context = context;
     }

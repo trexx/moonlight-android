@@ -11,8 +11,17 @@ import com.limelight.nvstream.jni.MoonBridge;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 
+/**
+ * Driver for Xbox One and Series controllers over USB (the GIP protocol).
+ *
+ * <p>Unlike the 360 protocol, these controllers send nothing until they receive an
+ * initialisation packet, and the packet they need varies by model — hence {@link #INIT_PKTS},
+ * which is applied by VID/PID with a wildcard entry for the common case. They also send mode
+ * reports that must be acknowledged, and offer trigger rumble in addition to the two main motors.
+ */
 public class XboxOneController extends AbstractXboxController {
 
+    // Interface descriptor values that identify the GIP protocol
     private static final int XB1_IFACE_SUBCLASS = 71;
     private static final int XB1_IFACE_PROTOCOL = 208;
 
@@ -39,6 +48,8 @@ public class XboxOneController extends AbstractXboxController {
     private static final byte[] RUMBLE_INIT2 = {0x09, 0x00, 0x00, 0x09, 0x00, 0x0F, 0x00, 0x00,
             0x00, 0x00, 0x00, 0x00, 0x00};
 
+    // Init sequences, applied in order to every device they match. A zero vendor or product ID
+    // is a wildcard, so FW2015_INIT goes to everything and the model-specific entries add to it.
     private static InitPacket[] INIT_PKTS = {
             new InitPacket(0x0e6f, 0x0165, HORI_INIT),
             new InitPacket(0x0f0d, 0x0067, HORI_INIT),
@@ -60,17 +71,26 @@ public class XboxOneController extends AbstractXboxController {
             new InitPacket(0x24c6, 0x543a, RUMBLE_INIT2),
     };
 
+    // Sequence number stamped into every outgoing packet, shared by init and rumble
     private byte seqNum = 0;
+    // Latest requested motor levels. All four are resent together, since the rumble packet
+    // carries every motor and omitting one would stop it.
     private short lowFreqMotor = 0;
     private short highFreqMotor = 0;
     private short leftTriggerMotor = 0;
     private short rightTriggerMotor = 0;
 
+    /** {@inheritDoc} Advertises trigger rumble, which this generation adds. */
     public XboxOneController(UsbDevice device, UsbDeviceConnection connection, int deviceId, UsbDriverListener listener) {
         super(device, connection, deviceId, listener);
         capabilities |= MoonBridge.LI_CCAP_TRIGGER_RUMBLE;
     }
 
+    /**
+     * Parses the button, trigger and stick portion of a 0x20 input report. Triggers are 10-bit
+     * and sticks are 16-bit signed, with Y inverted via {@code ~} so the extreme negative value
+     * maps cleanly to full positive deflection.
+     */
     private void processButtons(ByteBuffer buffer) {
         byte b = buffer.get();
 
@@ -104,12 +124,19 @@ public class XboxOneController extends AbstractXboxController {
         rightStickY = ~buffer.getShort() / 32767.0f;
     }
 
+    /** Acknowledges a mode report, which the Xbox One S pad retransmits forever otherwise. */
     private void ackModeReport(byte seqNum) {
         byte[] payload = {0x01, 0x20, seqNum, 0x09, 0x00, 0x07, 0x20, 0x02,
                 0x00, 0x00, 0x00, 0x00, 0x00};
         connection.bulkTransfer(outEndpt, payload, payload.length, 3000);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Two report types matter: 0x20 carries the sticks and most buttons, while 0x07 carries
+     * the Xbox guide button on its own.
+     */
     @Override
     protected boolean handleRead(ByteBuffer buffer) {
         switch (buffer.get())
@@ -146,6 +173,7 @@ public class XboxOneController extends AbstractXboxController {
         return false;
     }
 
+    /** @return true if this device presents a GIP interface from a known vendor */
     public static boolean canClaimDevice(UsbDevice device) {
         for (int supportedVid : SUPPORTED_VENDORS) {
             if (device.getVendorId() == supportedVid &&
@@ -160,6 +188,7 @@ public class XboxOneController extends AbstractXboxController {
         return false;
     }
 
+    /** {@inheritDoc} Sends every init packet matching this device; without them it stays silent. */
     @Override
     protected boolean doInit() {
         // Send all applicable init packets
@@ -188,6 +217,10 @@ public class XboxOneController extends AbstractXboxController {
         return true;
     }
 
+    /**
+     * Sends all four motor levels. The 16-bit amplitudes are shifted down to the 7-bit range the
+     * protocol uses, and the trailing bytes are the fixed on/off/repeat envelope.
+     */
     private void sendRumblePacket() {
         byte[] data = {
                 0x09, 0x00, seqNum++, 0x09, 0x00,
@@ -204,6 +237,7 @@ public class XboxOneController extends AbstractXboxController {
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     public void rumble(short lowFreqMotor, short highFreqMotor) {
         this.lowFreqMotor = lowFreqMotor;
@@ -211,6 +245,7 @@ public class XboxOneController extends AbstractXboxController {
         sendRumblePacket();
     }
 
+    /** {@inheritDoc} */
     @Override
     public void rumbleTriggers(short leftTrigger, short rightTrigger) {
         this.leftTriggerMotor = leftTrigger;
@@ -218,6 +253,7 @@ public class XboxOneController extends AbstractXboxController {
         sendRumblePacket();
     }
 
+    /** One init sequence and the device it applies to; a zero ID matches any device. */
     private static class InitPacket {
         final int vendorId;
         final int productId;

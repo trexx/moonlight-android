@@ -49,6 +49,16 @@ import android.widget.AdapterView.AdapterContextMenuInfo;
 
 import org.xmlpull.v1.XmlPullParserException;
 
+/**
+ * The app grid for one host: what can be launched, and what is running now.
+ *
+ * <p>Reached from {@link PcView}. The list is cached to disk so it can be shown immediately on
+ * entry and then refreshed in the background, since fetching it from the host takes long enough to
+ * be noticeable.
+ *
+ * <p>The running app is tracked separately from the list: it gets a distinct treatment in the grid
+ * and a resume-or-quit context menu instead of a plain launch action.
+ */
 public class AppView extends Activity implements AdapterFragmentCallbacks {
     private AppGridAdapter appGridAdapter;
     private String uuidString;
@@ -154,6 +164,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         }
     };
 
+    /** {@inheritDoc} Rebuilds the grid layout for the new configuration. */
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
@@ -175,6 +186,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /** Starts polling this host, so the grid tracks which app is running and whether it is reachable. */
     private void startComputerUpdates() {
         // Don't start polling if we're not bound or in the foreground
         if (managerBinder == null || !inForeground) {
@@ -262,6 +274,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         poller.start();
     }
 
+    /** Stops polling and detaches the listener. */
     private void stopComputerUpdates() {
         if (poller != null) {
             poller.stop();
@@ -276,6 +289,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /** {@inheritDoc} Binds the computer manager and shows the cached app list immediately. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -315,6 +329,12 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
                 Service.BIND_AUTO_CREATE);
     }
 
+    /**
+     * Applies the user's hidden-app selection to the grid.
+     *
+     * @param hideImmediately hide them now, rather than leaving them visible until the user leaves
+     *                        the screen — which is what makes hiding several apps in a row usable
+     */
     private void updateHiddenApps(boolean hideImmediately) {
         HashSet<String> hiddenAppIdStringSet = new HashSet<>();
 
@@ -330,6 +350,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         appGridAdapter.updateHiddenApps(hiddenAppIds, hideImmediately);
     }
 
+    /** Shows the last known app list from disk so the grid isn't empty while the host is queried. */
     private void populateAppGridWithCache() {
         try {
             // Try to load from cache
@@ -348,11 +369,13 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /** Fetches the app list from the host. Blocking, so never called on the UI thread. */
     private void loadAppsBlocking() {
         blockingLoadSpinner = SpinnerDialog.displayDialog(this, getResources().getString(R.string.applist_refresh_title),
                 getResources().getString(R.string.applist_refresh_msg), true);
     }
 
+    /** {@inheritDoc} Unbinds the computer manager and cancels pending box art loads. */
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -365,6 +388,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /** {@inheritDoc} Resumes polling this host. */
     @Override
     protected void onResume() {
         super.onResume();
@@ -376,6 +400,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         startComputerUpdates();
     }
 
+    /** {@inheritDoc} */
     @Override
     protected void onPause() {
         super.onPause();
@@ -384,6 +409,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         stopComputerUpdates();
     }
 
+    /** {@inheritDoc} Builds the per-app menu; the running app gets resume and quit instead of start. */
     @Override
     public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
         super.onCreateContextMenu(menu, v, menuInfo);
@@ -425,10 +451,12 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     public void onContextMenuClosed(Menu menu) {
     }
 
+    /** {@inheritDoc} Dispatches the per-app actions: start, resume, quit, hide, create shortcut. */
     @Override
     public boolean onContextItemSelected(MenuItem item) {
         AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
@@ -499,6 +527,7 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         }
     }
 
+    /** Reflects a host state update: reachability, and which app is currently running. */
     private void updateUiWithServerinfo(final ComputerDetails details) {
         AppView.this.runOnUiThread(new Runnable() {
             @Override
@@ -537,6 +566,10 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         });
     }
 
+    /**
+     * Merges a freshly fetched app list into the grid, preserving the existing entries where they
+     * still exist so that box art already loaded isn't discarded and refetched.
+     */
     private void updateUiWithAppList(final List<NvApp> appList) {
         AppView.this.runOnUiThread(new Runnable() {
             @Override
@@ -611,12 +644,14 @@ public class AppView extends Activity implements AdapterFragmentCallbacks {
         });
     }
 
+    /** {@inheritDoc} */
     @Override
     public int getAdapterFragmentLayoutId() {
         return PreferenceConfiguration.readPreferences(AppView.this).smallIconMode ?
                     R.layout.app_grid_view_small : R.layout.app_grid_view;
     }
 
+    /** {@inheritDoc} Attaches the grid once its fragment is ready. */
     @Override
     public void receiveAbsListView(AbsListView listView) {
         listView.setAdapter(appGridAdapter);

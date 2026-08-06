@@ -8,6 +8,18 @@ import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.MouseButtonPacket;
 import com.limelight.preferences.PreferenceConfiguration;
 
+/**
+ * Classic Moonlight trackpad mode: the touchscreen moves the host cursor by deltas, with no
+ * acceleration and no momentum.
+ *
+ * <p>Compared to {@link TrackpadContext}, gestures are keyed off the pointer index rather than
+ * the finger count — the second finger is the right button and the scroll wheel — and a press
+ * held still for {@link #DRAG_TIME_THRESHOLD} becomes a drag, rather than a drag requiring a
+ * preceding tap. Movement is scaled from the view's pixel dimensions into a fixed reference
+ * resolution so the same swipe travels the same distance regardless of screen size.
+ *
+ * @see TouchContext for the call contract and coordinate/timebase conventions
+ */
 public class RelativeTouchContext implements TouchContext {
     private int lastTouchX = 0;
     private int lastTouchY = 0;
@@ -18,9 +30,13 @@ public class RelativeTouchContext implements TouchContext {
     private boolean confirmedMove;
     private boolean confirmedDrag;
     private boolean confirmedScroll;
+    // Total path length in pixels, so slow circling motion still counts as a move
     private double distanceMoved;
+    // View pixels to reference-resolution units, recomputed on every touch down because the
+    // view can be resized (multi-window, rotation) between gestures
     private double xFactor, yFactor;
     private int pointerCount;
+    // Peak finger count of this gesture, used to suppress duplicate taps
     private int maxPointerCountInGesture;
 
     private final NvConnection conn;
@@ -31,6 +47,7 @@ public class RelativeTouchContext implements TouchContext {
     private final PreferenceConfiguration prefConfig;
     private final Handler handler;
 
+    /** Engages a drag when a finger has been held still past {@link #DRAG_TIME_THRESHOLD}. */
     private final Runnable dragTimerRunnable = new Runnable() {
         @Override
         public void run() {
@@ -51,6 +68,8 @@ public class RelativeTouchContext implements TouchContext {
     };
 
     // Indexed by MouseButtonPacket.BUTTON_XXX - 1
+    // One runnable per button, pre-allocated so a pending release can be cancelled by identity
+    // when the same button is tapped again before its release fires
     private final Runnable[] buttonUpRunnables = new Runnable[] {
             new Runnable() {
                 @Override
@@ -84,13 +103,25 @@ public class RelativeTouchContext implements TouchContext {
             }
     };
 
+    // Maximum straight-line displacement, in pixels, for a touch to still be a tap
     private static final int TAP_MOVEMENT_THRESHOLD = 20;
+    // Maximum accumulated path length, in pixels, for a touch to still be a tap
     private static final int TAP_DISTANCE_THRESHOLD = 25;
+    // Maximum press duration, in milliseconds, for a touch to be a tap
     private static final int TAP_TIME_THRESHOLD = 250;
+    // How long a still finger must be held before it becomes a drag
     private static final int DRAG_TIME_THRESHOLD = 650;
 
+    // Gain applied to two-finger scroll deltas before they go to the host
     private static final int SCROLL_SPEED_FACTOR = 5;
 
+    /**
+     * @param referenceWidth  virtual width that touch deltas are scaled into, so movement is
+     *                        independent of the device's physical resolution
+     * @param referenceHeight virtual height, as above
+     * @param view            view the touches are measured against; its current size is read
+     *                        on each touch down
+     */
     public RelativeTouchContext(NvConnection conn, int actionIndex,
                                 int referenceWidth, int referenceHeight,
                                 View view, PreferenceConfiguration prefConfig)
@@ -110,6 +141,7 @@ public class RelativeTouchContext implements TouchContext {
         return actionIndex;
     }
 
+    /** @return true if the touch is still close enough to its origin to become a tap */
     private boolean isWithinTapBounds(int touchX, int touchY)
     {
         int xDelta = Math.abs(touchX - originalTouchX);
@@ -118,6 +150,7 @@ public class RelativeTouchContext implements TouchContext {
                 yDelta <= TAP_MOVEMENT_THRESHOLD;
     }
 
+    /** @return true if the gesture ending at {@code eventTime} should produce a click */
     private boolean isTap(long eventTime)
     {
         if (confirmedDrag || confirmedMove || confirmedScroll) {
@@ -135,6 +168,10 @@ public class RelativeTouchContext implements TouchContext {
         return isWithinTapBounds(lastTouchX, lastTouchY) && timeDelta <= TAP_TIME_THRESHOLD;
     }
 
+    /**
+     * @return the button this context operates: the second finger is the right button, every
+     *         other pointer index is the left button
+     */
     private byte getMouseButtonIndex()
     {
         if (actionIndex == 1) {
@@ -170,6 +207,12 @@ public class RelativeTouchContext implements TouchContext {
         return true;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Note that no finger-promotion handling is needed here: this mode keys everything off
+     * the pointer index, so a promoted finger simply continues driving the same context.
+     */
     @Override
     public void touchUpEvent(int eventX, int eventY, long eventTime)
     {
@@ -208,6 +251,10 @@ public class RelativeTouchContext implements TouchContext {
         handler.removeCallbacks(dragTimerRunnable);
     }
 
+    /**
+     * Promotes the gesture to a move once it can no longer be a tap, which also cancels the
+     * pending drag timer — a finger that has travelled is not a press-and-hold.
+     */
     private void checkForConfirmedMove(int eventX, int eventY) {
         // If we've already confirmed something, get out now
         if (confirmedMove || confirmedDrag) {
@@ -237,6 +284,12 @@ public class RelativeTouchContext implements TouchContext {
         confirmedScroll = (actionIndex == 0 && pointerCount == 2 && confirmedMove);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Only the primary pointer produces movement; the secondary one exists to change what
+     * the primary means (right button, scrolling).
+     */
     @Override
     public boolean touchMoveEvent(int eventX, int eventY, long eventTime)
     {
@@ -271,6 +324,8 @@ public class RelativeTouchContext implements TouchContext {
                         conn.sendMouseHighResScroll((short)(deltaY * SCROLL_SPEED_FACTOR));
                     }
                 } else {
+                    // Relative deltas can also be delivered as absolute positions, for hosts
+                    // and games that handle raw relative input poorly
                     if (prefConfig.absoluteMouseMode) {
                         conn.sendMouseMoveAsMousePosition(
                                 (short) deltaX,
@@ -302,6 +357,7 @@ public class RelativeTouchContext implements TouchContext {
         return true;
     }
 
+    /** {@inheritDoc} */
     @Override
     public void cancelTouch() {
         cancelled = true;
@@ -315,11 +371,13 @@ public class RelativeTouchContext implements TouchContext {
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     public boolean isCancelled() {
         return cancelled;
     }
 
+    /** {@inheritDoc} Only tracks the peak count, which is what suppresses duplicate taps. */
     @Override
     public void setPointerCount(int pointerCount) {
         this.pointerCount = pointerCount;

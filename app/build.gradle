@@ -3,6 +3,8 @@ plugins {
 }
 
 android {
+    // Pinned so every build produces identical native binaries; the NDK is not source
+    // compatible across major versions.
     ndkVersion = "29.0.14206865"
 
     compileSdk = 37
@@ -32,17 +34,22 @@ android {
     }
 
     buildFeatures {
+        // BuildConfig.DEBUG gates verbose diagnostics; resValues supplies the per-build-type app
+        // label. Both are off by default in AGP 8+, so they have to be asked for.
         buildConfig = true
         resValues = true
     }
 
     compileOptions {
+        // Explicit so the build does not depend on the platform default encoding
         encoding = "UTF-8"
         sourceCompatibility = JavaVersion.VERSION_25
         targetCompatibility = JavaVersion.VERSION_25
     }
 
     lint {
+        // Non-English locales were removed from this fork, so every string is 'missing' a
+        // translation by definition.
         disable += 'MissingTranslation'
         lintConfig = file('lint.xml')
     }
@@ -70,6 +77,7 @@ android {
 
     buildTypes {
         debug {
+            // Suffixed so a debug build installs alongside a release one
             applicationIdSuffix = ".debug"
             resValue "string", "app_label", "Moonlight (Debug)"
 
@@ -117,6 +125,8 @@ android {
         }
     }
 
+    // ndk-build rather than CMake: the vendored moonlight-common-c, libusb and mbedtls trees all
+    // ship Android.mk files, and converting them would mean maintaining a fork of each.
     externalNativeBuild {
         ndkBuild {
             path = file("src/main/jni/Android.mk")
@@ -132,9 +142,13 @@ java {
 }
 
 dependencies {
+    // BouncyCastle, not the platform crypto: pairing needs certificate generation and signing
+    // primitives that Android's providers do not expose.
     implementation 'org.bouncycastle:bcprov-jdk18on:1.85'
     implementation 'org.bouncycastle:bcpkix-jdk18on:1.85'
+    // jcodec is used only to parse and rewrite H.264 SPS for the decoder bitstream fixups
     implementation 'org.jcodec:jcodec:0.2.5'
     implementation 'com.squareup.okhttp3:okhttp:5.4.0'
+    // Battery and connection state for SHIELD controllers, which Android does not report
     implementation 'com.github.cgutman:ShieldControllerExtensions:1.0.1'
 }

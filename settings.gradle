@@ -1,3 +1,5 @@
+// Repositories are declared centrally here rather than per project, which is what
+// FAIL_ON_PROJECT_REPOS below enforces.
 pluginManagement {
     repositories {
         google()
@@ -12,10 +14,12 @@ plugins {
 }
 
 dependencyResolutionManagement {
+    // Fail rather than silently resolve from a repository a subproject declared for itself
     repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
     repositories {
         google()
         mavenCentral()
+        // JitPack serves ShieldControllerExtensions, which is not published to Maven Central
         maven { url = uri('https://jitpack.io') }
     }
 }

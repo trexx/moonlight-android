@@ -34,6 +34,13 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.TextView;
 import android.widget.Toast;
 
+/**
+ * Screen for adding a host by hostname or IP.
+ *
+ * <p>Needed because host discovery was removed from this fork: hosts are always added by address.
+ * The address is polled before it is accepted, so the user finds out immediately whether it is
+ * reachable rather than getting an entry in the grid that never comes online.
+ */
 public class AddComputerManually extends Activity {
     private TextView hostText;
     private ComputerManagerService.ComputerManagerBinder managerBinder;
@@ -242,6 +249,7 @@ public class AddComputerManually extends Activity {
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     protected void onStop() {
         super.onStop();
@@ -250,6 +258,7 @@ public class AddComputerManually extends Activity {
         SpinnerDialog.closeDialogs(this);
     }
 
+    /** {@inheritDoc} Unbinds the computer manager. */
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -260,6 +269,7 @@ public class AddComputerManually extends Activity {
         }
     }
 
+    /** {@inheritDoc} Binds the computer manager so an entered address can be polled. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);

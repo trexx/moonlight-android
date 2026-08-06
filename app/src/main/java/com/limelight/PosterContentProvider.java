@@ -14,6 +14,13 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.List;
 
+/**
+ * Serves cached box art to the Android TV launcher.
+ *
+ * <p>The launcher renders channel programs in its own process and cannot read this app's private
+ * files, so the artwork has to be exposed through a content provider. Read-only by design: every
+ * mutating operation below is unsupported, and only the box art cache directory is reachable.
+ */
 public class PosterContentProvider extends ContentProvider {
 
 
@@ -32,6 +39,7 @@ public class PosterContentProvider extends ContentProvider {
         sUriMatcher.addURI(AUTHORITY, BOXART_PATH, BOXART_URI_ID);
     }
 
+    /** {@inheritDoc} Serves box art only; every other path is rejected. */
     @Override
     public ParcelFileDescriptor openFile(Uri uri, String mode) throws FileNotFoundException {
         int match = sUriMatcher.match(uri);
@@ -42,6 +50,10 @@ public class PosterContentProvider extends ContentProvider {
 
     }
 
+    /**
+     * @return a read-only descriptor for the cached box art the URI names
+     * @throws FileNotFoundException if the URI is malformed or that art isn't cached
+     */
     public ParcelFileDescriptor openBoxArtFile(Uri uri, String mode) throws FileNotFoundException {
         if (!"r".equals(mode)) {
             throw new UnsupportedOperationException("This provider is only for read mode");
@@ -60,21 +72,25 @@ public class PosterContentProvider extends ContentProvider {
         throw new FileNotFoundException();
     }
 
+    /** {@inheritDoc} Unsupported: this provider is read-only. */
     @Override
     public int delete(Uri uri, String selection, String[] selectionArgs) {
         throw new UnsupportedOperationException("This provider is only for read mode");
     }
 
+    /** {@inheritDoc} @return the MIME type of the cached box art */
     @Override
     public String getType(Uri uri) {
         return PNG_MIME_TYPE;
     }
 
+    /** {@inheritDoc} Unsupported: this provider is read-only. */
     @Override
     public Uri insert(Uri uri, ContentValues values) {
         throw new UnsupportedOperationException("This provider is only for read mode");
     }
 
+    /** {@inheritDoc} Nothing to initialise; the cache directory is resolved per request. */
     @Override
     public boolean onCreate() {
         mDiskAssetLoader = new DiskAssetLoader(getContext());
@@ -94,6 +110,7 @@ public class PosterContentProvider extends ContentProvider {
     }
 
 
+    /** @return the content URI the launcher should use to fetch one app's box art */
     public static Uri createBoxArtUri(String uuid, String appId) {
         return new Uri.Builder()
                 .scheme(ContentResolver.SCHEME_CONTENT)
