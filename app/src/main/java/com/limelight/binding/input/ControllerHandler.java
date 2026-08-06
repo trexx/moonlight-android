@@ -2320,13 +2320,24 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         // If the button hasn't been down long enough, sleep for a bit before sending the up event
-        // This allows "instant" button presses (like OUYA's virtual menu button) to work. This
-        // path should not be triggered during normal usage.
+        // so a game polling input once per frame can't miss the press entirely.
+        //
+        // This blocks the main thread for up to MINIMUM_BUTTON_DOWN_TIME_MS, which also delays
+        // every other input event behind it. It is deliberately NOT converted to a postDelayed
+        // deferral: deferring the release without a per-button state machine loses input on a
+        // fast double-tap, which is precisely the case that triggers this path. Sequence:
+        //
+        //   t=0  down A  -> flag set, sent
+        //   t=10 up A    -> release deferred to t=25
+        //   t=15 down A  -> flag set, sent
+        //   t=25 deferred release fires -> clears a button that is physically still down
+        //
+        // Blocking merely time-shifts both presses; deferring drops the second one. A correct
+        // fix needs the pending release to be cancelled when the same button goes down again.
+        // Until that is written and tested on real hardware, blocking is the safer behaviour.
         int buttonDownTime = (int)(event.getEventTime() - event.getDownTime());
         if (buttonDownTime < ControllerHandler.MINIMUM_BUTTON_DOWN_TIME_MS)
         {
-            // Since our sleep time is so short (<= 25 ms), it shouldn't cause a problem doing this
-            // in the UI thread.
             try {
                 Thread.sleep(ControllerHandler.MINIMUM_BUTTON_DOWN_TIME_MS - buttonDownTime);
             } catch (InterruptedException e) {

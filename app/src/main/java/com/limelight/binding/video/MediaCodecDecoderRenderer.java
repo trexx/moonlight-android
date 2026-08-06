@@ -31,6 +31,7 @@ import android.media.MediaCodec.CodecException;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.PerformanceHintManager;
 import android.os.Process;
 import android.os.SystemClock;
 import android.util.Range;
@@ -117,6 +118,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int lastFrameNumber;
     private int refreshRate;
     private volatile Display vsyncDisplay;
+    private volatile int rendererTid;
+    private PerformanceHintManager.Session perfHintSession;
+    private long targetFrameTimeNanos;
     private PreferenceConfiguration prefs;
 
     private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
@@ -940,6 +944,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
+        // Only read the clock when there's a hint session to report to, so devices without
+        // ADPF (the Shield, on Android 11) pay nothing for this.
+        long workStartNanos = (perfHintSession != null) ? System.nanoTime() : 0;
+
         // Queried per frame on purpose: see startChoreographerThread(). getDisplay() can
         // return null where the old getDefaultDisplay() could not, so tolerate that.
         Display display = vsyncDisplay;
@@ -981,8 +989,60 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // be required even if the codec died before giving any output.
         doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
 
+        // Tell the scheduler how long this frame actually took, so it can size clocks to our
+        // deadline. Reported before requesting the next callback so it reflects render work
+        // only. A non-positive duration is rejected by the API, so floor it at 1 ns.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
+            long workDurationNanos = System.nanoTime() - workStartNanos;
+            perfHintSession.reportActualWorkDuration(Math.max(1, workDurationNanos));
+        }
+
         // Request another callback for next frame
         Choreographer.getInstance().postFrameCallback(this);
+    }
+
+    /**
+     * Creates an ADPF performance hint session covering the two threads on the frame-critical
+     * path, telling the scheduler our per-frame deadline so it holds clocks there instead of
+     * ramping reactively. Must be called from the Choreographer thread so Process.myTid()
+     * identifies it.
+     *
+     * PerformanceHintManager is API 31, so this benefits the Homatics Box R 4K (Android 14)
+     * and does nothing on the Shield TV (Android 11). Failure is non-fatal: the session
+     * simply stays null and doFrame() skips both the clock read and the report.
+     */
+    private void createPerformanceHintSession() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            return;
+        }
+
+        PerformanceHintManager hintManager = activity.getSystemService(PerformanceHintManager.class);
+        if (hintManager == null) {
+            return;
+        }
+
+        // Include the renderer thread if it has published its TID by now. It is started
+        // before this thread in start(), but publishing races with us, so tolerate absence.
+        int rTid = rendererTid;
+        int[] tids = (rTid != 0)
+                ? new int[] { Process.myTid(), rTid }
+                : new int[] { Process.myTid() };
+
+        // Target one stream frame interval. refreshRate here is the *stream* frame rate
+        // passed to setup(), not the display's.
+        targetFrameTimeNanos = 1000000000L / refreshRate;
+
+        try {
+            perfHintSession = hintManager.createHintSession(tids, targetFrameTimeNanos);
+            if (perfHintSession != null) {
+                LimeLog.info("Created ADPF hint session with target " +
+                        (targetFrameTimeNanos / 1000000.0) + " ms for " + tids.length + " threads");
+            }
+        } catch (Exception e) {
+            // Device may not implement the hint API even on a supported API level
+            LimeLog.warning("Unable to create ADPF hint session: " + e.getMessage());
+            perfHintSession = null;
+        }
     }
 
     private void startChoreographerThread() {
@@ -1019,6 +1079,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         choreographerHandler.post(new Runnable() {
             @Override
             public void run() {
+                createPerformanceHintSession();
                 Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
             }
         });
@@ -1032,6 +1093,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Thread.setPriority() below only sets the Java priority, which has little
                 // effect on Android. Set the real scheduler priority here instead.
                 Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
+
+                // Publish our TID so the ADPF hint session can include this thread
+                rendererTid = Process.myTid();
 
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
@@ -1220,6 +1284,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             choreographerHandler.post(new Runnable() {
                 @Override
                 public void run() {
+                    // Close the ADPF hint session before the threads it references go away.
+                    // Done on this thread so it can't race with reportActualWorkDuration()
+                    // in doFrame(), which is the only other user.
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
+                        perfHintSession.close();
+                        perfHintSession = null;
+                    }
+
                     // Don't allow any further messages to be queued
                     choreographerHandlerThread.quit();
 
