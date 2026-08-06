@@ -1002,14 +1002,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     /**
-     * Creates an ADPF performance hint session covering the two threads on the frame-critical
+     * Creates an ADPF performance hint session covering the threads on the frame-critical
      * path, telling the scheduler our per-frame deadline so it holds clocks there instead of
-     * ramping reactively. Must be called from the Choreographer thread so Process.myTid()
-     * identifies it.
+     * ramping reactively.
+     *
+     * Called from whichever thread does the presenting: the Choreographer thread in BALANCED
+     * pacing, the renderer thread in every other mode. Process.myTid() therefore identifies
+     * the caller, and the renderer TID is folded in when they differ.
      *
      * PerformanceHintManager is API 31, so this benefits the Homatics Box R 4K (Android 14)
      * and does nothing on the Shield TV (Android 11). Failure is non-fatal: the session
-     * simply stays null and doFrame() skips both the clock read and the report.
+     * simply stays null and both report sites skip the clock read entirely.
      */
     private void createPerformanceHintSession() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
@@ -1021,12 +1024,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-        // Include the renderer thread if it has published its TID by now. It is started
-        // before this thread in start(), but publishing races with us, so tolerate absence.
+        // Include the renderer thread if it has published its TID and isn't us. When called
+        // from the renderer thread itself these are the same TID, and passing a duplicate
+        // would be rejected.
+        int selfTid = Process.myTid();
         int rTid = rendererTid;
-        int[] tids = (rTid != 0)
-                ? new int[] { Process.myTid(), rTid }
-                : new int[] { Process.myTid() };
+        int[] tids = (rTid != 0 && rTid != selfTid)
+                ? new int[] { selfTid, rTid }
+                : new int[] { selfTid };
 
         // Target one stream frame interval. refreshRate here is the *stream* frame rate
         // passed to setup(), not the display's.
@@ -1052,7 +1057,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         // We use a separate thread to avoid any main thread delays from delaying rendering
-        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_DISPLAY);
+        choreographerHandlerThread = new HandlerThread("Video - Choreographer", Process.THREAD_PRIORITY_URGENT_DISPLAY);
         choreographerHandlerThread.start();
 
         // Start the frame callbacks
@@ -1092,10 +1097,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             public void run() {
                 // Thread.setPriority() below only sets the Java priority, which has little
                 // effect on Android. Set the real scheduler priority here instead.
-                Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
+                //
+                // URGENT_DISPLAY (-8) rather than DISPLAY (-4): this thread dequeues and
+                // presents every frame, so it is the present path. NB this must be verified
+                // on device - raising it too far can starve the decoder's own threads and
+                // make frame times worse rather than better.
+                Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY);
 
                 // Publish our TID so the ADPF hint session can include this thread
                 rendererTid = Process.myTid();
+
+                // In every pacing mode except BALANCED this thread does the presenting, so
+                // the hint session has to be created here. It used to be created only from
+                // startChoreographerThread(), which returns early unless pacing is BALANCED -
+                // meaning ADPF was dead code under the default 'latency' pacing.
+                if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                    createPerformanceHintSession();
+                }
 
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
@@ -1103,6 +1121,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         // Try to output a frame
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
                         if (outIndex >= 0) {
+                            // Time the drain-and-present cycle for ADPF. Only read the clock
+                            // when there is a session to report to, so devices without ADPF
+                            // pay nothing. The dequeue above is excluded deliberately: it
+                            // blocks waiting for the decoder and is not our work.
+                            long workStartNanos = (perfHintSession != null) ? System.nanoTime() : 0;
+
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
 
@@ -1133,6 +1157,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 }
 
                                 activeWindowVideoStats.totalFramesRendered++;
+
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
+                                    perfHintSession.reportActualWorkDuration(
+                                            Math.max(1, System.nanoTime() - workStartNanos));
+                                }
                             }
                             else {
                                 // For balanced frame pacing case, the Choreographer callback will handle rendering.
@@ -1279,19 +1308,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             codecRecoveryMonitor.notifyAll();
         }
 
+        // Close the ADPF hint session before the threads it references go away. This happens
+        // here rather than on the Choreographer looper because that looper only exists in
+        // BALANCED pacing; in every other mode the session belongs to the renderer thread.
+        // Both report sites null-check and 'stopping' is already set above, so they will not
+        // touch the session after this point.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
+            perfHintSession.close();
+            perfHintSession = null;
+        }
+
         // Post a quit message to the Choreographer looper (if we have one)
         if (choreographerHandler != null) {
             choreographerHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    // Close the ADPF hint session before the threads it references go away.
-                    // Done on this thread so it can't race with reportActualWorkDuration()
-                    // in doFrame(), which is the only other user.
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
-                        perfHintSession.close();
-                        perfHintSession = null;
-                    }
-
                     // Don't allow any further messages to be queued
                     choreographerHandlerThread.quit();
 

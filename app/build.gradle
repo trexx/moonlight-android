@@ -13,6 +13,9 @@ android {
         applicationId = "com.limelight"
 
         minSdk = 30
+        // Deliberately behind compileSdk. API 35 force-enables edge-to-edge and changes
+        // insets handling, which collides with Game's immersive-mode code for no benefit to
+        // a fullscreen streaming client. Lint's OldTargetApi is suppressed in lint.xml.
         targetSdk = 34
 
         versionName = "12.1"
@@ -71,6 +74,7 @@ android {
             resValue "string", "app_label", "Moonlight (Debug)"
 
             minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {
@@ -108,6 +112,7 @@ android {
             resValue "string", "app_label", "Moonlight"
 
             minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }

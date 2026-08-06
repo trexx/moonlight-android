@@ -394,6 +394,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 this,
                 prefConfig,
                 new CrashListener() {
+                    // commit() is required here, not apply(): the app is about to crash on
+                    // return, so a background write would be lost. Suppressed rather than
+                    // "fixed" - see the comment below.
+                    @SuppressLint("ApplySharedPref")
                     @Override
                     public void notifyCrash(Exception e) {
                         // The MediaCodec instance is going down due to a crash

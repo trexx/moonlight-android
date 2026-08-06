@@ -243,11 +243,11 @@ public class MediaCodecHelper {
     }
 
     private static boolean isPowerVR(String glRenderer) {
-        return glRenderer.toLowerCase().contains("powervr");
+        return glRenderer.toLowerCase(Locale.ROOT).contains("powervr");
     }
 
     private static String getAdrenoVersionString(String glRenderer) {
-        glRenderer = glRenderer.toLowerCase().trim();
+        glRenderer = glRenderer.toLowerCase(Locale.ROOT).trim();
 
         if (!glRenderer.contains("adreno")) {
             return null;

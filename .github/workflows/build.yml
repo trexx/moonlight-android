@@ -3,6 +3,7 @@ name: Build
 
 on:
   workflow_dispatch:
+  pull_request:
 
 jobs:
   build:
@@ -26,32 +27,49 @@ jobs:
         with:
           submodules: recursive
 
+      # NB: assembleRelease, not assembleNonRoot. The nonRoot task came from a fork lineage
+      # that defined a product flavour of that name; this project has no flavours, so that
+      # task does not exist and the build failed at task resolution.
+      #
+      # lintRelease is run explicitly because it covers a broader issue set than the
+      # lintVitalRelease that assembleRelease triggers on its own - a NewApi error and a
+      # WrongViewCast both survived green assembleRelease builds and were only caught here.
+      #
+      # connectedCheck is deliberately absent: it runs instrumented tests against a connected
+      # device and the runner has none, so it can only fail or no-op.
       - name: Build Moonlight
         uses: burrunan/gradle-cache-action@v3
         with:
-          arguments: assembleNonRoot
+          arguments: assembleRelease lintRelease
+
+      # The SDK ships several build-tools versions and the pinned 34.0.0 is not guaranteed to
+      # be present on the runner (setup-android installs no extra packages). Resolve the
+      # newest installed version instead of hardcoding one.
+      - name: Locate build tools
+        run: echo "BUILD_TOOLS=$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)" >> "$GITHUB_ENV"
 
       - name: Align APK
         run: |
-          $ANDROID_HOME/build-tools/34.0.0/zipalign -v 4 \
-          ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-unsigned.apk \
-          ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-aligned.apk
+          "$BUILD_TOOLS/zipalign" -v 4 \
+            ./app/build/outputs/apk/release/app-release-unsigned.apk \
+            ./app/build/outputs/apk/release/app-release-aligned.apk
 
       - name: Decode Keystore
         run: echo "${{ secrets.KEYSTORE }}" | base64 -d > /tmp/debug.keystore
 
       - name: Sign APK With Key
         run: |
-          $ANDROID_HOME/build-tools/34.0.0/apksigner sign \
+          "$BUILD_TOOLS/apksigner" sign \
             --ks /tmp/debug.keystore \
             --ks-pass pass:android \
             --key-pass pass:android \
             --ks-key-alias androiddebugkey \
-            --out ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk \
-            ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-aligned.apk
+            --out ./app/build/outputs/apk/release/app-release-debugsigned.apk \
+            ./app/build/outputs/apk/release/app-release-aligned.apk
 
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
           name: moonlight-android.apk
-          path: ./app/build/outputs/apk/nonRoot/release/app-nonRoot-release-debugsigned.apk
+          path: ./app/build/outputs/apk/release/app-release-debugsigned.apk
+          if-no-files-found: error

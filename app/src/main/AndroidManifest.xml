@@ -49,6 +49,7 @@
         android:installLocation="auto"
         android:gwpAsanMode="always"
         android:enableOnBackInvokedCallback="false"
+        android:supportsRtl="false"
         android:theme="@style/AppTheme">
 
         <provider

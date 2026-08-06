@@ -14,6 +14,7 @@ import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Locale;
 
 public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
 
@@ -39,7 +40,7 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
         Collections.sort(itemList, new Comparator<PcView.ComputerObject>() {
             @Override
             public int compare(PcView.ComputerObject lhs, PcView.ComputerObject rhs) {
-                return lhs.details.name.toLowerCase().compareTo(rhs.details.name.toLowerCase());
+                return lhs.details.name.toLowerCase(Locale.getDefault()).compareTo(rhs.details.name.toLowerCase(Locale.getDefault()));
             }
         });
     }
