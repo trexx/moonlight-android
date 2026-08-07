@@ -665,6 +665,19 @@ public class NvHTTP {
                 }
                 break;
             case (XmlPullParser.TEXT):
+                // Text can legitimately appear outside any <App> - most obviously the whitespace
+                // between elements in an indented document, which the parser reports as TEXT just
+                // like real content. Skip it rather than assuming an app is already open:
+                // getLast() on the empty list throws NoSuchElementException, which is neither of
+                // the exceptions callers of this method handle, so it would reach them as a crash.
+                //
+                // This is not hypothetical for cached data either. AppView and ShortcutTrampoline
+                // both re-parse rawAppList from disk, so one badly formatted response would keep
+                // crashing on that host until the cache was cleared.
+                if (appList.isEmpty() || currentTag.isEmpty()) {
+                    break;
+                }
+
                 NvApp app = appList.getLast();
                 if (currentTag.peek().equals("AppTitle")) {
                     app.setAppName(xpp.getText());
