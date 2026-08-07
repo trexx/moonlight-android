@@ -134,8 +134,6 @@ it is switched on.
       Audio must recover, or fall back to AudioTrack for the rest of the session — it must
       not go permanently silent, and the stream must not hang at "Waiting for audio stream
       establishment".
-- [ ] Setting on **with audio effects enabled**: must silently use AudioTrack. Confirm in
-      logcat (`Not using AAudio because audio effects are enabled`).
 - [ ] Setting on, **surround below Android 12L** (API 32) if such a device is available:
       must fall back to AudioTrack rather than opening a stream with an undefined layout.
 - [ ] Under load — packet loss, decoder pressure — audio does not stutter. Two independent
@@ -172,6 +170,40 @@ Small changes, but each touches a path that is easy to break silently.
       risk of having been regressed.
 - [ ] **Game Mode:** on Android 13+, connect and confirm the stream starts. On a device with
       a partial `GameManager` (Meta Quest, some OEM builds), confirm it no longer crashes.
+
+---
+
+## 5. Audio decryption (AES-CBC under mbedTLS)
+
+Audio is the only stream encrypted with AES-CBC — video, control and RTSP all use AES-GCM.
+When CBC breaks, the picture is perfect and only the sound disappears, with no error shown
+to the user, so this needs checking explicitly rather than assuming "video works" means
+crypto works.
+
+Requires a paired host actually streaming. The failure mode is silent, so run the log check
+rather than trusting your ears alone: a host sending no audio at all looks identical.
+
+- [ ] **Sound is present**, and stays in sync over a long session.
+- [ ] **No decrypt failures.** Native `moonlight-common-c` logging is not stripped in release
+      builds, so this works on a normally signed release APK:
+      ```bash
+      adb logcat -d | grep -a "Failed to decrypt audio packet"   # must return nothing
+      ```
+      Note the Homatics ships with `persist.log.tag=S`, which silences the whole main
+      buffer. Clear it first (`adb shell setprop persist.log.tag '""'`) and put it back to
+      `S` afterwards, or this check silently passes whatever the truth is.
+- [ ] **Audio is reaching the HAL**, not merely decrypting:
+      ```bash
+      adb shell dumpsys media.audio_flinger | awk '/name AudioOut_D,/,/Hal stream/' \
+        | grep -E "Standby|Frames written"
+      ```
+      `Frames written` must advance between samples and `Standby` must be `no` while
+      streaming. A started-but-starved AudioTrack is exactly what the CBC padding bug
+      produced.
+- [ ] **Keyboard and mouse input still reach the host.** The carried patch also changes IV
+      handling for non-GCM contexts, which is the pre-Gen 7 input encryption path. Hosts new
+      enough to use Gen 7+ input will not exercise it, so this only proves out against an
+      older host.
 
 ---
 
