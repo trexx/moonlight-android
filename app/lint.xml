@@ -23,11 +23,6 @@
     <issue id="ExportedContentProvider" severity="ignore" />
 
     <!--
-      HelpActivity renders the Moonlight wiki, which needs JavaScript.
-    -->
-    <issue id="SetJavaScriptEnabled" severity="ignore" />
-
-    <!--
       Game locks orientation to match the stream resolution. That is the whole point on a
       device that can rotate; letting it rotate mid-stream would resize the surface.
     -->

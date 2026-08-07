@@ -43,19 +43,6 @@
         style="?android:attr/borderlessButtonStyle"/>
 
     <ImageButton
-        android:id="@+id/helpButton"
-        android:contentDescription="@string/help"
-        android:layout_width="70dp"
-        android:layout_height="65dp"
-        android:cropToPadding="false"
-        android:scaleType="fitXY"
-        android:layout_alignParentTop="true"
-        android:layout_toEndOf="@+id/settingsButton"
-        android:src="@drawable/ic_help"
-        android:preferKeepClear="true"
-        style="?android:attr/borderlessButtonStyle"/>
-    
-    <ImageButton
         android:id="@+id/manuallyAddPc"
         android:contentDescription="@string/title_add_pc"
         android:layout_width="70dp"
