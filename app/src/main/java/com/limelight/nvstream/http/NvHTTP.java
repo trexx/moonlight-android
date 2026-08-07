@@ -5,6 +5,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.InterruptedIOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.net.Inet4Address;
@@ -460,7 +461,24 @@ public class NvHTTP {
     private ResponseBody openHttpConnection(OkHttpClient client, HttpUrl baseUrl, String path, String query) throws IOException {
         HttpUrl completeUrl = getCompleteUrl(baseUrl, path, query);
         Request request = new Request.Builder().url(completeUrl).get().build();
-        Response response = performAndroidTlsHack(client).newCall(request).execute();
+
+        Response response;
+        try {
+            response = performAndroidTlsHack(client).newCall(request).execute();
+        } catch (Exception e) {
+            // OkHttp lets a bare InterruptedException escape its throws IOException contract, which
+            // no caller here is able to catch. See HttpInterrupts for the mechanism. Catching
+            // Exception is the only way to intercept it: javac rejects catch (InterruptedException)
+            // where nothing in the try block declares throwing one.
+            InterruptedIOException interrupted = HttpInterrupts.translate(e);
+            if (interrupted != null) {
+                throw interrupted;
+            }
+
+            // Precise rethrow: as far as javac is concerned this block throws only IOException and
+            // unchecked exceptions, so this stays within our throws clause.
+            throw e;
+        }
 
         ResponseBody body = response.body();
         
