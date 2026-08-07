@@ -158,8 +158,6 @@
     <string name="summary_seekbar_bitrate">Increase for better image quality. Decrease to improve performance on slower connections.</string>
     <string name="conn_starting_retry">Waiting for the host to be ready…</string>
     <string name="perf_overlay_bandwidth">Bandwidth down/up: %1$.2f/%2$.2f MB/s</string>
-    <string name="title_checkbox_enable_commit_text">Soft keyboard text input</string>
-    <string name="summary_checkbox_enable_commit_text">Let the on-screen keyboard send text directly, enabling swipe typing, autocorrect and IME composition. Requires a host that supports UTF-8 text input.</string>
     <string name="title_mouse_mode">Touchscreen mouse mode</string>
     <string name="mouse_mode_relative">Trackpad</string>
     <string name="mouse_mode_trackpad">Trackpad with gestures (momentum scrolling, two- and three-finger clicks)</string>

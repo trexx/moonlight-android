@@ -62,7 +62,6 @@ public class PreferenceConfiguration {
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
     private static final String ENFORCE_DISPLAY_MODE_PREF_STRING = "checkbox_enforce_display_mode";
     private static final String RESUME_WITHOUT_CONFIRM_PREF_STRING = "checkbox_resume_without_confirm";
-    private static final String ENABLE_COMMIT_TEXT_PREF_STRING = "checkbox_enable_commit_text";
     private static final String SMALL_ICONS_PREF_STRING = "checkbox_small_icon_mode";
     private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
     static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
@@ -101,7 +100,6 @@ public class PreferenceConfiguration {
     private static final int DEFAULT_DEADZONE = 7;
     private static final boolean DEFAULT_ENFORCE_DISPLAY_MODE = false;
     private static final boolean DEFAULT_RESUME_WITHOUT_CONFIRM = false;
-    private static final boolean DEFAULT_ENABLE_COMMIT_TEXT = false;
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
     private static final String DEFAULT_VIDEO_FORMAT = "auto";
@@ -148,7 +146,6 @@ public class PreferenceConfiguration {
     public int deadzonePercentage;
     public boolean enforceDisplayMode;
     public boolean resumeWithoutConfirm;
-    public boolean enableCommitText;
     public boolean stretchVideo, enableSops, playHostAudio, disableWarnings;
     public ScaleMode scaleMode;
     public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
@@ -592,7 +589,6 @@ public class PreferenceConfiguration {
         config.deadzonePercentage = prefs.getInt(DEADZONE_PREF_STRING, DEFAULT_DEADZONE);
         config.enforceDisplayMode = prefs.getBoolean(ENFORCE_DISPLAY_MODE_PREF_STRING, DEFAULT_ENFORCE_DISPLAY_MODE);
         config.resumeWithoutConfirm = prefs.getBoolean(RESUME_WITHOUT_CONFIRM_PREF_STRING, DEFAULT_RESUME_WITHOUT_CONFIRM);
-        config.enableCommitText = prefs.getBoolean(ENABLE_COMMIT_TEXT_PREF_STRING, DEFAULT_ENABLE_COMMIT_TEXT);
 
 
 

@@ -17,14 +17,12 @@ import android.view.inputmethod.InputConnection;
  *   <li>Aspect-ratio-preserving measurement, either letterboxed or overscanned to fill the display
  *       ({@link #setFillDisplay(boolean)}).</li>
  *   <li>Key events intercepted before the IME sees them, so the host receives them intact.</li>
- *   <li>An {@link InputConnection} that turns soft keyboard text into host input, when commit-text
- *       mode is enabled ({@link #setCommitTextEnabled(boolean)}).</li>
+ *   <li>An {@link InputConnection} that turns soft keyboard text into host input.</li>
  * </ul>
  */
 public class StreamView extends SurfaceView {
     private double desiredAspectRatio;
     private boolean fillDisplay;
-    private boolean commitTextEnabled;
     private InputCallbacks inputCallbacks;
 
     /** Sets the stream's aspect ratio, which drives measurement. */
@@ -35,19 +33,6 @@ public class StreamView extends SurfaceView {
     /** @param fillDisplay overscan to fill the display and crop the surplus, instead of letterboxing */
     public void setFillDisplay(boolean fillDisplay) {
         this.fillDisplay = fillDisplay;
-    }
-
-    /**
-     * Enables soft keyboard text input. When on, the view becomes an IME target and committed text
-     * is forwarded to the host as UTF-8 rather than as individual key events.
-     */
-    public void setCommitTextEnabled(boolean enabled) {
-        this.commitTextEnabled = enabled;
-        // Request focus so that the IME targets this view when enabled
-        if (enabled) {
-            setFocusableInTouchMode(true);
-            requestFocus();
-        }
     }
 
     /** Sets the sink for key and text events this view intercepts. */
@@ -142,24 +127,20 @@ public class StreamView extends SurfaceView {
         return super.onKeyPreIme(keyCode, event);
     }
 
-    /** {@inheritDoc} True only in commit-text mode, which is what makes the IME target this view. */
+    /** {@inheritDoc} Always true: this is what makes the IME target this view. */
     @Override
     public boolean onCheckIsTextEditor() {
-        return commitTextEnabled || super.onCheckIsTextEditor();
+        return true;
     }
 
     /**
      * {@inheritDoc}
      *
-     * <p>In commit-text mode, returns a connection that forwards committed text and deletions to
-     * the host instead of editing a local buffer.
+     * <p>Returns a connection that forwards committed text and deletions to the host instead of
+     * editing a local buffer.
      */
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        if (!commitTextEnabled) {
-            return super.onCreateInputConnection(outAttrs);
-        }
-
         // Basic text editor flags - we don't need extract UI or an enter action
         outAttrs.inputType = InputType.TYPE_CLASS_TEXT;
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI;

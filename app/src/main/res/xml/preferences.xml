@@ -212,13 +212,6 @@
             android:title="@string/title_checkbox_enforce_display_mode"
             android:summary="@string/summary_checkbox_enforce_display_mode"
             android:defaultValue="false" />
-        <!-- Routes soft keyboard text through StreamView's InputConnection and on to the host as
-             UTF-8, instead of synthesising key events -->
-        <CheckBoxPreference
-            android:key="checkbox_enable_commit_text"
-            android:title="@string/title_checkbox_enable_commit_text"
-            android:summary="@string/summary_checkbox_enable_commit_text"
-            android:defaultValue="false" />
         <CheckBoxPreference
             android:key="checkbox_resume_without_confirm"
             android:title="@string/title_checkbox_resume_without_confirm"

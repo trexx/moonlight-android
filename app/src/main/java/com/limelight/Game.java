@@ -296,7 +296,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         streamView.setOnGenericMotionListener(this);
         streamView.setOnKeyListener(this);
         streamView.setInputCallbacks(this);
-        streamView.setCommitTextEnabled(prefConfig.enableCommitText);
+        // StreamView is the IME's target, so it has to be focusable and hold focus for the
+        // soft keyboard to attach to anything.
+        streamView.setFocusableInTouchMode(true);
+        streamView.requestFocus();
 
         // Listen for touch events on the background touch view to enable trackpad mode
         // to work on areas outside of the StreamView itself. We use a separate View
@@ -1348,7 +1351,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     /** {@inheritDoc} */
     @Override
     public boolean handleCommitText(CharSequence text) {
-        if (!prefConfig.enableCommitText || conn == null || text == null) {
+        if (conn == null || text == null) {
             return false;
         }
         enqueueCommitText(text.toString());
@@ -1358,7 +1361,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     /** {@inheritDoc} */
     @Override
     public boolean handleDeleteSurroundingText(int beforeLength, int afterLength) {
-        if (!prefConfig.enableCommitText || conn == null) {
+        if (conn == null) {
             return false;
         }
 
