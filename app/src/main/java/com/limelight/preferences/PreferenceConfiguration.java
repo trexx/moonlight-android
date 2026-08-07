@@ -91,6 +91,7 @@ public class PreferenceConfiguration {
     private static final String FULL_RANGE_PREF_STRING = "checkbox_full_range";
     private static final String GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING = "checkbox_gamepad_touchpad_as_mouse";
     private static final String GAMEPAD_MOTION_SENSORS_PREF_STRING = "checkbox_gamepad_motion_sensors";
+    private static final String SEND_REAL_CLIENT_ID_PREF_STRING = "checkbox_send_real_client_id";
 
     static final String DEFAULT_RESOLUTION = "1280x720";
     static final String DEFAULT_FPS = "60";
@@ -331,6 +332,19 @@ public class PreferenceConfiguration {
 
         // Use small mode on anything smaller than a 7" tablet
         return context.getResources().getConfiguration().smallestScreenWidthDp < 500;
+    }
+
+    /**
+     * @return true if hosts should be told this install's own client ID rather than the value
+     *         every Moonlight client shares
+     *
+     * <p>Read on its own rather than through {@link #readPreferences}, because
+     * {@code IdentityManager} needs it per HTTP request and has no use for the rest of the
+     * configuration. Interpreting the key here keeps this class the only place that does.
+     */
+    public static boolean sendRealClientId(Context context) {
+        return PreferenceManager.getDefaultSharedPreferences(context)
+                .getBoolean(SEND_REAL_CLIENT_ID_PREF_STRING, false);
     }
 
     /** @return the default bitrate for the settings currently stored for this device */

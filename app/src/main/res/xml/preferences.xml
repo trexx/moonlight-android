@@ -252,5 +252,13 @@
             android:title="@string/title_enable_post_stream_toast"
             android:summary="@string/summary_enable_post_stream_toast"
             android:defaultValue="false"/>
+        <!-- Defaults to off, which keeps the shared client ID every Moonlight client reports.
+             That is what lets a session started on one device be quit from another, so turning
+             this on is a real trade rather than a strict improvement. -->
+        <CheckBoxPreference
+            android:key="checkbox_send_real_client_id"
+            android:title="@string/title_send_real_client_id"
+            android:summary="@string/summary_send_real_client_id"
+            android:defaultValue="false"/>
     </PreferenceCategory>
 </PreferenceScreen>

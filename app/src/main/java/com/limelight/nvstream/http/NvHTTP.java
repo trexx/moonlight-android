@@ -221,9 +221,11 @@ public class NvHTTP {
      * @param cryptoProvider supplies this client's own certificate and key
      */
     public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
-        // Use the same UID for all Moonlight clients so we can quit games
-        // started by other Moonlight clients.
-        this.uniqueId = "0123456789ABCDEF";
+        // Whether this is a per-install ID or the value shared by all Moonlight clients is
+        // IdentityManager's decision, not ours - see the preference it reads. This class used to
+        // overwrite the parameter with the shared value unconditionally, which made the argument
+        // a lie and left the caller no way to choose.
+        this.uniqueId = uniqueId;
 
         this.serverCert = serverCert;
 

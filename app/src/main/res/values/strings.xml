@@ -268,6 +268,8 @@
     <string name="summary_enable_perf_overlay">Display real-time stream performance information while streaming</string>
     <string name="title_enable_post_stream_toast">Show latency message after streaming</string>
     <string name="summary_enable_post_stream_toast">Display a latency information message after the stream ends</string>
+    <string name="title_send_real_client_id">Send a unique client ID</string>
+    <string name="summary_send_real_client_id">Identify this device to your PC individually instead of as a generic Moonlight client. Lets the PC manage each client separately, but another Moonlight device may no longer be able to quit a session this one started.</string>
 
 
     <!-- Toasts -->
