@@ -51,7 +51,6 @@ import android.content.res.Configuration;
 import android.graphics.Rect;
 import android.hardware.input.InputManager;
 import android.media.AudioManager;
-import android.net.ConnectivityManager;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -336,13 +335,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 return handleMotionEvent(view, motionEvent);
             }
         });
-
-        // Warn the user if they're on a metered connection. The bitrate is not adjusted for it;
-        // the configured bitrate is used regardless.
-        ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (connMgr.isActiveNetworkMetered()) {
-            displayTransientMessage(getResources().getString(R.string.conn_metered));
-        }
 
         // Make sure Wi-Fi is fully powered up
         WifiManager wifiMgr = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
