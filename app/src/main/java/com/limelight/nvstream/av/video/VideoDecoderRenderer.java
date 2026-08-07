@@ -1,5 +1,7 @@
 package com.limelight.nvstream.av.video;
 
+import java.nio.ByteBuffer;
+
 /**
  * Sink for encoded video, driven by moonlight-common-c through {@code MoonBridge}.
  *
@@ -50,6 +52,46 @@ public abstract class VideoDecoderRenderer {
     public abstract int submitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                          int frameNumber, int frameType, char frameHostProcessingLatency,
                                          long receiveTimeUs, long enqueueTimeUs);
+
+    /**
+     * Begins submitting picture data without an intermediate copy.
+     *
+     * <p>{@link #submitDecodeUnit} requires the data to already be in a Java array, which means
+     * the caller has copied it out of its own buffers first, and this class then copies it again
+     * into the decoder's input buffer. This pair of methods removes the second copy by handing the
+     * decoder's buffer back to the caller to write into directly.
+     *
+     * <p>Picture data only. Parameter sets are small and heavily processed on this side, so they
+     * keep using {@link #submitDecodeUnit}.
+     *
+     * <h2>Contract</h2>
+     * A successful call <b>must</b> be followed by exactly one {@link #submitPicData}, and a
+     * failed one by exactly one {@link #abortPicData}, before anything else is submitted. Between
+     * the two the implementation is holding a codec input buffer, and the caller holds a raw
+     * pointer into it.
+     *
+     * @param decodeUnitLength total bytes of picture data about to be written
+     * @return a direct {@link ByteBuffer} positioned where the data should be written, or null if
+     *         the caller must instead call {@link #abortPicData}
+     */
+    public abstract ByteBuffer startPicData(int decodeUnitLength, int frameNumber, int frameType,
+                                            char frameHostProcessingLatency,
+                                            long receiveTimeUs, long enqueueTimeUs);
+
+    /**
+     * Completes the submission begun by {@link #startPicData}.
+     *
+     * @param bytesWritten how many bytes were written at the buffer's position
+     * @return {@code MoonBridge.DR_OK} or {@code DR_NEED_IDR}, as {@link #submitDecodeUnit}
+     */
+    public abstract int submitPicData(int bytesWritten);
+
+    /**
+     * Abandons a submission whose {@link #startPicData} returned null.
+     *
+     * @return the code the caller should return for this decode unit
+     */
+    public abstract int abortPicData();
 
     /** Releases all decoder resources. Nothing else is called afterwards. */
     public abstract void cleanup();
