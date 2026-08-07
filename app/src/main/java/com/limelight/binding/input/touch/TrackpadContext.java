@@ -74,6 +74,8 @@ public class TrackpadContext implements TouchContext {
 
     // A tap pressed a button that CLICK_RELEASE_DELAY has not yet released
     private boolean isClickPending;
+    // Which button that was, so clickReleaseRunnable releases the one actually pressed
+    private byte pendingClickButton;
     // A second tap arrived while a click was pending, so the release must complete a
     // double-click, or turn into a drag if the finger moves instead
     private boolean isDblClickPending;
@@ -92,12 +94,6 @@ public class TrackpadContext implements TouchContext {
     private final NvConnection conn;
     private final int actionIndex;
     private final Handler handler;
-
-    // Optional axis/sensitivity overrides, applied to every move delta. Only set by the
-    // five-argument constructor.
-    private boolean swapAxis = false;
-    private float sensitivityX = 1;
-    private float sensitivityY = 1;
 
     // A touch that stays within this many pixels of its origin can still become a tap
     private static final int TAP_MOVEMENT_THRESHOLD = 30;
@@ -123,7 +119,6 @@ public class TrackpadContext implements TouchContext {
     // How long cursor movement stays blocked after a two-finger scroll ends
     private static final int SCROLL_TRANSITION_TIMEOUT_MS = 200;
 
-    /** Creates a context with no axis swap and unity sensitivity. */
     public TrackpadContext(NvConnection conn, int actionIndex) {
         this.conn = conn;
         this.actionIndex = actionIndex;
@@ -131,16 +126,22 @@ public class TrackpadContext implements TouchContext {
     }
 
     /**
-     * @param swapAxis exchange the X and Y axes, for a device mounted rotated relative to the host
-     * @param sensitivityX horizontal gain as a percentage, so 100 leaves movement unscaled
-     * @param sensitivityY vertical gain as a percentage
+     * Releases a tap's button once the double-click window has passed without a second tap.
+     *
+     * <p>A field rather than a lambda captured at the call site so that the paths which have to
+     * take the button over — the drag and double-click branches of {@link #touchUpEvent} — can
+     * cancel this one callback by reference instead of clearing everything posted to the handler.
      */
-    public TrackpadContext(NvConnection conn, int actionIndex, boolean swapAxis, int sensitivityX, int sensitivityY) {
-        this(conn, actionIndex);
-        this.swapAxis = swapAxis;
-        this.sensitivityX = (float) sensitivityX / 100;
-        this.sensitivityY = (float) sensitivityY / 100;
-    }
+    private final Runnable clickReleaseRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (isClickPending) {
+                conn.sendMouseButtonUp(pendingClickButton);
+                isClickPending = false;
+            }
+            isDblClickPending = false;
+        }
+    };
 
     /** Ends the post-scroll settling window; see {@link #setPointerCount(int)}. */
     private final Runnable scrollTransitionRunnable = new Runnable() {
@@ -240,6 +241,16 @@ public class TrackpadContext implements TouchContext {
         return actionIndex;
     }
 
+    /**
+     * Stops both momentum runnables. Targeted rather than clearing the whole handler queue, so
+     * that an unrelated pending callback — the post-scroll settling window in particular — is
+     * left to run out on its own.
+     */
+    private void cancelMomentum() {
+        handler.removeCallbacks(momentumRunnable);
+        handler.removeCallbacks(scrollMomentumRunnable);
+    }
+
     /** @return true if the touch is still close enough to its origin to become a tap */
     private boolean isWithinTapBounds(int touchX, int touchY) {
         int xDelta = Math.abs(touchX - originalTouchX);
@@ -269,16 +280,13 @@ public class TrackpadContext implements TouchContext {
      * Maps the current finger count onto a mouse button: one finger left, two right, three
      * middle.
      *
-     * <p>Not a pure getter — the middle-click branch also records that a middle click has
-     * happened, which suppresses the right click that would otherwise be emitted as the
-     * fingers lift one by one. Callers that only want the button index still pay that side
-     * effect.
+     * <p>Whoever emits a middle click is responsible for setting {@link #clickedMiddle}, which
+     * suppresses the right click that would otherwise follow as the remaining fingers lift.
      */
     private byte getMouseButtonIndex() {
         if (pointerCount == 2) {
             return MouseButtonPacket.BUTTON_RIGHT;
         } else if (pointerCount == 3) {
-            clickedMiddle = true;
             return MouseButtonPacket.BUTTON_MIDDLE;
         } else {
             return MouseButtonPacket.BUTTON_LEFT;
@@ -300,10 +308,9 @@ public class TrackpadContext implements TouchContext {
     public boolean touchDownEvent(int eventX, int eventY, long eventTime, boolean isNewFinger) {
         if (isFlicking) {
             isFlicking = false;
-            handler.removeCallbacksAndMessages(null);
+            cancelMomentum();
         }
 
-        // Note: this position/remainder reset is repeated verbatim at the end of the method
         originalTouchX = lastTouchX = eventX;
         originalTouchY = lastTouchY = eventY;
 
@@ -350,11 +357,6 @@ public class TrackpadContext implements TouchContext {
             }
         }
 
-        originalTouchX = lastTouchX = eventX;
-        originalTouchY = lastTouchY = eventY;
-
-        pendingDeltaX = pendingDeltaY = 0;
-
         return true;
     }
 
@@ -382,10 +384,16 @@ public class TrackpadContext implements TouchContext {
 
         byte buttonIndex = getMouseButtonIndex();
 
+        // Record a middle click so the right click that would otherwise be emitted as the
+        // remaining fingers lift is suppressed
+        if (buttonIndex == MouseButtonPacket.BUTTON_MIDDLE) {
+            clickedMiddle = true;
+        }
+
         if (isDblClickPending) {
             // The first click's button is still held, so releasing it and issuing a full
             // press/release pair gives the host the second click of a double-click
-            handler.removeCallbacksAndMessages(null);
+            handler.removeCallbacks(clickReleaseRunnable);
             conn.sendMouseButtonUp(buttonIndex);
             conn.sendMouseButtonDown(buttonIndex);
             conn.sendMouseButtonUp(buttonIndex);
@@ -393,7 +401,7 @@ public class TrackpadContext implements TouchContext {
             confirmedDrag = false;
         }
         else if (confirmedDrag) {
-            handler.removeCallbacksAndMessages(null);
+            handler.removeCallbacks(clickReleaseRunnable);
 
             // A drag released at speed keeps the button down and hands over to momentum,
             // which releases it when the cursor comes to rest
@@ -411,15 +419,10 @@ public class TrackpadContext implements TouchContext {
             // a second tap can upgrade this into a double-click or a drag
             conn.sendMouseButtonDown(buttonIndex);
             isClickPending = true;
+            pendingClickButton = buttonIndex;
 
-            handler.removeCallbacksAndMessages(null);
-            handler.postDelayed(() -> {
-                if (isClickPending) {
-                    conn.sendMouseButtonUp(buttonIndex);
-                    isClickPending = false;
-                }
-                isDblClickPending = false;
-            }, CLICK_RELEASE_DELAY);
+            handler.removeCallbacks(clickReleaseRunnable);
+            handler.postDelayed(clickReleaseRunnable, CLICK_RELEASE_DELAY);
         }
         else if (confirmedMove) {
             // This was a move/scroll that wasn't a drag or tap. Let's see if we should flick.
@@ -464,7 +467,8 @@ public class TrackpadContext implements TouchContext {
 
             int rawDeltaX = eventX - lastTouchX;
             int rawDeltaY = eventY - lastTouchY;
-            int absDeltaX, absDeltaY;
+            int absDeltaX = Math.abs(rawDeltaX);
+            int absDeltaY = Math.abs(rawDeltaY);
 
             // Pointer acceleration. The cube root of the normalised travel gives a gentle
             // curve: below ACCELERATION_THRESHOLD pixels per event the multiplier is under 1
@@ -473,29 +477,11 @@ public class TrackpadContext implements TouchContext {
             double magnitude = Math.sqrt(rawDeltaX * rawDeltaX + rawDeltaY * rawDeltaY);
             double precisionMultiplier = Math.cbrt(magnitude / ACCELERATION_THRESHOLD);
 
-            float deltaX, deltaY;
-            if (swapAxis) {
-                deltaY = rawDeltaX;
-                deltaX = rawDeltaY;
+            float deltaX = (float)(rawDeltaX * precisionMultiplier);
+            float deltaY = (float)(rawDeltaY * precisionMultiplier);
 
-                absDeltaX = Math.abs(rawDeltaY);
-                absDeltaY = Math.abs(rawDeltaX);
-            } else {
-                deltaX = rawDeltaX;
-                deltaY = rawDeltaY;
-
-                absDeltaX = Math.abs(rawDeltaX);
-                absDeltaY = Math.abs(rawDeltaY);
-            }
-
-            deltaX *= precisionMultiplier;
-            deltaY *= precisionMultiplier;
-
-            deltaX *= sensitivityX;
-            deltaY *= sensitivityY;
-
-            // Update velocity for flicking. Measured after acceleration and sensitivity, so
-            // FLICK_THRESHOLD is in the same units as the deltas actually sent to the host.
+            // Update velocity for flicking. Measured after acceleration, so FLICK_THRESHOLD is
+            // in the same units as the deltas actually sent to the host.
             if (deltaTime > 0 && (confirmedMove || confirmedDrag)) {
                 double currentVelocityX = deltaX / deltaTime;
                 double currentVelocityY = deltaY / deltaTime;
@@ -580,7 +566,7 @@ public class TrackpadContext implements TouchContext {
 
         if (isFlicking) {
             isFlicking = false;
-            handler.removeCallbacksAndMessages(null);
+            cancelMomentum();
         }
 
         if (confirmedDrag) {

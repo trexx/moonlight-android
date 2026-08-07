@@ -6,6 +6,7 @@ import android.hardware.usb.UsbDeviceConnection;
 import com.limelight.LimeLog;
 import com.limelight.binding.input.driver.UsbDriverListener;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -69,18 +70,28 @@ public class XboxWirelessDongle {
     /**
      * Stops and destroys the native driver, then reports every attached controller as removed.
      *
-     * <p>Note that {@code driverHandle} is not reset here, so the guard below does not protect a
-     * second call the way {@link #start()}'s does.
+     * <p>Idempotent: the handle is cleared before anything else can fail, so a second call after
+     * the driver has already been destroyed does nothing rather than reaching into freed memory.
      */
     public void stop() {
         if(this.driverHandle == -1) {
             return; //we already cleaned;
         }
-        stopDriver(this.driverHandle);
-        destroyDriver(this.driverHandle);
-        // Removing from the map while iterating its key set
-        for(var i: controllers.keySet()) {
-            this.listener.deviceRemoved(controllers.remove(i));
+
+        // Clear the handle first so this can't be entered twice for the same driver instance
+        long handle = this.driverHandle;
+        this.driverHandle = -1;
+
+        stopDriver(handle);
+        destroyDriver(handle);
+
+        // Drain into a local list before notifying: the listener chain runs arbitrary code, and
+        // removing from the map while iterating it would throw before the last controller was
+        // reported.
+        var removedControllers = new ArrayList<>(controllers.values());
+        controllers.clear();
+        for (AbstractController controller : removedControllers) {
+            this.listener.deviceRemoved(controller);
         }
     }
 

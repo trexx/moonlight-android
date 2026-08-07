@@ -1328,6 +1328,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      */
     private void applyMouseMode() {
         for (int i = 0; i < touchContextMap.length; i++) {
+            // Cancel whatever the outgoing context was in the middle of. Dropping it while a
+            // gesture is live leaves any held mouse button stuck on the host, and a trackpad
+            // context mid-flick would carry on posting momentum callbacks after it is gone.
+            if (touchContextMap[i] != null) {
+                touchContextMap[i].cancelTouch();
+            }
+
             switch (prefConfig.mouseMode) {
                 case ABSOLUTE:
                     touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamView, false);

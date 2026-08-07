@@ -196,15 +196,16 @@ public class ProConController extends AbstractController {
     private boolean sendSubcommand(byte subcommand, byte[] payload, byte[] buffer) {
         byte[] data = new byte[11 + payload.length];
         data[0] = 0x01;  // Rumble and subcommand
-        data[1] = sendPacketCount++;  // Counter (increments per call)
-        if (sendPacketCount > 0xF) {
-            sendPacketCount = 0;
-        }
-
         data[10] = subcommand;
         System.arraycopy(payload, 0, data, 11, payload.length);
 
         for (int i = 0; i < COMMAND_RETRIES; i++) {
+            // The counter advances on every packet we put on the wire, resends included
+            data[1] = sendPacketCount++;
+            if (sendPacketCount > 0xF) {
+                sendPacketCount = 0;
+            }
+
             if (!sendData(data, data.length)) {
                 continue;
             }
@@ -220,9 +221,16 @@ public class ProConController extends AbstractController {
                     return true;
                 }
             } while (retries < 20 && res > 0 && !Thread.currentThread().isInterrupted() && !stopped);
-            LimeLog.warning("ProCon: Failed to get subcmd reply: " + res + " bytes received, " +
+
+            LimeLog.warning("ProCon: Failed to get subcmd reply (attempt " + (i + 1) + "): " +
+                    res + " bytes received, " +
                     String.format((Locale) null, "0x%02x, 0x%02x", buffer[0], buffer[14]));
-            return false;
+
+            // Give up early rather than burning the remaining attempts on a controller that is
+            // going away; otherwise fall through and resend.
+            if (Thread.currentThread().isInterrupted() || stopped) {
+                break;
+            }
         }
 
         return false;
@@ -355,7 +363,10 @@ public class ProConController extends AbstractController {
         }
 
         if (lowFreqMotor != 0) {
-            data[4] = data[8] = (byte) (0x50 - (lowFreqMotor & 0xFFFF >> 12));
+            // Frequency from the top 4 bits of the amplitude, amplitude from the top 8.
+            // NB the inner parentheses: >> binds tighter than &, so without them this would mask
+            // the low nibble instead of shifting the high one down.
+            data[4] = data[8] = (byte) (0x50 - ((lowFreqMotor & 0xFFFF) >> 12));
             data[5] = data[9] = (byte) ((((lowFreqMotor & 0xFFFF) >> 8) / 5) + 0x40);
         }
         if (highFreqMotor != 0) {
@@ -363,10 +374,10 @@ public class ProConController extends AbstractController {
             data[7] = (byte) (((highFreqMotor & 0xFFFF) >> 8) * 0xC8 / 0xFF);
         }
 
-        data[2] |= 0x00;
+        // Fixed bits the controller expects in every rumble report. Bytes 2 and 6 carry none, so
+        // they keep the zero the array was allocated with.
         data[3] |= 0x01;
         data[5] |= 0x40;
-        data[6] |= 0x00;
         data[7] |= 0x01;
         data[9] |= 0x40;
 
