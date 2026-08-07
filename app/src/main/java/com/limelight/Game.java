@@ -2354,7 +2354,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             UiHelper.notifyStreamConnecting(Game.this);
 
             decoderRenderer.setRenderTarget(holder);
-            conn.start(new LowLatencyAudioRenderer(Game.this, prefConfig.enableAudioFx, prefConfig.enableAAudio),
+            conn.start(new LowLatencyAudioRenderer(prefConfig.enableAAudio),
                     decoderRenderer, Game.this);
         }
     }

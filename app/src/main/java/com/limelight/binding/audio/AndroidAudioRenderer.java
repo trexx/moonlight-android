@@ -1,12 +1,9 @@
 package com.limelight.binding.audio;
 
-import android.content.Context;
-import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
-import android.media.audiofx.AudioEffect;
 
 import com.limelight.LimeLog;
 import com.limelight.nvstream.av.audio.AudioRenderer;
@@ -27,21 +24,7 @@ import com.limelight.nvstream.jni.MoonBridge;
  */
 public class AndroidAudioRenderer implements AudioRenderer {
 
-    private final Context context;
-    // Whether to route output through the system effects pipeline (equalizers and the like).
-    // Mutually exclusive with the low latency path, as of Android 13.
-    private final boolean enableAudioFx;
-
     private AudioTrack track;
-
-    /**
-     * @param context       used to broadcast the audio effect session intents
-     * @param enableAudioFx open an effect control session, at the cost of the low latency path
-     */
-    public AndroidAudioRenderer(Context context, boolean enableAudioFx) {
-        this.context = context;
-        this.enableAudioFx = enableAudioFx;
-    }
 
     /**
      * @param lowLatency request {@code PERFORMANCE_MODE_LOW_LATENCY}, which the platform may
@@ -167,12 +150,6 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 continue;
             }
 
-            // Skip low latency options when using audio effects, since low latency mode
-            // precludes the use of the audio effect pipeline (as of Android 13).
-            if (enableAudioFx && lowLatency) {
-                continue;
-            }
-
             try {
                 track = createAudioTrack(channelConfig, sampleRate, bufferSize, lowLatency);
                 track.play();
@@ -222,34 +199,14 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
     }
 
-    /**
-     * {@inheritDoc}
-     *
-     * <p>Playback itself was already started in {@link #setup}; this only announces the track's
-     * session to any installed equalizer.
-     */
     @Override
     public void start() {
-        if (enableAudioFx) {
-            // Open an audio effect control session to allow equalizers to apply audio effects
-            Intent i = new Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION);
-            i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, track.getAudioSessionId());
-            i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.getPackageName());
-            i.putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_GAME);
-            context.sendBroadcast(i);
-        }
+        // Playback is already running: setup() calls AudioTrack.play() on the track it settles on.
     }
 
-    /** {@inheritDoc} Closes the audio effect control session, if one was opened. */
     @Override
     public void stop() {
-        if (enableAudioFx) {
-            // Close our audio effect control session when we're stopping
-            Intent i = new Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION);
-            i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, track.getAudioSessionId());
-            i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.getPackageName());
-            context.sendBroadcast(i);
-        }
+        // Nothing to unwind here; cleanup() releases the track.
     }
 
     /**
