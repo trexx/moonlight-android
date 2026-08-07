@@ -41,7 +41,24 @@ feature checks.
 - [ ] With the **performance overlay setting enabled**, the overlay is visible from stream
       start. (Deliberate deviation from upstream PR #1219, which deletes the setting.)
 - [ ] **Toggle On-screen Keyboard** from the menu opens the IME. It runs on a focus retry
-      loop, so watch for it firing while the dialog still has focus.
+      loop, so watch for it firing while the dialog still has focus. This used to do nothing
+      at all on a fresh install — it needed the since-removed "Soft keyboard text input"
+      setting — so check it on freshly cleared app data, not just a configured device.
+- [ ] **The d-pad drives the keyboard, not the stream behind it.** This is the fix for the
+      original symptom: navigation used to move focus in the game while the keyboard sat
+      there unfocused. `StreamView.onKeyPreIme()` now stands aside while
+      `imeVisible` is set.
+- [ ] **Typed text reaches the host**, including a multi-byte character, swipe typing and
+      autocorrect — those go through `commitText` rather than key events.
+- [ ] **Backspace deletes on the host** (approximated as backspaces, so watch for it over- or
+      under-deleting after autocorrect).
+- [ ] **Back dismisses the keyboard** rather than opening the game menu or ending the stream.
+- [ ] **Input returns to the host once the keyboard is dismissed.** The important regression:
+      `imeVisible` is driven by the window insets listener, so if it ever sticks on, *all*
+      keys and gamepad buttons stop reaching the host. Press the d-pad and several controller
+      buttons after closing the keyboard and confirm the game sees them.
+- [ ] **Gamepad buttons still reach the host during normal play**, with the keyboard never
+      opened. Every button now passes through `onKeyPreIme` on its way out.
 - [ ] **Right-click does not open the menu.** Mouse-sourced `KEYCODE_BACK` is intercepted in
       `Game.handleKeyDown`/`handleKeyUp` before `onBackPressed()` is reached — verify with a
       real mouse, and confirm right-click still registers as a right button press on the host.

@@ -16,7 +16,9 @@ import android.view.inputmethod.InputConnection;
  * <ul>
  *   <li>Aspect-ratio-preserving measurement, either letterboxed or overscanned to fill the display
  *       ({@link #setFillDisplay(boolean)}).</li>
- *   <li>Key events intercepted before the IME sees them, so the host receives them intact.</li>
+ *   <li>Key events intercepted before the IME sees them, so the host receives them intact -
+ *       except while the soft keyboard is up, when the IME gets first refusal
+ *       ({@link #setImeVisible(boolean)}).</li>
  *   <li>An {@link InputConnection} that turns soft keyboard text into host input.</li>
  * </ul>
  */
@@ -24,6 +26,9 @@ public class StreamView extends SurfaceView {
     private double desiredAspectRatio;
     private boolean fillDisplay;
     private InputCallbacks inputCallbacks;
+    // Cached rather than queried per key press: getRootWindowInsets() allocates, and every
+    // gamepad button on the stream comes through onKeyPreIme().
+    private boolean imeVisible;
 
     /** Sets the stream's aspect ratio, which drives measurement. */
     public void setDesiredAspectRatio(double aspectRatio) {
@@ -33,6 +38,14 @@ public class StreamView extends SurfaceView {
     /** @param fillDisplay overscan to fill the display and crop the surplus, instead of letterboxing */
     public void setFillDisplay(boolean fillDisplay) {
         this.fillDisplay = fillDisplay;
+    }
+
+    /**
+     * Tracks soft keyboard visibility, which decides who owns key events. Pushed in from
+     * {@link com.limelight.Game}'s window insets listener rather than queried here.
+     */
+    public void setImeVisible(boolean visible) {
+        this.imeVisible = visible;
     }
 
     /** Sets the sink for key and text events this view intercepts. */
@@ -109,6 +122,14 @@ public class StreamView extends SurfaceView {
      */
     @Override
     public boolean onKeyPreIme(int keyCode, KeyEvent event) {
+        // While the soft keyboard is up it owns the d-pad. Intercepting here would send the
+        // navigation to the host and leave the keyboard itself unfocused, which is exactly what
+        // used to happen. Whatever the IME declines still reaches the host afterwards through the
+        // normal dispatch into Game's OnKeyListener, so nothing is lost by standing aside.
+        if (imeVisible) {
+            return super.onKeyPreIme(keyCode, event);
+        }
+
         // This callbacks allows us to override dumb IME behavior like when
         // Samsung's default keyboard consumes Shift+Space.
         if (inputCallbacks != null) {

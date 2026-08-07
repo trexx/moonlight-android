@@ -263,6 +263,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             if (connected && insets.isVisible(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars())) {
                 hideSystemUi(2000);
             }
+
+            // Tell StreamView whether the soft keyboard is up, so it knows whether to keep
+            // intercepting keys ahead of the IME. Null-checked because this listener is
+            // registered before setContentView() has run.
+            if (streamView != null) {
+                streamView.setImeVisible(insets.isVisible(WindowInsets.Type.ime()));
+            }
+
             return v.onApplyWindowInsets(insets);
         });
 
