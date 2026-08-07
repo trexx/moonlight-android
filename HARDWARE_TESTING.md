@@ -1552,6 +1552,61 @@ Reading `LimeLog` output on the Homatics needs `adb shell setprop persist.log.ta
 
 ---
 
+## 18. Client unique ID
+
+The `uniqueid` query parameter rides on **every** HTTP request — pair, unpair, serverinfo,
+applist, launch, resume, cancel — so this is not just a launch-path change. The default is
+unchanged, which makes the first block the check that actually matters.
+
+### 18.1 Setting off (default) — regression check
+
+- [ ] The wire value is still `0123456789ABCDEF`. Nothing about pairing, browsing, launching,
+      resuming or quitting differs from a pre-change build.
+
+### 18.2 Setting on
+
+- [ ] `adb shell run-as com.limelight.debug cat files/uniqueid` gives this install's ID, and the
+      wire value now matches it.
+- [ ] **Already-paired host:** launch, resume and quit without re-pairing. Sunshine identifies
+      paired clients by certificate, so this should hold — confirming it is the point.
+- [ ] **Fresh pair:** unpair, pair again, stream. Exercises `uniqueid` on the pairing endpoints.
+- [ ] **Toggle takes effect without restarting the app.** The preference is read per call for this
+      reason. Two paths legitimately lag: box art keeps the ID captured when `AppGridAdapter` was
+      built, and a running stream keeps the one it launched with. Everything else should switch
+      immediately.
+- [ ] **Two Moonlight clients, if available:** start a session from the other client and try to
+      quit it from this one. Expected to fail now. **Record what actually happens** — this is the
+      cost of the setting, and the summary string should describe real behaviour rather than a
+      prediction.
+- [ ] **Turn it back off** and confirm shared-ID behaviour returns against the same host with no
+      re-pairing. A setting that cannot be reversed safely is worse than no setting.
+
+---
+
+## 19. YUV 4:4:4 decoder profile survey
+
+Not a feature test — the experiment that decides whether 4:4:4 negotiation is worth writing at
+all. Debug builds now log every decoder's raw profile and level integers at decoder construction.
+
+Raw integers because Android exposes no constant for HEVC RExt 4:4:4 or AV1 High 4:4:4, so there
+is nothing to match `profileLevels` against from the SDK.
+
+- [ ] **Shield TV:** capture the `Decoder capabilities:` logcat block and record the
+      `video/hevc` and `video/av01` profile integers below.
+- [ ] **Homatics Box R 4K:** same.
+- [ ] Compare against the Codec2/OMX values for HEVC RExt 4:4:4 and AV1 High 4:4:4.
+
+| Device | `video/hevc` profiles | `video/av01` profiles | Any 4:4:4? |
+|---|---|---|---|
+| Shield TV | *(fill in)* | | |
+| Homatics Box R 4K | *(fill in)* | | |
+
+If neither reports a 4:4:4 profile — the expected result — record that and leave 4:4:4 deferred.
+H.264 High 4:4:4 alone is 8-bit and effectively unsupported by Android hardware decoders, so it
+does not change the answer on its own.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -1576,3 +1631,5 @@ Reading `LimeLog` output on the Homatics needs `adb shell setprop persist.log.ta
 | §13 motion | A pad with a gyro (Switch Pro, DualSense, DualShock 4) + a host game that requests it |
 | §16 intra refresh | Sunshine host on an NVIDIA GPU |
 | §17 refresh rate | A display or output mode that reports a fractional rate (59.94, 29.97, 23.976) |
+| §18.2 two-client check | A second Moonlight client against the same host |
+| §19 | Both target devices; the survey differs per SoC |

@@ -264,6 +264,16 @@ automatically and now is not unless asked for.
   of the loop.
 * **OkHttp 5.x no longer crashes on connect**, and the interrupt its exception translation
   swallows is logged rather than reported as an offline host.
+* **Optional per-client identity.** Every Moonlight client reports the same hardcoded client ID,
+  which is what lets a session started on one device be quit from another. **Send a unique client
+  ID** in advanced settings reports this install's own ID instead, so a host such as Sunshine can
+  manage each client separately — at the cost of that shared control. Off by default, and the
+  per-install ID is stored either way, so enabling it later does not look like a new client.
+* **A malformed app list no longer crashes the app.** The `applist` parser assumed every text node
+  belonged to an already-open `<App>`, so indentation whitespace before the first entry threw
+  `NoSuchElementException` — which none of the callers catch. It went unnoticed because Sunshine
+  sends the XML unindented, but the same parser reads the on-disk cache, so one bad response would
+  have kept crashing on that host until the cache was cleared.
 
 Backported from upstream: [#1219](https://github.com/moonlight-stream/moonlight-android/pull/1219),
 [#1461](https://github.com/moonlight-stream/moonlight-android/pull/1461),
