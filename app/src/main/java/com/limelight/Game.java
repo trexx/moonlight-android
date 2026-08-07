@@ -337,11 +337,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
         });
 
-        // Warn the user if they're on a metered connection, and fall back to the
-        // reduced bitrate configured for metered networks.
+        // Warn the user if they're on a metered connection. The bitrate is not adjusted for it;
+        // the configured bitrate is used regardless.
         ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-        boolean meteredNetwork = connMgr.isActiveNetworkMetered();
-        if (meteredNetwork) {
+        if (connMgr.isActiveNetworkMetered()) {
             displayTransientMessage(getResources().getString(R.string.conn_metered));
         }
 
@@ -515,7 +514,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 .setLaunchRefreshRate(prefConfig.fps)
                 .setRefreshRate(chosenFrameRate)
                 .setApp(app)
-                .setBitrate(meteredNetwork ? prefConfig.meteredBitrate : prefConfig.bitrate)
+                .setBitrate(prefConfig.bitrate)
                 .setEnableSops(prefConfig.enableSops)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
                 .setMaxPacketSize(1392)

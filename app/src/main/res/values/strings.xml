@@ -177,8 +177,6 @@
     <string name="summary_checkbox_resume_without_confirm">Tapping the app that is already running resumes it immediately, instead of opening a menu first.</string>
     <string name="pcview_menu_management_page">Open host management page</string>
     <string name="error_no_browser">No web browser is available to open this page.</string>
-    <string name="title_seekbar_metered_bitrate">Video bitrate on metered networks</string>
-    <string name="summary_seekbar_metered_bitrate">Bitrate used automatically when streaming over a connection Android reports as metered, such as mobile data or a metered hotspot.</string>
     <string name="title_checkbox_enforce_display_mode">Force display mode change</string>
     <string name="summary_checkbox_enforce_display_mode">Always switch the display mode to match the stream, instead of only requesting a frame rate. Enable this if your display stays at the wrong refresh rate while streaming.</string>
     <string name="suffix_seekbar_bitrate_mbps">Mbps</string>

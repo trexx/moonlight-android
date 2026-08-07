@@ -40,17 +40,6 @@
             android:summary="@string/summary_seekbar_bitrate"
             android:text="@string/suffix_seekbar_bitrate_mbps"
             android:title="@string/title_seekbar_bitrate" />
-        <com.limelight.preferences.SeekBarPreference
-            android:key="seekbar_metered_bitrate_kbps"
-            android:dialogMessage="@string/summary_seekbar_metered_bitrate"
-            seekbar:min="500"
-            android:max="150000"
-            seekbar:step="500"
-            seekbar:keyStep="1000"
-            seekbar:divisor="1000"
-            android:summary="@string/summary_seekbar_metered_bitrate"
-            android:text="@string/suffix_seekbar_bitrate_mbps"
-            android:title="@string/title_seekbar_metered_bitrate" />
         <!-- Maps to PreferenceConfiguration.framePacing. 'latency' presents frames as soon as they
              decode; 'balanced' presents on vsync via the Choreographer path in
              MediaCodecDecoderRenderer, trading up to a frame of latency for smoothness. -->

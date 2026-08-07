@@ -60,7 +60,6 @@ public class PreferenceConfiguration {
     private static final String DISABLE_TOASTS_PREF_STRING = "checkbox_disable_warnings";
     private static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
-    private static final String METERED_BITRATE_PREF_STRING = "seekbar_metered_bitrate_kbps";
     private static final String ENFORCE_DISPLAY_MODE_PREF_STRING = "checkbox_enforce_display_mode";
     private static final String RESUME_WITHOUT_CONFIRM_PREF_STRING = "checkbox_resume_without_confirm";
     private static final String ENABLE_COMMIT_TEXT_PREF_STRING = "checkbox_enable_commit_text";
@@ -149,7 +148,6 @@ public class PreferenceConfiguration {
     public int bitrate;
     public FormatOption videoFormat;
     public int deadzonePercentage;
-    public int meteredBitrate;
     public boolean enforceDisplayMode;
     public boolean resumeWithoutConfirm;
     public boolean enableCommitText;
@@ -595,11 +593,6 @@ public class PreferenceConfiguration {
         config.analogStickForScrolling = getAnalogStickForScrollingValue(context);
 
         config.deadzonePercentage = prefs.getInt(DEADZONE_PREF_STRING, DEFAULT_DEADZONE);
-        config.meteredBitrate = prefs.getInt(METERED_BITRATE_PREF_STRING, 0);
-        if (config.meteredBitrate == 0) {
-            // Default to a quarter of the normal bitrate on metered connections
-            config.meteredBitrate = Math.max(500, config.bitrate / 4);
-        }
         config.enforceDisplayMode = prefs.getBoolean(ENFORCE_DISPLAY_MODE_PREF_STRING, DEFAULT_ENFORCE_DISPLAY_MODE);
         config.resumeWithoutConfirm = prefs.getBoolean(RESUME_WITHOUT_CONFIRM_PREF_STRING, DEFAULT_RESUME_WITHOUT_CONFIRM);
         config.enableCommitText = prefs.getBoolean(ENABLE_COMMIT_TEXT_PREF_STRING, DEFAULT_ENABLE_COMMIT_TEXT);
