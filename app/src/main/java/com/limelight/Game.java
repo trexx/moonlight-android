@@ -440,7 +440,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     }
                 },
                 tombstonePrefs.getInt("CrashCount", 0),
-                connMgr.isActiveNetworkMetered(),
                 willStreamHdr,
                 glPrefs.glRenderer,
                 this);

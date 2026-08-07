@@ -275,7 +275,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      *
      * @param requestedHdr HDR was requested, which mandates HEVC Main10
      */
-    private MediaCodecInfo findHevcDecoder(PreferenceConfiguration prefs, boolean meteredNetwork, boolean requestedHdr) {
+    private MediaCodecInfo findHevcDecoder(PreferenceConfiguration prefs, boolean requestedHdr) {
         // Don't return anything if H.264 is forced
         if (prefs.videoFormat == PreferenceConfiguration.FormatOption.FORCE_H264) {
             return null;
@@ -365,14 +365,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * @param consecutiveCrashCount crashes in previous sessions; risky features are disabled as
      *                              this rises, so a device that crashes repeatedly degrades into
      *                              a working configuration instead of failing forever
-     * @param meteredData           the connection is metered, which biases toward the more
-     *                              efficient codec
      * @param requestedHdr          HDR was requested, which forces HEVC
      * @param glRenderer            GL renderer string, used for GPU-specific quirks
      */
     public MediaCodecDecoderRenderer(Activity activity, PreferenceConfiguration prefs,
                                      CrashListener crashListener, int consecutiveCrashCount,
-                                     boolean meteredData, boolean requestedHdr,
+                                     boolean requestedHdr,
                                      String glRenderer, PerfOverlayListener perfListener) {
         //dumpDecoders();
 
@@ -396,7 +394,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             LimeLog.warning("No AVC decoder found");
         }
 
-        hevcDecoder = findHevcDecoder(prefs, meteredData, requestedHdr);
+        hevcDecoder = findHevcDecoder(prefs, requestedHdr);
         if (hevcDecoder != null) {
             LimeLog.info("Selected HEVC decoder: "+hevcDecoder.getName());
         }
