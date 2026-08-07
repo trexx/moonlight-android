@@ -1364,13 +1364,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 // NB: We have to do this on the producer side because the consumer may not
                                 // run for a while (if there is a huge mismatch between stream FPS and display
                                 // refresh rate).
-                                if (outputBufferQueue.size() == OUTPUT_BUFFER_QUEUE_LIMIT) {
-                                    try {
-                                        videoDecoder.releaseOutputBuffer(outputBufferQueue.take(), false);
-                                    } catch (InterruptedException e) {
-                                        // We're shutting down, so we can just drop this buffer on the floor
-                                        // and it will be reclaimed when the codec is released.
-                                        return;
+                                //
+                                // poll() rather than take(), and >= rather than ==: this thread is the only
+                                // producer, so a take() that finds the queue empty would block forever. The
+                                // Choreographer thread can drain both entries between the size() check and
+                                // the removal - two vsyncs presenting one frame each is ordinary at 60 FPS on
+                                // a 60 Hz display - and there is nobody else to refill it. That would stall
+                                // the decoder and, because this thread would never reach the
+                                // doCodecRecoveryIfRequired() call below, deadlock any concurrent recovery
+                                // until prepareForStop() interrupts us.
+                                if (outputBufferQueue.size() >= OUTPUT_BUFFER_QUEUE_LIMIT) {
+                                    Integer oldestOutputBuffer = outputBufferQueue.poll();
+                                    if (oldestOutputBuffer != null) {
+                                        videoDecoder.releaseOutputBuffer(oldestOutputBuffer, false);
                                     }
                                 }
 
