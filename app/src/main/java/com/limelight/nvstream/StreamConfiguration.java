@@ -18,6 +18,13 @@ public class StreamConfiguration {
     public static final int STREAM_CFG_LOCAL = 0;
     public static final int STREAM_CFG_REMOTE = 1;
     public static final int STREAM_CFG_AUTO = 2;
+
+    // Mirrors the ENCFLG_* values in Limelight.h. These say what the client asks to have
+    // encrypted; a host that requires encryption enables it whatever we request here.
+    public static final int ENCFLG_NONE = 0x00000000;
+    public static final int ENCFLG_AUDIO = 0x00000001;
+    public static final int ENCFLG_VIDEO = 0x00000002;
+    public static final int ENCFLG_ALL = 0xFFFFFFFF;
     
     private NvApp app;
     private int width, height;
@@ -114,6 +121,11 @@ public class StreamConfiguration {
         
         public StreamConfiguration.Builder setSupportedVideoFormats(int supportedVideoFormats) {
             config.supportedVideoFormats = supportedVideoFormats;
+            return this;
+        }
+
+        public StreamConfiguration.Builder setEncryptionFlags(int encryptionFlags) {
+            config.encryptionFlags = encryptionFlags;
             return this;
         }
 
@@ -223,6 +235,11 @@ public class StreamConfiguration {
     /** @return the client display's refresh rate in hundredths of a Hz, for host-side pacing */
     public int getClientRefreshRateX100() {
         return clientRefreshRateX100;
+    }
+
+    /** @return the {@code ENCFLG_*} mask of streams this client asks to have encrypted */
+    public int getEncryptionFlags() {
+        return encryptionFlags;
     }
 
     /** @return full or limited colour range */

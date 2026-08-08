@@ -7,6 +7,7 @@ import android.os.Build;
 import android.preference.PreferenceManager;
 import android.view.Display;
 
+import com.limelight.nvstream.StreamConfiguration;
 import com.limelight.nvstream.jni.MoonBridge;
 
 /**
@@ -67,6 +68,7 @@ public class PreferenceConfiguration {
     static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
     private static final String USB_DRIVER_PREF_SRING = "checkbox_usb_driver";
     private static final String VIDEO_FORMAT_PREF_STRING = "video_format";
+    static final String ENCRYPTION_PREF_STRING = "list_encryption";
     private static final String LEGACY_DISABLE_FRAME_DROP_PREF_STRING = "checkbox_disable_frame_drop";
     private static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
     private static final String ENABLE_PIP_PREF_STRING = "checkbox_enable_pip";
@@ -103,6 +105,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
     private static final String DEFAULT_VIDEO_FORMAT = "auto";
+    static final String DEFAULT_ENCRYPTION = "audio";
 
     private static final boolean DEFAULT_ENABLE_HDR = false;
     private static final boolean DEFAULT_ENABLE_PIP = false;
@@ -143,6 +146,7 @@ public class PreferenceConfiguration {
     public int width, height, fps;
     public int bitrate;
     public FormatOption videoFormat;
+    public int encryptionFlags;
     public int deadzonePercentage;
     public boolean enforceDisplayMode;
     public boolean resumeWithoutConfirm;
@@ -361,6 +365,29 @@ public class PreferenceConfiguration {
         return getDefaultBitrate(
                 prefs.getString(RESOLUTION_PREF_STRING, DEFAULT_RESOLUTION),
                 prefs.getString(FPS_PREF_STRING, DEFAULT_FPS));
+    }
+
+    /**
+     * Maps the stored preference value to an {@code ENCFLG_*} mask.
+     *
+     * <p>Split out and static so it can be unit tested: {@link PreferenceConfiguration} itself
+     * needs a {@link Context} and cannot load on a JVM.
+     *
+     * @param value the stored string, or null if the preference has never been written
+     * @return the mask to request, defaulting to audio-only for anything unrecognised
+     */
+    static int getEncryptionFlagsValue(String value) {
+        if (value == null) {
+            value = DEFAULT_ENCRYPTION;
+        }
+
+        return switch (value) {
+            case "none" -> StreamConfiguration.ENCFLG_NONE;
+            case "all" -> StreamConfiguration.ENCFLG_ALL;
+            // "audio", plus anything unrecognised: match the upstream baseline rather than
+            // silently dropping encryption because a value was mistyped.
+            default -> StreamConfiguration.ENCFLG_AUDIO;
+        };
     }
 
     private static FormatOption getVideoFormatValue(Context context) {
@@ -582,6 +609,8 @@ public class PreferenceConfiguration {
         }
 
         config.videoFormat = getVideoFormatValue(context);
+        config.encryptionFlags = getEncryptionFlagsValue(
+                prefs.getString(ENCRYPTION_PREF_STRING, DEFAULT_ENCRYPTION));
         config.framePacing = getFramePacingValue(context);
 
         config.analogStickForScrolling = getAnalogStickForScrollingValue(context);

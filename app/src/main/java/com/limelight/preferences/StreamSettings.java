@@ -30,6 +30,7 @@ import android.view.ViewGroup;
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.binding.video.MediaCodecHelper;
+import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.UiHelper;
 
@@ -277,6 +278,17 @@ public class StreamSettings extends Activity {
 
             addPreferencesFromResource(R.xml.preferences);
             PreferenceScreen screen = getPreferenceScreen();
+
+            // Warn that encrypting video will be done in software on this device. The setting
+            // stays available - a user who wants it can have it and pay for it - so this appends
+            // to the summary rather than removing or disabling the preference.
+            if (!MoonBridge.hasFastAes()) {
+                Preference encryptionPref = findPreference(PreferenceConfiguration.ENCRYPTION_PREF_STRING);
+                if (encryptionPref != null) {
+                    encryptionPref.setSummary(getString(R.string.summary_encryption)
+                            + getString(R.string.summary_encryption_no_aes_warning));
+                }
+            }
 
             // Hide remote desktop mouse mode on NVIDIA SHIELD devices
             // (which support raw mouse input in pointer capture mode)

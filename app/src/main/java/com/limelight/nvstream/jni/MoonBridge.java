@@ -403,7 +403,15 @@ public class MoonBridge {
                                               int clientRefreshRateX100,
                                               byte[] riAesKey, byte[] riAesIv,
                                               int videoCapabilities,
-                                              int colorSpace, int colorRange);
+                                              int colorSpace, int colorRange,
+                                              int encryptionFlags);
+
+    /**
+     * @return true if this CPU has hardware AES, meaning encryption is cheap enough that
+     *         encrypting video is reasonable. Only used to warn in settings; it no longer
+     *         influences what the client requests.
+     */
+    public static native boolean hasFastAes();
 
     public static native void stopConnection();
 

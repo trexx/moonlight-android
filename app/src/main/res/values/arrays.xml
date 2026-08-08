@@ -44,6 +44,16 @@
     </string-array>
 
 
+    <string-array name="encryption_names">
+        <item>@string/encryption_none</item>
+        <item>@string/encryption_audio</item>
+        <item>@string/encryption_all</item>
+    </string-array>
+    <string-array name="encryption_values" translatable="false">
+        <item>none</item>
+        <item>audio</item>
+        <item>all</item>
+    </string-array>
     <string-array name="video_format_names">
         <item>@string/videoformat_auto</item>
         <item>@string/videoformat_av1always</item>

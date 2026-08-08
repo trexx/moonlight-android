@@ -477,6 +477,13 @@ hasFastAes() {
     }
 }
 
+// Exposed so the settings screen can warn that encrypting video here will be done in software.
+// It no longer decides anything on its own: the encryption flags come from the user's preference.
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_hasFastAes(JNIEnv *env, jclass clazz) {
+    return hasFastAes() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass clazz,
                                                            jstring address, jstring appVersion, jstring gfeVersion,
@@ -487,7 +494,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
                                                            jint clientRefreshRateX100,
                                                            jbyteArray riAesKey, jbyteArray riAesIv,
                                                            jint videoCapabilities,
-                                                           jint colorSpace, jint colorRange) {
+                                                           jint colorSpace, jint colorRange,
+                                                           jint encryptionFlags) {
     SERVER_INFORMATION serverInfo = {
             .address = (*env)->GetStringUTFChars(env, address, 0),
             .serverInfoAppVersion = (*env)->GetStringUTFChars(env, appVersion, 0),
@@ -505,7 +513,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
             .audioConfiguration = audioConfiguration,
             .supportedVideoFormats = supportedVideoFormats,
             .clientRefreshRateX100 = clientRefreshRateX100,
-            .encryptionFlags = ENCFLG_AUDIO,
+            .encryptionFlags = encryptionFlags,
             .colorSpace = colorSpace,
             .colorRange = colorRange
     };
@@ -519,11 +527,6 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
     (*env)->ReleaseByteArrayElements(env, riAesIv, riAesIvBuf, JNI_ABORT);
 
     BridgeVideoRendererCallbacks.capabilities = videoCapabilities;
-
-    // Enable all encryption features if the platform has fast AES support
-    if (hasFastAes()) {
-        streamConfig.encryptionFlags = ENCFLG_ALL;
-    }
 
     int ret = LiStartConnection(&serverInfo,
                                 &streamConfig,
