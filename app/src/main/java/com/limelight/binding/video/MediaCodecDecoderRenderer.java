@@ -31,6 +31,7 @@ import android.media.MediaCodec.CodecException;
 import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Looper;
 import android.os.PerformanceHintManager;
 import android.os.Process;
 import android.os.SystemClock;
@@ -123,6 +124,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private String glRenderer;
     private boolean foreground = true;
     private PerfOverlayListener perfListener;
+
+    // The overlay text is built here rather than on the decode thread that produces the numbers.
+    // Main looper because the listener updates a view, so this also removes the hop that
+    // Game.onPerfUpdate would otherwise have to make.
+    private final Handler overlayHandler = new Handler(Looper.getMainLooper());
 
     // Codec recovery. Escalating strategies, tried in order of how much they disturb the stream:
     // flush keeps the codec configured, restart stops and starts it, reset rebuilds it entirely.
@@ -1753,11 +1759,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Flip stats windows roughly every second
         if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
             if (perfListener.isPerfOverlayVisible()) {
-                VideoStats lastTwo = new VideoStats();
+                // Snapshot here, format on the main thread. This runs on the decode thread, and
+                // building the text meant a dozen resource lookups, three JNI stats calls, a
+                // TrafficStats sample and a StringBuilder on the frame path once a second.
+                //
+                // The snapshot is required regardless: activeWindowVideoStats is cleared a few
+                // lines below, so the formatter cannot be handed a live reference. The frame
+                // rates are computed here too, since they derive from the time elapsed since the
+                // window opened and would drift by however long the thread hop took.
+                final VideoStats lastTwo = new VideoStats();
                 lastTwo.add(lastWindowVideoStats);
                 lastTwo.add(activeWindowVideoStats);
-                VideoStatsFps fps = lastTwo.getFps();
-                String decoder;
+
+                final VideoStatsFps fps = lastTwo.getFps();
+                final String decoder;
 
                 if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
                     decoder = avcDecoder.getName();
@@ -1769,37 +1784,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     decoder = "(unknown)";
                 }
 
-                float decodeTimeMs = (float)lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
-                long rttInfo = MoonBridge.getEstimatedRttInfo();
-                StringBuilder sb = new StringBuilder();
-                sb.append(context.getString(R.string.perf_overlay_streamdetails, initialWidth + "x" + initialHeight, fps.totalFps)).append('\n');
-                sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
-                sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
-                sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
-                sb.append(context.getString(R.string.perf_overlay_netdrops,
-                        (float)lastTwo.framesLost / lastTwo.totalFrames * 100)).append('\n');
-                sb.append(context.getString(R.string.perf_overlay_netlatency,
-                        (int)(rttInfo >> 32), (int)rttInfo)).append('\n');
-                trafficStats.sample();
-                sb.append(context.getString(R.string.perf_overlay_bandwidth,
-                        trafficStats.getRxKBps() / 1024.f, trafficStats.getTxKBps() / 1024.f)).append('\n');
-                long[] videoRtpStats = MoonBridge.getRTPVideoStats();
-                long[] audioRtpStats = MoonBridge.getRTPAudioStats();
-                if (videoRtpStats != null && audioRtpStats != null) {
-                    sb.append(context.getString(R.string.perf_overlay_fec,
-                            videoRtpStats[MoonBridge.RTP_STAT_FEC_RECOVERED],
-                            audioRtpStats[MoonBridge.RTP_STAT_FEC_RECOVERED],
-                            videoRtpStats[MoonBridge.RTP_STAT_FEC_FAILED],
-                            audioRtpStats[MoonBridge.RTP_STAT_FEC_FAILED])).append('\n');
-                }
-                if (lastTwo.framesWithHostProcessingLatency > 0) {
-                    sb.append(context.getString(R.string.perf_overlay_hostprocessinglatency,
-                            (float)lastTwo.minHostProcessingLatency / 10,
-                            (float)lastTwo.maxHostProcessingLatency / 10,
-                            (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
-                }
-                sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
-                perfListener.onPerfUpdate(sb.toString());
+                overlayHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        perfListener.onPerfUpdate(buildPerfOverlayText(lastTwo, fps, decoder));
+                    }
+                });
             }
 
             globalVideoStats.add(activeWindowVideoStats);
@@ -2063,6 +2053,53 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         return MoonBridge.DR_OK;
+    }
+
+    /**
+     * Formats one overlay update from a snapshot of the window that just closed.
+     *
+     * <p>Called on {@link #overlayHandler}, never on the decode thread. Everything expensive
+     * lives here on purpose: the resource lookups, the three JNI stats calls, the
+     * {@link TrafficStats} sample and the string building. The caller does only the snapshot,
+     * because {@code activeWindowVideoStats} is cleared immediately afterwards.
+     *
+     * @param lastTwo the last two windows summed, already detached from the live counters
+     * @param fps     rates derived at snapshot time, so the thread hop cannot skew them
+     * @param decoder the decoder name for the format actually in use
+     */
+    private String buildPerfOverlayText(VideoStats lastTwo, VideoStatsFps fps, String decoder) {
+        float decodeTimeMs = (float)lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
+        long rttInfo = MoonBridge.getEstimatedRttInfo();
+        StringBuilder sb = new StringBuilder();
+        sb.append(context.getString(R.string.perf_overlay_streamdetails, initialWidth + "x" + initialHeight, fps.totalFps)).append('\n');
+        sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
+        sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
+        sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
+        sb.append(context.getString(R.string.perf_overlay_netdrops,
+                (float)lastTwo.framesLost / lastTwo.totalFrames * 100)).append('\n');
+        sb.append(context.getString(R.string.perf_overlay_netlatency,
+                (int)(rttInfo >> 32), (int)rttInfo)).append('\n');
+        trafficStats.sample();
+        sb.append(context.getString(R.string.perf_overlay_bandwidth,
+                trafficStats.getRxKBps() / 1024.f, trafficStats.getTxKBps() / 1024.f)).append('\n');
+        long[] videoRtpStats = MoonBridge.getRTPVideoStats();
+        long[] audioRtpStats = MoonBridge.getRTPAudioStats();
+        if (videoRtpStats != null && audioRtpStats != null) {
+            sb.append(context.getString(R.string.perf_overlay_fec,
+                    videoRtpStats[MoonBridge.RTP_STAT_FEC_RECOVERED],
+                    audioRtpStats[MoonBridge.RTP_STAT_FEC_RECOVERED],
+                    videoRtpStats[MoonBridge.RTP_STAT_FEC_FAILED],
+                    audioRtpStats[MoonBridge.RTP_STAT_FEC_FAILED])).append('\n');
+        }
+        if (lastTwo.framesWithHostProcessingLatency > 0) {
+            sb.append(context.getString(R.string.perf_overlay_hostprocessinglatency,
+                    (float)lastTwo.minHostProcessingLatency / 10,
+                    (float)lastTwo.maxHostProcessingLatency / 10,
+                    (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
+        }
+        sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
+
+        return sb.toString();
     }
 
     /**
