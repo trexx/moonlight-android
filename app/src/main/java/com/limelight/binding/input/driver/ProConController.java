@@ -115,8 +115,13 @@ public class ProConController extends AbstractController {
 
             notifyDeviceAdded();
 
+            // Both hoisted out of the loop below. This runs at roughly 120 Hz per controller, and
+            // a fresh byte[] plus a wrapper object on every read is the only allocation on a path
+            // that otherwise has none — handleRead() itself allocates nothing.
+            byte[] buffer = new byte[PACKET_SIZE];
+            ByteBuffer bufferView = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN);
+
             while (!Thread.currentThread().isInterrupted() && !stopped) {
-                byte[] buffer = new byte[PACKET_SIZE];
                 int res;
                 do {
                     long lastMillis = SystemClock.uptimeMillis();
@@ -138,7 +143,13 @@ public class ProConController extends AbstractController {
                     break;
                 }
 
-                if (handleRead(ByteBuffer.wrap(buffer, 0, res).order(ByteOrder.LITTLE_ENDIAN))) {
+                // Re-window the view over however much this read produced, matching what
+                // wrap(buffer, 0, res) used to give: position 0, limit res. Byte order is set
+                // once at construction and survives, since neither call touches it.
+                bufferView.clear();
+                bufferView.limit(res);
+
+                if (handleRead(bufferView)) {
                     reportInput();
                     reportMotion();
                 }
