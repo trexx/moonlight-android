@@ -30,21 +30,21 @@ versus touch devices, and the audio work is Android TV specific.
 Entry points changed, so the first two are the important regression checks rather than
 feature checks.
 
-- [ ] **Back opens the menu** instead of ending the stream.
-- [ ] **Disconnect** in the menu actually ends the stream and returns to the app.
-- [ ] **Cancel** dismisses and returns to the stream with input still working.
+- [X] **Back opens the menu** instead of ending the stream.
+- [X] **Disconnect** in the menu actually ends the stream and returns to the app.
+- [X] **Cancel** dismisses and returns to the stream with input still working.
 - [ ] **Holding Start on a controller opens the menu.** (This replaced the direct mouse
       emulation toggle.)
 - [ ] **Mouse emulation toggle inside the menu** still works and still shows its toast.
-- [ ] **Toggle Performance Overlay** works mid-stream, and works **repeatedly** — on, off,
+- [X] **Toggle Performance Overlay** works mid-stream, and works **repeatedly** — on, off,
       on again. This is the whole point of the feature.
-- [ ] With the **performance overlay setting enabled**, the overlay is visible from stream
+- [X] With the **performance overlay setting enabled**, the overlay is visible from stream
       start. (Deliberate deviation from upstream PR #1219, which deletes the setting.)
-- [ ] **Toggle On-screen Keyboard** from the menu opens the IME. It runs on a focus retry
+- [X] **Toggle On-screen Keyboard** from the menu opens the IME. It runs on a focus retry
       loop, so watch for it firing while the dialog still has focus. This used to do nothing
       at all on a fresh install — it needed the since-removed "Soft keyboard text input"
       setting — so check it on freshly cleared app data, not just a configured device.
-- [ ] **The d-pad drives the keyboard, not the stream behind it.** This is the fix for the
+- [X] **The d-pad drives the keyboard, not the stream behind it.** This is the fix for the
       original symptom: navigation used to move focus in the game while the keyboard sat
       there unfocused. `StreamView.onKeyPreIme()` now stands aside while
       `imeVisible` is set.
@@ -53,7 +53,7 @@ feature checks.
 - [ ] **Backspace deletes on the host** (approximated as backspaces, so watch for it over- or
       under-deleting after autocorrect).
 - [ ] **Back dismisses the keyboard** rather than opening the game menu or ending the stream.
-- [ ] **Input returns to the host once the keyboard is dismissed.** The important regression:
+- [X] **Input returns to the host once the keyboard is dismissed.** The important regression:
       `imeVisible` is driven by the window insets listener, so if it ever sticks on, *all*
       keys and gamepad buttons stop reaching the host. Press the d-pad and several controller
       buttons after closing the keyboard and confirm the game sees them.
@@ -128,7 +128,7 @@ pad. Test both configurations — the second block is the regression check.
 Off by default. The first item is what makes this safe to ship; the rest only matter once
 it is switched on.
 
-- [ ] **Setting off: audio behaviour is byte-for-byte unchanged.** No new logging, no
+- [X] **Setting off: audio behaviour is byte-for-byte unchanged.** No new logging, no
       change in latency, no change in device selection.
 - [x] Setting on, **stereo**: audio plays, and stays in sync across a long session — 30+
       minutes — with no dropouts, crackle or drift. *(Verified on the Homatics Box R 4K.)*
