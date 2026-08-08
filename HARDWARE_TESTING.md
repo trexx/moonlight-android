@@ -110,6 +110,11 @@ pad. Test both configurations — the second block is the regression check.
       Ryujinx.
 - [ ] Unplug and replug mid-stream: the controller comes back, and the app does not leak the
       USB interface or crash.
+- [ ] **Buttons, sticks and motion all still work after the read-loop buffer was hoisted.**
+      The USB read now reuses one ByteBuffer instead of allocating per read. handleRead()
+      only uses absolute get(int), so nothing should carry between reads — but this landed
+      without a controller to test on, and a stale or mis-windowed buffer would show up as
+      stuck inputs or garbage motion.
 
 **With "Override native Xbox gamepad support" off (default):**
 
@@ -125,8 +130,8 @@ it is switched on.
 
 - [ ] **Setting off: audio behaviour is byte-for-byte unchanged.** No new logging, no
       change in latency, no change in device selection.
-- [ ] Setting on, **stereo**: audio plays, and stays in sync across a long session — 30+
-      minutes — with no dropouts, crackle or drift.
+- [x] Setting on, **stereo**: audio plays, and stays in sync across a long session — 30+
+      minutes — with no dropouts, crackle or drift. *(Verified on the Homatics Box R 4K.)*
 - [ ] Setting on, **5.1 or 7.1**: **every speaker produces sound.** Use Windows'
       per-speaker test (Sound → Speakers → Configure → Test). This is the exact check that
       exposed the silent-surround-channels bug in ClassicOldSong #567.
@@ -204,6 +209,27 @@ rather than trusting your ears alone: a host sending no audio at all looks ident
       handling for non-GCM contexts, which is the pre-Gen 7 input encryption path. Hosts new
       enough to use Gen 7+ input will not exercise it, so this only proves out against an
       older host.
+- [ ] **Decrypt-failure counters read zero.** The end-of-stream summary now ends both RTP
+      lines with a decrypt-failed count, and the overlay shows a line only when one is
+      non-zero — so on a healthy stream that line should be *absent*, not zero. To prove the
+      counter actually moves, remove `MBEDTLS_CIPHER_PADDING_PKCS7` from
+      `moonlight_mbedtls_config.h`, rebuild, and confirm the audio count climbs.
+
+### Stream encryption setting
+
+Encryption is now chosen explicitly instead of being decided by `hasFastAes()`. What the
+client asks for is only half the negotiation — the host can still require it — so check the
+log rather than assuming, per the commands above.
+
+- [ ] **Audio only (default):** audio encrypted, video not.
+- [ ] **None:** no encryption requested. If the host requires it anyway, expect
+      `Enabling audio encryption by host request despite client opt-out` — that line appearing
+      is proof the opt-out path works, not a failure.
+- [ ] **Audio and video:** both encrypted, and the stream still performs acceptably. On
+      hardware without AES acceleration this is the setting the warning is about.
+- [ ] **The warning appears in settings** on a device where `hasFastAes()` is false, and the
+      option remains selectable rather than disabled.
+- [ ] Audio still works across all three, since changing this changes which cipher path runs.
 
 ---
 

@@ -2079,6 +2079,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     audioRtpStats[MoonBridge.RTP_STAT_FEC_RECOVERED],
                     videoRtpStats[MoonBridge.RTP_STAT_FEC_FAILED],
                     audioRtpStats[MoonBridge.RTP_STAT_FEC_FAILED])).append('\n');
+
+            // Only shown once something has actually failed. A healthy stream reads zero
+            // forever, and a line that is always zero stops being read.
+            long videoDecryptFailed = videoRtpStats[MoonBridge.RTP_STAT_DECRYPT_FAILED];
+            long audioDecryptFailed = audioRtpStats[MoonBridge.RTP_STAT_DECRYPT_FAILED];
+            if (videoDecryptFailed != 0 || audioDecryptFailed != 0) {
+                sb.append(context.getString(R.string.perf_overlay_decryptfail,
+                        videoDecryptFailed, audioDecryptFailed)).append('\n');
+            }
         }
         if (lastTwo.framesWithHostProcessingLatency > 0) {
             sb.append(context.getString(R.string.perf_overlay_hostprocessinglatency,
@@ -2316,16 +2325,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             long[] videoRtp = MoonBridge.getRTPVideoStats();
             long[] audioRtp = MoonBridge.getRTPAudioStats();
             if (videoRtp != null) {
-                str += "Video RTP packets/FEC/recovered/failed/OOS/invalid: "+
+                str += "Video RTP packets/FEC/recovered/failed/OOS/invalid/decrypt-failed: "+
                         videoRtp[MoonBridge.RTP_STAT_PACKETS]+", "+videoRtp[MoonBridge.RTP_STAT_FEC]+", "+
                         videoRtp[MoonBridge.RTP_STAT_FEC_RECOVERED]+", "+videoRtp[MoonBridge.RTP_STAT_FEC_FAILED]+", "+
-                        videoRtp[MoonBridge.RTP_STAT_OOS]+", "+videoRtp[MoonBridge.RTP_STAT_INVALID]+DELIMITER;
+                        videoRtp[MoonBridge.RTP_STAT_OOS]+", "+videoRtp[MoonBridge.RTP_STAT_INVALID]+", "+
+                        videoRtp[MoonBridge.RTP_STAT_DECRYPT_FAILED]+DELIMITER;
             }
             if (audioRtp != null) {
-                str += "Audio RTP packets/FEC/recovered/failed/OOS/invalid: "+
+                str += "Audio RTP packets/FEC/recovered/failed/OOS/invalid/decrypt-failed: "+
                         audioRtp[MoonBridge.RTP_STAT_PACKETS]+", "+audioRtp[MoonBridge.RTP_STAT_FEC]+", "+
                         audioRtp[MoonBridge.RTP_STAT_FEC_RECOVERED]+", "+audioRtp[MoonBridge.RTP_STAT_FEC_FAILED]+", "+
-                        audioRtp[MoonBridge.RTP_STAT_OOS]+", "+audioRtp[MoonBridge.RTP_STAT_INVALID]+DELIMITER;
+                        audioRtp[MoonBridge.RTP_STAT_OOS]+", "+audioRtp[MoonBridge.RTP_STAT_INVALID]+", "+
+                        audioRtp[MoonBridge.RTP_STAT_DECRYPT_FAILED]+DELIMITER;
             }
             str += "Average end-to-end client latency: "+renderer.getAverageEndToEndLatency()+"ms"+DELIMITER;
             str += "Average hardware decoder latency: "+renderer.getAverageDecoderLatency()+"ms"+DELIMITER;

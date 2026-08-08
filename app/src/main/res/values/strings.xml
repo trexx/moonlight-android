@@ -98,6 +98,7 @@
     <string name="perf_overlay_netdrops">Frames dropped by your network connection: %1$.2f%%</string>
     <string name="perf_overlay_netlatency">Average network latency: %1$d ms (variance: %2$d ms)</string>
     <string name="perf_overlay_fec">FEC recovered video/audio: %1$d/%2$d (unrecoverable: %3$d/%4$d)</string>
+    <string name="perf_overlay_decryptfail">Decrypt failures video/audio: %1$d/%2$d</string>
     <string name="perf_overlay_dectime">Average decoding time: %1$.2f ms</string>
 
     <!-- AppList activity -->

@@ -467,6 +467,9 @@ public class MoonBridge {
     public static final int RTP_STAT_OOS           = 4;
     public static final int RTP_STAT_INVALID       = 5;
     public static final int RTP_STAT_FEC_INVALID   = 6;
+    // Packets that arrived but could not be decrypted. Read against RTP_STAT_PACKETS, which
+    // counts every packet before decryption runs and so is the denominator.
+    public static final int RTP_STAT_DECRYPT_FAILED = 7;
 
     // Counters are cumulative for the lifetime of the stream. Safe to call at any
     // time - moonlight-common-c returns a zeroed struct when no stream is active.

@@ -25,10 +25,13 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# submodule path -> patch to apply to it, both relative to the repository root.
+# submodule path -> patches to apply to it, in order, all relative to the repository root.
+# Order matters: a later patch may depend on an earlier one having applied.
 PATCHES = {
-    "app/src/main/jni/moonlight-core/moonlight-common-c":
+    "app/src/main/jni/moonlight-core/moonlight-common-c": [
         "patches/moonlight-common-c/0001-mbedtls3-cbc-pkcs7-and-iv.patch",
+        "patches/moonlight-common-c/0002-count-decrypt-failures.patch",
+    ],
 }
 
 
@@ -72,8 +75,9 @@ def apply_patch(submodule, patch):
 
 
 def main():
-    for submodule, patch in PATCHES.items():
-        apply_patch(submodule, patch)
+    for submodule, patches in PATCHES.items():
+        for patch in patches:
+            apply_patch(submodule, patch)
 
 
 if __name__ == "__main__":

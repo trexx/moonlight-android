@@ -164,6 +164,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_getRTPAudioStats(JNIEnv *env, jclass 
             (jlong)stats->packetCountOOS,
             (jlong)stats->packetCountInvalid,
             (jlong)stats->packetCountFecInvalid,
+            (jlong)stats->packetCountDecryptFailed,
     };
 
     jlongArray array = (*env)->NewLongArray(env, sizeof(values) / sizeof(values[0]));
@@ -184,6 +185,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_getRTPVideoStats(JNIEnv *env, jclass 
             (jlong)stats->packetCountOOS,
             (jlong)stats->packetCountInvalid,
             (jlong)stats->packetCountFecInvalid,
+            (jlong)stats->packetCountDecryptFailed,
     };
 
     jlongArray array = (*env)->NewLongArray(env, sizeof(values) / sizeof(values[0]));
