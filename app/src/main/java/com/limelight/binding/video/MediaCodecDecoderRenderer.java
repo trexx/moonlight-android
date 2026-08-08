@@ -6,7 +6,6 @@ import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.jcodec.codecs.h264.H264Utils;
@@ -182,7 +181,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Decoded frames waiting for a vsync to present on, in balanced pacing mode only. Bounded at
     // two: enough to absorb jitter, few enough not to starve the decoder of output buffers or add
     // a frame of latency.
-    private LinkedBlockingQueue<Integer> outputBufferQueue = new LinkedBlockingQueue<>();
+    private final OutputBufferRing outputBufferQueue = new OutputBufferRing(OUTPUT_BUFFER_QUEUE_LIMIT);
     private static final int OUTPUT_BUFFER_QUEUE_LIMIT = 2;
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
@@ -1152,8 +1151,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
             // by holding onto them for too long. This also ensures we will have that 1 extra
             // frame of buffer to smooth over network/rendering jitter.
-            Integer nextOutputBuffer = outputBufferQueue.poll();
-            if (nextOutputBuffer != null) {
+            int nextOutputBuffer = outputBufferQueue.poll();
+            if (nextOutputBuffer != OutputBufferRing.EMPTY) {
                 try {
                     videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
 
@@ -1371,23 +1370,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 // run for a while (if there is a huge mismatch between stream FPS and display
                                 // refresh rate).
                                 //
-                                // poll() rather than take(), and >= rather than ==: this thread is the only
-                                // producer, so a take() that finds the queue empty would block forever. The
-                                // Choreographer thread can drain both entries between the size() check and
-                                // the removal - two vsyncs presenting one frame each is ordinary at 60 FPS on
-                                // a 60 Hz display - and there is nobody else to refill it. That would stall
-                                // the decoder and, because this thread would never reach the
-                                // doCodecRecoveryIfRequired() call below, deadlock any concurrent recovery
-                                // until prepareForStop() interrupts us.
-                                if (outputBufferQueue.size() >= OUTPUT_BUFFER_QUEUE_LIMIT) {
-                                    Integer oldestOutputBuffer = outputBufferQueue.poll();
-                                    if (oldestOutputBuffer != null) {
-                                        videoDecoder.releaseOutputBuffer(oldestOutputBuffer, false);
-                                    }
+                                // Evicting and inserting are one call, so there is no window between
+                                // them for the consumer to empty the ring. See OutputBufferRing for what
+                                // used to go wrong here.
+                                int evictedIndex = outputBufferQueue.offerEvictingOldest(lastIndex);
+                                if (evictedIndex != OutputBufferRing.EMPTY) {
+                                    videoDecoder.releaseOutputBuffer(evictedIndex, false);
                                 }
-
-                                // Add this buffer
-                                outputBufferQueue.add(lastIndex);
                             }
 
                             // Add delta time to the totals (excluding probable outliers)
