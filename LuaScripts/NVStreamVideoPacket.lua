@@ -1,6 +1,13 @@
 -- Nvidia Streaming Video Packet Dissector
 -- Version: 1.0
 -- Diego Waxemberg
+--
+-- Wireshark dissector for the UDP video stream's packet header: frame number, packet index within
+-- the frame, and payload length. A debugging aid, not part of the app - useful for telling packet
+-- loss apart from a decoder problem when a stream breaks up.
+--
+-- The header was reverse engineered by observation, so the fields named 'garbage' are simply ones
+-- whose purpose was never established, not padding known to be unused.
 
 -- video header
 local nvHeader_frame = ProtoField.uint32("nv.frame", "Frame", base.HEX) -- 4 bytes
