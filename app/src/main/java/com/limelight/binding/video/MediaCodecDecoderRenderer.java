@@ -291,6 +291,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // some decoders (at least Qualcomm's Snapdragon 805) don't properly report support
         // for even required levels of HEVC.
         MediaCodecInfo hevcDecoderInfo = MediaCodecHelper.findProbableSafeDecoder("video/hevc", -1);
+
+        // Refuse decoders that are known to wedge mid-stream, ahead of the whitelist check below.
+        // This is deliberately not one of the "not whitelisted, but justified" cases: HDR, over-4K
+        // and an explicit user request can all override the whitelist, and none of them are worth
+        // a stream that freezes. Falling back to H.264 is the only useful thing left to do.
+        if (hevcDecoderInfo != null && MediaCodecHelper.isKnownBrokenHevcDecoder(hevcDecoderInfo)) {
+            LimeLog.severe("Refusing HEVC on " + hevcDecoderInfo.getName() + ": this decoder is" +
+                    " known to stop producing output mid-stream and never recover. Falling back to" +
+                    " H.264. See moonlight-stream/moonlight-android#1504.");
+            return null;
+        }
+
         if (hevcDecoderInfo != null) {
             if (!MediaCodecHelper.decoderIsWhitelistedForHevc(hevcDecoderInfo)) {
                 LimeLog.info("Found HEVC decoder, but it's not whitelisted - "+hevcDecoderInfo.getName());
@@ -1365,8 +1377,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 }
                             }
 
-                            // Add delta time to the totals (excluding probable outliers)
-                            long delta = SystemClock.uptimeMillis() - (presentationTimeUs / 1000);
+                            // Add delta time to the totals (excluding probable outliers).
+                            //
+                            // Measured against the submit time we recorded ourselves, not against
+                            // the presentation timestamp: the PTS carries moonlight-common-c's
+                            // clock, and subtracting it from SystemClock put the result in no
+                            // timebase at all. Every sample then failed the sanity check below and
+                            // the overlay reported a flat 0.00 ms while the decoder was really
+                            // taking several milliseconds a frame - and kept reporting 0.00
+                            // through a decoder hang, which is when the number mattered most.
+                            long delta = takeDecodeStartDelta(presentationTimeUs);
                             if (delta >= 0 && delta < 1000) {
                                 activeWindowVideoStats.decoderTimeMs += delta;
                                 if (!USE_FRAME_RENDER_TIME) {
@@ -1397,6 +1417,45 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         rendererThread.setName("Video - Renderer (MediaCodec)");
         rendererThread.setPriority(Thread.NORM_PRIORITY + 2);
         rendererThread.start();
+    }
+
+    // Submit times for frames the decoder still holds, so decode latency can be measured in one
+    // clock. Sized well past any sane decoder's depth and never allocated on the hot path: both
+    // operations are a bounded walk over a fixed array, which costs less than the map lookup the
+    // obvious implementation would need.
+    private static final int DECODE_START_SLOTS = 16;
+    private final long[] decodeStartPtsUs = new long[DECODE_START_SLOTS];
+    private final long[] decodeStartUptimeMs = new long[DECODE_START_SLOTS];
+    private int decodeStartPos;
+
+    {
+        // -1 rather than the default 0, so an empty slot can never match a real timestamp.
+        java.util.Arrays.fill(decodeStartPtsUs, -1);
+    }
+
+    /** Records when a frame went into the decoder, keyed by the timestamp it was submitted with. */
+    private void recordDecodeStart(long timestampUs) {
+        decodeStartPtsUs[decodeStartPos] = timestampUs;
+        decodeStartUptimeMs[decodeStartPos] = SystemClock.uptimeMillis();
+        decodeStartPos = (decodeStartPos + 1) % DECODE_START_SLOTS;
+    }
+
+    /**
+     * @return milliseconds the decoder held this frame, or -1 if its submit time is no longer
+     *         known - which happens after a flush, or if the decoder buffers more frames than
+     *         there are slots. Callers treat -1 as "no sample", so it is simply not counted.
+     */
+    private long takeDecodeStartDelta(long timestampUs) {
+        for (int i = 0; i < DECODE_START_SLOTS; i++) {
+            if (decodeStartPtsUs[i] == timestampUs) {
+                // Clear the slot so a stale entry can't match a later frame that happens to
+                // reuse the timestamp after a flush resets the sequence.
+                decodeStartPtsUs[i] = -1;
+                return SystemClock.uptimeMillis() - decodeStartUptimeMs[i];
+            }
+        }
+
+        return -1;
     }
 
     /**
@@ -1622,6 +1681,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         boolean codecRecovered;
 
         try {
+            recordDecodeStart(timestampUs);
+
             videoDecoder.queueInputBuffer(nextInputBufferIndex,
                     0, nextInputBuffer.position(),
                     timestampUs, codecFlags);
