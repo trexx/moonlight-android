@@ -264,11 +264,15 @@ public class StreamSettings extends Activity {
             addPreferencesFromResource(R.xml.preferences);
             PreferenceScreen screen = getPreferenceScreen();
 
-            // hide on-screen controls category on non touch screen devices
-            if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_TOUCHSCREEN)) {
-                PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_onscreen_controls");
-                screen.removePreference(category);
+            // Warn that encrypting video will be done in software on this device. The setting
+            // stays available - a user who wants it can have it and pay for it - so this appends
+            // to the summary rather than removing or disabling the preference.
+            if (!MoonBridge.hasFastAes()) {
+                Preference encryptionPref = findPreference(PreferenceConfiguration.ENCRYPTION_PREF_STRING);
+                if (encryptionPref != null) {
+                    encryptionPref.setSummary(getString(R.string.summary_encryption)
+                            + getString(R.string.summary_encryption_no_aes_warning));
+                }
             }
 
             // Hide remote desktop mouse mode on pre-Oreo (which doesn't have pointer capture)

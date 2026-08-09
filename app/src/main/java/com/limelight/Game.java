@@ -11,7 +11,6 @@ import com.limelight.binding.input.touch.AbsoluteTouchContext;
 import com.limelight.binding.input.touch.RelativeTouchContext;
 import com.limelight.binding.input.driver.UsbDriverService;
 import com.limelight.binding.input.touch.TouchContext;
-import com.limelight.binding.input.virtual_controller.VirtualController;
 import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
 import com.limelight.binding.video.MediaCodecHelper;
@@ -22,7 +21,6 @@ import com.limelight.nvstream.StreamConfiguration;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
-import com.limelight.nvstream.input.ControllerPacket;
 import com.limelight.nvstream.input.KeyboardPacket;
 import com.limelight.nvstream.input.MouseButtonPacket;
 import com.limelight.nvstream.jni.MoonBridge;
@@ -105,7 +103,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     private ControllerHandler controllerHandler;
     private KeyboardTranslator keyboardTranslator;
-    private VirtualController virtualController;
 
     private PreferenceConfiguration prefConfig;
     private SharedPreferences tombstonePrefs;
@@ -421,11 +418,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             // of gamepads removed and replugged at runtime.
             gamepadMask = 1;
         }
-        if (prefConfig.onscreenController) {
-            // If we're using OSC, always set at least gamepad 1.
-            gamepadMask |= 1;
-        }
-
         // Set to the optimal mode for streaming
         float displayRefreshRate = prepareDisplayForRendering();
         LimeLog.info("Display refresh rate: "+displayRefreshRate);
@@ -494,14 +486,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
         }
 
-        if (prefConfig.onscreenController) {
-            // create virtual onscreen controller
-            virtualController = new VirtualController(controllerHandler,
-                    (FrameLayout)streamView.getParent(),
-                    this);
-            virtualController.refreshLayout();
-            virtualController.show();
-        }
 
         if (prefConfig.usbDriver) {
             // Start the USB driver
@@ -570,11 +554,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // Set requested orientation for possible new screen size
         setPreferredOrientationForCurrentDisplay();
-
-        if (virtualController != null) {
-            // Refresh layout of OSC for possible new screen size
-            virtualController.refreshLayout();
-        }
     }
 
     public void setMetaKeyCaptureState(boolean enabled) {
@@ -929,10 +908,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         SpinnerDialog.closeDialogs(this);
         Dialog.closeDialogs();
-
-        if (virtualController != null) {
-            virtualController.hide();
-        }
 
         if (conn != null) {
             int videoFormat = decoderRenderer.getActiveVideoFormat();
@@ -1829,13 +1804,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             // This case is for fingers
             else
             {
-                if (virtualController != null &&
-                        (virtualController.getControllerMode() == VirtualController.ControllerMode.MoveButtons ||
-                         virtualController.getControllerMode() == VirtualController.ControllerMode.ResizeButtons)) {
-                    // Ignore presses when the virtual controller is being configured
-                    return true;
-                }
-
                 // If this is the parent view, we'll offset our coordinates to appear as if they
                 // are relative to the StreamView like our StreamView touch events are.
                 float xOffset, yOffset;

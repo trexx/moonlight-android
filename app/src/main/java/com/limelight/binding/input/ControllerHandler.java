@@ -395,11 +395,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
         }
 
-        if (PreferenceConfiguration.readPreferences(context).onscreenController) {
-            LimeLog.info("Counting OSC gamepad");
-            mask |= 1;
-        }
-
         LimeLog.info("Enumerated "+count+" gamepads");
         return mask;
     }
@@ -1065,7 +1060,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
     private short getActiveControllerMask() {
         if (prefConfig.multiController) {
-            return (short)(currentControllers | initialControllers | (prefConfig.onscreenController ? 1 : 0));
+            return (short)(currentControllers | initialControllers);
         }
         else {
             // Only Player 1 is active with multi-controller disabled
@@ -2786,24 +2781,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         return true;
     }
 
-    public void reportOscState(int buttonFlags,
-                               short leftStickX, short leftStickY,
-                               short rightStickX, short rightStickY,
-                               byte leftTrigger, byte rightTrigger) {
-        defaultContext.leftStickX = leftStickX;
-        defaultContext.leftStickY = leftStickY;
-
-        defaultContext.rightStickX = rightStickX;
-        defaultContext.rightStickY = rightStickY;
-
-        defaultContext.leftTrigger = leftTrigger;
-        defaultContext.rightTrigger = rightTrigger;
-
-        defaultContext.inputMap = buttonFlags;
-
-        sendControllerInputPacket(defaultContext);
-    }
-
+    /** {@inheritDoc} Input from a controller driven by our own USB drivers rather than by Android. */
     @Override
     public void reportControllerState(int controllerId, int buttonFlags,
                                       float leftStickX, float leftStickY,
