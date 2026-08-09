@@ -16,42 +16,19 @@ android {
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
         ndk.debugSymbolLevel = 'FULL'
-    }
 
-    flavorDimensions.add("root")
+        // Both ARM ABIs are required by the target hardware and neither can be dropped:
+        // arm64-v8a for the NVIDIA Shield TV, armeabi-v7a for the Homatics Box R 4K, which
+        // runs a 32-bit userspace despite its 64-bit Amlogic S905X4. x86/x86_64 have no
+        // consumer, since no Android TV box or phone is x86.
+        ndk.abiFilters 'arm64-v8a', 'armeabi-v7a'
+    }
 
     buildFeatures {
+        // BuildConfig.DEBUG gates verbose diagnostics; resValues supplies the per-build-type app
+        // label. Both are off by default in AGP 8+, so they have to be asked for.
         buildConfig = true
-    }
-
-    productFlavors {
-        root {
-            // Android O has native mouse capture, so don't show the rooted
-            // version to devices running O on the Play Store.
-            maxSdk 25
-
-            externalNativeBuild {
-                ndkBuild {
-                    arguments "PRODUCT_FLAVOR=root"
-                }
-            }
-
-            applicationId "com.limelight.root"
-            dimension "root"
-            buildConfigField "boolean", "ROOT_BUILD", "true"
-        }
-
-        nonRoot {
-            externalNativeBuild {
-                ndkBuild {
-                    arguments "PRODUCT_FLAVOR=nonRoot"
-                }
-            }
-
-            applicationId "com.limelight"
-            dimension "root"
-            buildConfigField "boolean", "ROOT_BUILD", "false"
-        }
+        resValues = true
     }
 
     compileOptions {
@@ -85,7 +62,6 @@ android {
         debug {
             applicationIdSuffix ".debug"
             resValue "string", "app_label", "Moonlight (Debug)"
-            resValue "string", "app_label_root", "Moonlight (Root Debug)"
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
@@ -123,7 +99,6 @@ android {
             // TL;DR: Leave the following line alone!
             applicationIdSuffix ".unofficial"
             resValue "string", "app_label", "Moonlight"
-            resValue "string", "app_label_root", "Moonlight (Root)"
 
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'

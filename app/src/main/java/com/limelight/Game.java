@@ -10,7 +10,6 @@ import com.limelight.binding.input.capture.InputCaptureProvider;
 import com.limelight.binding.input.touch.AbsoluteTouchContext;
 import com.limelight.binding.input.touch.RelativeTouchContext;
 import com.limelight.binding.input.driver.UsbDriverService;
-import com.limelight.binding.input.evdev.EvdevListener;
 import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.input.virtual_controller.VirtualController;
 import com.limelight.binding.video.CrashListener;
@@ -89,9 +88,9 @@ import java.util.Locale;
 
 
 public class Game extends Activity implements SurfaceHolder.Callback,
-        OnGenericMotionListener, OnTouchListener, NvConnectionListener, EvdevListener,
-        OnSystemUiVisibilityChangeListener, GameGestures, StreamView.InputCallbacks,
-        PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
+        OnGenericMotionListener, OnTouchListener, NvConnectionListener,
+        GameGestures, StreamView.InputCallbacks,
+        PerfOverlayListener, View.OnKeyListener {
     private int lastButtonState = 0;
 
     // Only 2 touches are supported
@@ -271,7 +270,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         performanceOverlayView = findViewById(R.id.performanceOverlay);
 
-        inputCaptureProvider = InputCaptureManager.getInputCaptureProvider(this, this);
+        inputCaptureProvider = InputCaptureManager.getInputCaptureProvider(this);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             streamView.setOnCapturedPointerListener(new View.OnCapturedPointerListener() {
@@ -2552,89 +2551,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
-    @Override
-    public void mouseMove(int deltaX, int deltaY) {
-        conn.sendMouseMove((short) deltaX, (short) deltaY);
-    }
-
-    @Override
-    public void mouseButtonEvent(int buttonId, boolean down) {
-        byte buttonIndex;
-
-        switch (buttonId)
-        {
-        case EvdevListener.BUTTON_LEFT:
-            buttonIndex = MouseButtonPacket.BUTTON_LEFT;
-            break;
-        case EvdevListener.BUTTON_MIDDLE:
-            buttonIndex = MouseButtonPacket.BUTTON_MIDDLE;
-            break;
-        case EvdevListener.BUTTON_RIGHT:
-            buttonIndex = MouseButtonPacket.BUTTON_RIGHT;
-            break;
-        case EvdevListener.BUTTON_X1:
-            buttonIndex = MouseButtonPacket.BUTTON_X1;
-            break;
-        case EvdevListener.BUTTON_X2:
-            buttonIndex = MouseButtonPacket.BUTTON_X2;
-            break;
-        default:
-            LimeLog.warning("Unhandled button: "+buttonId);
-            return;
-        }
-
-        if (down) {
-            conn.sendMouseButtonDown(buttonIndex);
-        }
-        else {
-            conn.sendMouseButtonUp(buttonIndex);
-        }
-    }
-
-    @Override
-    public void mouseVScroll(byte amount) {
-        conn.sendMouseScroll(amount);
-    }
-
-    @Override
-    public void mouseHScroll(byte amount) {
-        conn.sendMouseHScroll(amount);
-    }
-
-    @Override
-    public void keyboardEvent(boolean buttonDown, short keyCode) {
-        short keyMap = keyboardTranslator.translate(keyCode, -1);
-        if (keyMap != 0) {
-            // handleSpecialKeys() takes the Android keycode
-            if (handleSpecialKeys(keyCode, buttonDown)) {
-                return;
-            }
-
-            if (buttonDown) {
-                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_DOWN, getModifierState(), (byte)0);
-            }
-            else {
-                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_UP, getModifierState(), (byte)0);
-            }
-        }
-    }
-
-    @Override
-    public void onSystemUiVisibilityChange(int visibility) {
-        // Don't do anything if we're not connected
-        if (!connected) {
-            return;
-        }
-
-        // This flag is set for all devices
-        if ((visibility & View.SYSTEM_UI_FLAG_FULLSCREEN) == 0) {
-            hideSystemUi(2000);
-        }
-        else if ((visibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION) == 0) {
-            hideSystemUi(2000);
-        }
-    }
-
+    /** {@inheritDoc} Posts the decoder's stats text to the overlay on the UI thread. */
     @Override
     public void onPerfUpdate(final String text) {
         runOnUiThread(new Runnable() {
@@ -2645,20 +2562,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         });
     }
 
-    @Override
-    public void onUsbPermissionPromptStarting() {
-        // Disable PiP auto-enter while the USB permission prompt is on-screen. This prevents
-        // us from entering PiP while the user is interacting with the OS permission dialog.
-        suppressPipRefCount++;
-        updatePipAutoEnter();
-    }
-
-    @Override
-    public void onUsbPermissionPromptCompleted() {
-        suppressPipRefCount--;
-        updatePipAutoEnter();
-    }
-
+    /** {@inheritDoc} Key events from the stream view, before the IME sees them. */
     @Override
     public boolean onKey(View view, int keyCode, KeyEvent keyEvent) {
         switch (keyEvent.getAction()) {

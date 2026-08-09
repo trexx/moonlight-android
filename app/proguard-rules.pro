@@ -2,7 +2,6 @@
 -dontobfuscate
 
 # Our code
--keep class com.limelight.binding.input.evdev.* {*;}
 -keep class com.limelight.binding.input.driver.* {*;}
 
 # Moonlight common
