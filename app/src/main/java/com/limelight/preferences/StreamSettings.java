@@ -10,7 +10,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.app.Activity;
 import android.os.Handler;
-import android.os.Vibrator;
 import android.preference.CheckBoxPreference;
 import android.preference.ListPreference;
 import android.preference.Preference;
@@ -292,14 +291,6 @@ public class StreamSettings extends Activity {
                 category.removePreference(findPreference("checkbox_gamepad_motion_sensors"));
             }
 
-            // Hide gamepad motion sensor fallback option if the device has no gyro or accelerometer
-            if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_SENSOR_ACCELEROMETER) &&
-                    !getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_SENSOR_GYROSCOPE)) {
-                PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_gamepad_settings");
-                category.removePreference(findPreference("checkbox_gamepad_motion_fallback"));
-            }
-
             // Hide USB driver options on devices without USB host support
             if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST)) {
                 PreferenceCategory category =
@@ -333,11 +324,6 @@ public class StreamSettings extends Activity {
                     addNativeResolutionEntries(width, height, false);
                     hasInsets = true;
                 }
-            }
-            else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
-                    !((Vibrator)getActivity().getSystemService(Context.VIBRATOR_SERVICE)).hasAmplitudeControl() ) {
-                // Remove the vibration strength selector of the device doesn't have amplitude control
-                category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
             }
 
             Display display = getActivity().getWindowManager().getDefaultDisplay();
