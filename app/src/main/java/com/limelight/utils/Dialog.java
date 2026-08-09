@@ -9,6 +9,13 @@ import android.widget.Button;
 
 import com.limelight.R;
 
+/**
+ * Shows alert dialogs safely from any thread.
+ *
+ * <p>Dialogs are tracked in a list so they can all be dismissed when an activity goes away —
+ * showing one against a finished activity crashes, and connection callbacks arrive on their own
+ * threads with no knowledge of the activity's state.
+ */
 public class Dialog implements Runnable {
     private final String title;
     private final String message;
@@ -27,6 +34,7 @@ public class Dialog implements Runnable {
         this.runOnDismiss = runOnDismiss;
     }
 
+    /** Dismisses every dialog this class is showing, e.g. when the activity is going away. */
     public static void closeDialogs()
     {
         synchronized (rundownDialogs) {
@@ -57,6 +65,7 @@ public class Dialog implements Runnable {
         activity.runOnUiThread(new Dialog(activity, title, message, runOnDismiss));
     }
 
+    /** {@inheritDoc} Shows the dialog on the UI thread. */
     @Override
     public void run() {
         // If we're dying, don't bother creating a dialog
@@ -79,18 +88,6 @@ public class Dialog implements Runnable {
 
                   runOnDismiss.run();
               }
-        });
-        alert.setButton(AlertDialog.BUTTON_NEUTRAL, activity.getResources().getText(R.string.help), new DialogInterface.OnClickListener() {
-            public void onClick(DialogInterface dialog, int which) {
-                synchronized (rundownDialogs) {
-                    rundownDialogs.remove(Dialog.this);
-                    alert.dismiss();
-                }
-
-                runOnDismiss.run();
-
-                HelpLauncher.launchTroubleshooting(activity);
-            }
         });
         alert.setOnShowListener(new DialogInterface.OnShowListener(){
 

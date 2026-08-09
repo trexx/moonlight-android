@@ -2,10 +2,7 @@ package com.limelight.grid.assets;
 
 import android.app.ActivityManager;
 import android.content.Context;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.ImageDecoder;
-import android.os.Build;
 
 import com.limelight.LimeLog;
 import com.limelight.utils.CacheHelper;
@@ -15,6 +12,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
+/**
+ * On-disk box art cache, in the app's cache directory keyed by host UUID and app ID.
+ *
+ * <p>The middle cache tier, and the one the Android TV launcher reads through
+ * {@link com.limelight.PosterContentProvider}. Decoding is done with a sample size, so a large
+ * image on disk costs only the memory the grid cell needs.
+ */
 public class DiskAssetLoader {
     // 5 MB
     private static final long MAX_ASSET_SIZE = 5 * 1024 * 1024;
@@ -26,38 +30,22 @@ public class DiskAssetLoader {
     private final boolean isLowRamDevice;
     private final File cacheDir;
 
+    /** @param context supplies the cache directory the assets live in */
     public DiskAssetLoader(Context context) {
         this.cacheDir = context.getCacheDir();
         this.isLowRamDevice =
                 ((ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE)).isLowRamDevice();
     }
 
+    /** @return true if this asset is on disk, without decoding it */
     public boolean checkCacheExists(CachedAppAssetLoader.LoaderTuple tuple) {
         return CacheHelper.cacheFileExists(cacheDir, "boxart", tuple.computer.uuid, tuple.app.getAppId() + ".png");
     }
 
-    // https://developer.android.com/topic/performance/graphics/load-bitmap.html
-    public static int calculateInSampleSize(BitmapFactory.Options options, int reqWidth, int reqHeight) {
-        // Raw height and width of image
-        final int height = options.outHeight;
-        final int width = options.outWidth;
-        int inSampleSize = 1;
-
-        if (height > reqHeight || width > reqWidth) {
-
-            final int halfHeight = height / 2;
-            final int halfWidth = width / 2;
-
-            // Calculates the largest inSampleSize value that is a power of 2 and keeps both
-            // height and width larger than the requested height and width.
-            while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
-                inSampleSize *= 2;
-            }
-        }
-
-        return inSampleSize;
-    }
-
+    /**
+     * @param sampleSize downsampling factor, a power of two, applied while decoding
+     * @return the decoded bitmap, or null if it isn't cached or the file is corrupt
+     */
     public ScaledBitmap loadBitmapFromCache(CachedAppAssetLoader.LoaderTuple tuple, int sampleSize) {
         File file = getFile(tuple.computer.uuid, tuple.app.getAppId());
 
@@ -73,70 +61,33 @@ public class DiskAssetLoader {
             return null;
         }
 
-        Bitmap bmp;
+        final ScaledBitmap scaledBitmap = new ScaledBitmap();
+        try {
+            scaledBitmap.bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(file), new ImageDecoder.OnHeaderDecodedListener() {
+                @Override
+                public void onHeaderDecoded(ImageDecoder imageDecoder, ImageDecoder.ImageInfo imageInfo, ImageDecoder.Source source) {
+                    scaledBitmap.originalWidth = imageInfo.getSize().getWidth();
+                    scaledBitmap.originalHeight = imageInfo.getSize().getHeight();
 
-        // For OSes prior to P, we have to use the ugly BitmapFactory API
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            // Lookup bounds of the downloaded image
-            BitmapFactory.Options decodeOnlyOptions = new BitmapFactory.Options();
-            decodeOnlyOptions.inJustDecodeBounds = true;
-            BitmapFactory.decodeFile(file.getAbsolutePath(), decodeOnlyOptions);
-            if (decodeOnlyOptions.outWidth <= 0 || decodeOnlyOptions.outHeight <= 0) {
-                // Dimensions set to -1 on error. Return value always null.
-                return null;
-            }
-
-            LimeLog.info("Tuple "+tuple+" has cached art of size: "+decodeOnlyOptions.outWidth+"x"+decodeOnlyOptions.outHeight);
-
-            // Load the image scaled to the appropriate size
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = calculateInSampleSize(decodeOnlyOptions,
-                    STANDARD_ASSET_WIDTH / sampleSize,
-                    STANDARD_ASSET_HEIGHT / sampleSize);
-            if (isLowRamDevice) {
-                options.inPreferredConfig = Bitmap.Config.RGB_565;
-                options.inDither = true;
-            }
-            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                options.inPreferredConfig = Bitmap.Config.HARDWARE;
-            }
-
-            bmp = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
-            if (bmp != null) {
-                LimeLog.info("Tuple "+tuple+" decoded from disk cache with sample size: "+options.inSampleSize);
-                return new ScaledBitmap(decodeOnlyOptions.outWidth, decodeOnlyOptions.outHeight, bmp);
-            }
-        }
-        else {
-            // On P, we can get a bitmap back in one step with ImageDecoder
-            final ScaledBitmap scaledBitmap = new ScaledBitmap();
-            try {
-                scaledBitmap.bitmap = ImageDecoder.decodeBitmap(ImageDecoder.createSource(file), new ImageDecoder.OnHeaderDecodedListener() {
-                    @Override
-                    public void onHeaderDecoded(ImageDecoder imageDecoder, ImageDecoder.ImageInfo imageInfo, ImageDecoder.Source source) {
-                        scaledBitmap.originalWidth = imageInfo.getSize().getWidth();
-                        scaledBitmap.originalHeight = imageInfo.getSize().getHeight();
-
-                        imageDecoder.setTargetSize(STANDARD_ASSET_WIDTH, STANDARD_ASSET_HEIGHT);
-                        if (isLowRamDevice) {
-                            imageDecoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_LOW_RAM);
-                        }
+                    imageDecoder.setTargetSize(STANDARD_ASSET_WIDTH, STANDARD_ASSET_HEIGHT);
+                    if (isLowRamDevice) {
+                        imageDecoder.setMemorySizePolicy(ImageDecoder.MEMORY_POLICY_LOW_RAM);
                     }
-                });
-                return scaledBitmap;
-            } catch (IOException e) {
-                e.printStackTrace();
-                return null;
-            }
+                }
+            });
+            return scaledBitmap;
+        } catch (IOException e) {
+            e.printStackTrace();
+            return null;
         }
-
-        return null;
     }
 
+    /** @return the cache file for this asset, which may not exist */
     public File getFile(String computerUuid, int appId) {
         return CacheHelper.openPath(false, cacheDir, "boxart", computerUuid, appId + ".png");
     }
 
+    /** Deletes all cached art for a host, when that host is removed. */
     public void deleteAssetsForComputer(String computerUuid) {
         File dir = CacheHelper.openPath(false, cacheDir, "boxart", computerUuid);
         File[] files = dir.listFiles();
@@ -147,6 +98,10 @@ public class DiskAssetLoader {
         }
     }
 
+    /**
+     * Writes a freshly downloaded asset to the cache, via a temporary file so that an interrupted
+     * write cannot leave a truncated image behind for the next load to find.
+     */
     public void populateCacheWithStream(CachedAppAssetLoader.LoaderTuple tuple, InputStream input) {
         boolean success = false;
         try (final OutputStream out = CacheHelper.openCacheFileForOutput(

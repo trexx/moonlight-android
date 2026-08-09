@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Cleartext is required: the host's unauthenticated server info endpoint is plain HTTP, and is
+  what an unpaired host answers before TLS can be used. Everything after pairing goes over HTTPS
+  authenticated against the host certificate pinned by NvHTTP, not against these trust anchors.
+-->
 <network-security-config>
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>

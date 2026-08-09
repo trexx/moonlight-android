@@ -1,68 +1,64 @@
-apply plugin: 'com.android.application'
+plugins {
+    id 'com.android.application'
+}
 
 android {
-    ndkVersion "27.0.12077973"
+    // Pinned so every build produces identical native binaries; the NDK is not source
+    // compatible across major versions.
+    ndkVersion = "29.0.14206865"
 
-    compileSdk 34
+    compileSdk = 37
 
-    namespace 'com.limelight'
+    namespace = 'com.limelight'
 
     defaultConfig {
-        minSdk 21
-        targetSdk 34
+        applicationId = "com.limelight"
 
-        versionName "12.1"
+        minSdk = 30
+        // Deliberately behind compileSdk. API 35 force-enables edge-to-edge and changes
+        // insets handling, which collides with Game's immersive-mode code for no benefit to
+        // a fullscreen streaming client. Lint's OldTargetApi is suppressed in lint.xml.
+        targetSdk = 34
+
+        versionName = "12.1"
         versionCode = 314
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
         ndk.debugSymbolLevel = 'FULL'
-    }
 
-    flavorDimensions.add("root")
+        // Both ARM ABIs are required by the target hardware and neither can be dropped:
+        // arm64-v8a for the NVIDIA Shield TV, armeabi-v7a for the Homatics Box R 4K, which
+        // runs a 32-bit userspace despite its 64-bit Amlogic S905X4. x86/x86_64 have no
+        // consumer, since no Android TV box or phone is x86.
+        ndk.abiFilters 'arm64-v8a', 'armeabi-v7a'
+    }
 
     buildFeatures {
+        // BuildConfig.DEBUG gates verbose diagnostics; resValues supplies the per-build-type app
+        // label. Both are off by default in AGP 8+, so they have to be asked for.
         buildConfig = true
-    }
-
-    productFlavors {
-        root {
-            // Android O has native mouse capture, so don't show the rooted
-            // version to devices running O on the Play Store.
-            maxSdk 25
-
-            externalNativeBuild {
-                ndkBuild {
-                    arguments "PRODUCT_FLAVOR=root"
-                }
-            }
-
-            applicationId "com.limelight.root"
-            dimension "root"
-            buildConfigField "boolean", "ROOT_BUILD", "true"
-        }
-
-        nonRoot {
-            externalNativeBuild {
-                ndkBuild {
-                    arguments "PRODUCT_FLAVOR=nonRoot"
-                }
-            }
-
-            applicationId "com.limelight"
-            dimension "root"
-            buildConfigField "boolean", "ROOT_BUILD", "false"
-        }
+        resValues = true
     }
 
     compileOptions {
-        encoding "UTF-8"
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
+        // Explicit so the build does not depend on the platform default encoding
+        encoding = "UTF-8"
+        sourceCompatibility = JavaVersion.VERSION_25
+        targetCompatibility = JavaVersion.VERSION_25
     }
 
     lint {
-        disable 'MissingTranslation'
-        lintConfig file('lint.xml')
+        // Non-English locales were removed from this fork, so every string is 'missing' a
+        // translation by definition.
+        disable += 'MissingTranslation'
+        lintConfig = file('lint.xml')
+    }
+
+    packaging {
+        resources {
+            // BouncyCastle ships these in every one of its jars
+            excludes += ['META-INF/LICENSE.md', 'META-INF/NOTICE.md']
+        }
     }
 
     bundle {
@@ -81,12 +77,13 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix ".debug"
+            // Suffixed so a debug build installs alongside a release one
+            applicationIdSuffix = ".debug"
             resValue "string", "app_label", "Moonlight (Debug)"
-            resValue "string", "app_label_root", "Moonlight (Root Debug)"
 
-            minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {
             // To whomever is releasing/using an APK in release mode with
@@ -119,27 +116,62 @@ android {
             // is to please change the applicationId before you publish.
             //
             // TL;DR: Leave the following line alone!
-            applicationIdSuffix ".unofficial"
+            applicationIdSuffix = ".unofficial"
             resValue "string", "app_label", "Moonlight"
-            resValue "string", "app_label_root", "Moonlight (Root)"
 
-            minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
+    // ndk-build rather than CMake: the vendored moonlight-common-c, libusb and mbedtls trees all
+    // ship Android.mk files, and converting them would mean maintaining a fork of each.
     externalNativeBuild {
         ndkBuild {
-            path "src/main/jni/Android.mk"
+            path = file("src/main/jni/Android.mk")
         }
     }
 }
 
+// Compile with JDK 25 regardless of the JDK running Gradle.
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+// Upstream fixes we depend on that have not merged yet are carried as patches against the
+// native submodules rather than by forking them. They have to land before ndk-build compiles
+// those sources, so this hangs off preBuild. See scripts/apply-native-patches.py for the
+// mechanism, and patches/ for what is currently carried and why.
+//
+// Deliberately has no declared outputs, so it runs every build: the script is idempotent and
+// costs a `git apply --reverse --check`, and a submodule reset between builds has to be
+// noticed rather than skipped as up to date.
+tasks.register('applyNativePatches', Exec) {
+    description = 'Applies carried upstream patches to native submodules.'
+    group = 'build setup'
+
+    workingDir = rootProject.projectDir
+    commandLine 'python3', 'scripts/apply-native-patches.py'
+
+    inputs.files(rootProject.fileTree('patches') { include '**/*.patch' })
+            .withPropertyName('carriedPatches')
+}
+
+tasks.named('preBuild') {
+    dependsOn 'applyNativePatches'
+}
+
 dependencies {
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.77'
-    implementation 'org.bouncycastle:bcpkix-jdk18on:1.77'
+    // BouncyCastle, not the platform crypto: pairing needs certificate generation and signing
+    // primitives that Android's providers do not expose.
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.85'
+    implementation 'org.bouncycastle:bcpkix-jdk18on:1.85'
+    // jcodec is used only to parse and rewrite H.264 SPS for the decoder bitstream fixups
     implementation 'org.jcodec:jcodec:0.2.5'
-    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
-    implementation 'org.jmdns:jmdns:3.5.9'
+    implementation 'com.squareup.okhttp3:okhttp:5.4.0'
+    // Battery and connection state for SHIELD controllers, which Android does not report
     implementation 'com.github.cgutman:ShieldControllerExtensions:1.0.1'
 }

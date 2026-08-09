@@ -1,6 +1,5 @@
 package com.limelight.utils;
 
-import android.annotation.TargetApi;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ContentUris;
@@ -14,7 +13,6 @@ import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
 import android.media.tv.TvContract;
 import android.net.Uri;
-import android.os.Build;
 
 import com.limelight.LimeLog;
 import com.limelight.PosterContentProvider;
@@ -25,6 +23,14 @@ import com.limelight.nvstream.http.NvApp;
 import java.io.IOException;
 import java.io.OutputStream;
 
+/**
+ * Publishes a host's games to the Android TV home screen as a channel.
+ *
+ * <p>Programs in the channel launch straight into a game via
+ * {@link com.limelight.ShortcutTrampoline}, and their artwork is served through
+ * {@link com.limelight.PosterContentProvider} — the launcher renders in its own process and cannot
+ * read this app's files.
+ */
 public class TvChannelHelper {
 
     private static final int ASPECT_RATIO_MOVIE_POSTER = 5;
@@ -34,73 +40,69 @@ public class TvChannelHelper {
     private static final int ID_INDEX = 0;
     private Activity context;
 
+    /** @param context used to talk to the TV provider, which requires an activity context */
     public TvChannelHelper(Activity context) {
         this.context = context;
     }
 
     void requestChannelOnHomeScreen(ComputerDetails computer) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!isAndroidTV()) {
-                return;
-            }
+        if (!isAndroidTV()) {
+            return;
+        }
 
-            Long channelId = getChannelId(computer.uuid);
-            if (channelId == null) {
-                return;
-            }
+        Long channelId = getChannelId(computer.uuid);
+        if (channelId == null) {
+            return;
+        }
 
-            Intent intent = new Intent(TvContract.ACTION_REQUEST_CHANNEL_BROWSABLE);
-            intent.putExtra(TvContract.EXTRA_CHANNEL_ID, getChannelId(computer.uuid));
-            try {
-                context.startActivityForResult(intent, 0);
-            } catch (Exception ignored) {
-                // ActivityNotFoundException is the only officially documented
-                // exception that can result from this call. However some buggy
-                // devices throw others.
-                // See https://github.com/moonlight-stream/moonlight-android/issues/1302
-            }
+        Intent intent = new Intent(TvContract.ACTION_REQUEST_CHANNEL_BROWSABLE);
+        intent.putExtra(TvContract.EXTRA_CHANNEL_ID, getChannelId(computer.uuid));
+        try {
+            context.startActivityForResult(intent, 0);
+        } catch (Exception ignored) {
+            // ActivityNotFoundException is the only officially documented
+            // exception that can result from this call. However some buggy
+            // devices throw others.
+            // See https://github.com/moonlight-stream/moonlight-android/issues/1302
         }
     }
 
     void createTvChannel(ComputerDetails computer) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!isAndroidTV()) {
-                return;
-            }
+        if (!isAndroidTV()) {
+            return;
+        }
 
-            ChannelBuilder builder = new ChannelBuilder()
-                    .setType(TvContract.Channels.TYPE_PREVIEW)
-                    .setDisplayName(computer.name)
-                    .setInternalProviderId(computer.uuid)
-                    .setAppLinkIntent(ServerHelper.createPcShortcutIntent(context, computer));
+        ChannelBuilder builder = new ChannelBuilder()
+                .setType(TvContract.Channels.TYPE_PREVIEW)
+                .setDisplayName(computer.name)
+                .setInternalProviderId(computer.uuid)
+                .setAppLinkIntent(ServerHelper.createPcShortcutIntent(context, computer));
 
-            Long channelId = getChannelId(computer.uuid);
-            if (channelId != null) {
-                context.getContentResolver().update(TvContract.buildChannelUri(channelId),
-                        builder.toContentValues(), null, null);
-                return;
-            }
+        Long channelId = getChannelId(computer.uuid);
+        if (channelId != null) {
+            context.getContentResolver().update(TvContract.buildChannelUri(channelId),
+                    builder.toContentValues(), null, null);
+            return;
+        }
 
-            Uri channelUri;
+        Uri channelUri;
 
-            try {
-                channelUri = context.getContentResolver().insert(
-                        TvContract.Channels.CONTENT_URI, builder.toContentValues());
-            } catch (IllegalArgumentException e) {
-                // This can happen on HarmonyOS devices which report to
-                // support Leanback APIs, yet don't implement this URI
-                e.printStackTrace();
-                return;
-            }
+        try {
+            channelUri = context.getContentResolver().insert(
+                    TvContract.Channels.CONTENT_URI, builder.toContentValues());
+        } catch (IllegalArgumentException e) {
+            // This can happen on HarmonyOS devices which report to
+            // support Leanback APIs, yet don't implement this URI
+            e.printStackTrace();
+            return;
+        }
 
-            if (channelUri != null) {
-                long id = ContentUris.parseId(channelUri);
-                updateChannelIcon(id);
-            }
+        if (channelUri != null) {
+            long id = ContentUris.parseId(channelUri);
+            updateChannelIcon(id);
         }
     }
 
-    @TargetApi(Build.VERSION_CODES.O)
     private void updateChannelIcon(long channelId) {
         Bitmap logo = drawableToBitmap(context.getResources().getDrawable(R.drawable.ic_channel));
         try {
@@ -129,86 +131,79 @@ public class TvChannelHelper {
     }
 
     void addGameToChannel(ComputerDetails computer, NvApp app) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!isAndroidTV()) {
-                return;
-            }
-
-
-            Long channelId = getChannelId(computer.uuid);
-            if (channelId == null) {
-                return;
-            }
-
-            PreviewProgramBuilder builder = new PreviewProgramBuilder()
-                    .setChannelId(channelId)
-                    .setType(TYPE_GAME)
-                    .setTitle(app.getAppName())
-                    .setPosterArtAspectRatio(ASPECT_RATIO_MOVIE_POSTER)
-                    .setPosterArtUri(PosterContentProvider.createBoxArtUri(computer.uuid, ""+app.getAppId()))
-                    .setIntent(ServerHelper.createAppShortcutIntent(context, computer, app))
-                    .setInternalProviderId(""+app.getAppId())
-                    // Weight should increase each time we run the game
-                    .setWeight((int)((System.currentTimeMillis() - 1500000000000L) / 1000));
-
-            Long programId = getProgramId(channelId, ""+app.getAppId());
-            if (programId != null) {
-                context.getContentResolver().update(TvContract.buildPreviewProgramUri(programId),
-                        builder.toContentValues(), null, null);
-                return;
-            }
-
-            try {
-                context.getContentResolver().insert(TvContract.PreviewPrograms.CONTENT_URI,
-                        builder.toContentValues());
-            } catch (IllegalArgumentException e) {
-                // This can happen on HarmonyOS devices which report to
-                // support Leanback APIs, yet don't implement this URI
-                e.printStackTrace();
-                return;
-            }
-
-            TvContract.requestChannelBrowsable(context, channelId);
+        if (!isAndroidTV()) {
+            return;
         }
+
+
+        Long channelId = getChannelId(computer.uuid);
+        if (channelId == null) {
+            return;
+        }
+
+        PreviewProgramBuilder builder = new PreviewProgramBuilder()
+                .setChannelId(channelId)
+                .setType(TYPE_GAME)
+                .setTitle(app.getAppName())
+                .setPosterArtAspectRatio(ASPECT_RATIO_MOVIE_POSTER)
+                .setPosterArtUri(PosterContentProvider.createBoxArtUri(computer.uuid, ""+app.getAppId()))
+                .setIntent(ServerHelper.createAppShortcutIntent(context, computer, app))
+                .setInternalProviderId(""+app.getAppId())
+                // Weight should increase each time we run the game
+                .setWeight((int)((System.currentTimeMillis() - 1500000000000L) / 1000));
+
+        Long programId = getProgramId(channelId, ""+app.getAppId());
+        if (programId != null) {
+            context.getContentResolver().update(TvContract.buildPreviewProgramUri(programId),
+                    builder.toContentValues(), null, null);
+            return;
+        }
+
+        try {
+            context.getContentResolver().insert(TvContract.PreviewPrograms.CONTENT_URI,
+                    builder.toContentValues());
+        } catch (IllegalArgumentException e) {
+            // This can happen on HarmonyOS devices which report to
+            // support Leanback APIs, yet don't implement this URI
+            e.printStackTrace();
+            return;
+        }
+
+        TvContract.requestChannelBrowsable(context, channelId);
     }
 
     void deleteChannel(ComputerDetails computer) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!isAndroidTV()) {
-                return;
-            }
-
-            Long channelId = getChannelId(computer.uuid);
-            if (channelId == null) {
-                return;
-            }
-
-            context.getContentResolver().delete(TvContract.buildChannelUri(channelId), null, null);
+        if (!isAndroidTV()) {
+            return;
         }
+
+        Long channelId = getChannelId(computer.uuid);
+        if (channelId == null) {
+            return;
+        }
+
+        context.getContentResolver().delete(TvContract.buildChannelUri(channelId), null, null);
     }
 
     void deleteProgram(ComputerDetails computer, NvApp app) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (!isAndroidTV()) {
-                return;
-            }
-
-            Long channelId = getChannelId(computer.uuid);
-            if (channelId == null) {
-                return;
-            }
-
-
-            Long programId = getProgramId(channelId, ""+app.getAppId());
-            if (programId == null) {
-                return;
-            }
-
-            context.getContentResolver().delete(TvContract.buildPreviewProgramUri(programId), null, null);
+        if (!isAndroidTV()) {
+            return;
         }
+
+        Long channelId = getChannelId(computer.uuid);
+        if (channelId == null) {
+            return;
+        }
+
+
+        Long programId = getProgramId(channelId, ""+app.getAppId());
+        if (programId == null) {
+            return;
+        }
+
+        context.getContentResolver().delete(TvContract.buildPreviewProgramUri(programId), null, null);
     }
 
-    @TargetApi(Build.VERSION_CODES.O)
     private Long getChannelId(String computerUuid) {
         try (Cursor cursor = context.getContentResolver().query(
                 TvContract.Channels.CONTENT_URI,
@@ -230,7 +225,6 @@ public class TvChannelHelper {
         }
     }
 
-    @TargetApi(Build.VERSION_CODES.O)
     private Long getProgramId(long channelId, String appId) {
         try (Cursor cursor = context.getContentResolver().query(
                 TvContract.buildPreviewProgramsUriForChannel(channelId),
@@ -271,12 +265,10 @@ public class TvChannelHelper {
         return intent == null ? null : intent.toUri(Intent.URI_INTENT_SCHEME);
     }
 
-    @TargetApi(Build.VERSION_CODES.O)
     private boolean isAndroidTV() {
         return context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_LEANBACK);
     }
 
-    @TargetApi(Build.VERSION_CODES.O)
     private static class PreviewProgramBuilder {
 
         private ContentValues mValues = new ContentValues();
@@ -307,11 +299,6 @@ public class TvChannelHelper {
             return this;
         }
 
-        public PreviewProgramBuilder setIntentUri(Uri uri) {
-            mValues.put(TvContract.PreviewPrograms.COLUMN_INTENT_URI, toValueString(uri));
-            return this;
-        }
-
         public PreviewProgramBuilder setInternalProviderId(String id) {
             mValues.put(TvContract.PreviewPrograms.COLUMN_INTERNAL_PROVIDER_ID, id);
             return this;
@@ -333,7 +320,6 @@ public class TvChannelHelper {
 
     }
 
-    @TargetApi(Build.VERSION_CODES.O)
     private static class ChannelBuilder {
 
         private ContentValues mValues = new ContentValues();

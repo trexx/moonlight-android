@@ -6,10 +6,17 @@ import java.security.cert.X509Certificate;
 
 import javax.crypto.SecretKey;
 
+/**
+ * Mutable state for one connection attempt, passed between the stages of
+ * {@link NvConnection#start}.
+ *
+ * <p>Exists because those stages have to hand each other values discovered along the way — the
+ * resolved address, the host's version, the negotiated ports — that aren't known when the
+ * connection is configured.
+ */
 public class ConnectionContext {
     public ComputerDetails.AddressTuple serverAddress;
     public int httpsPort;
-    public boolean isNvidiaServerSoftware;
     public X509Certificate serverCert;
     public StreamConfiguration streamConfig;
     public NvConnectionListener connListener;

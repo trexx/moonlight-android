@@ -14,9 +14,15 @@ import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Locale;
 
+/**
+ * Adapter for the host grid. Simpler than {@link AppGridAdapter}: hosts have a fixed icon, so the
+ * only per-item state is the online, offline or unknown badge.
+ */
 public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
 
+    /** {@inheritDoc} */
     public PcGridAdapter(Context context, PreferenceConfiguration prefs) {
         super(context, getLayoutIdForPreferences(prefs));
     }
@@ -25,11 +31,13 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
         return R.layout.pc_grid_item;
     }
 
+    /** Re-reads the cell size preference and rebuilds the layout. */
     public void updateLayoutWithPreferences(Context context, PreferenceConfiguration prefs) {
         // This will trigger the view to reload with the new layout
         setLayoutId(getLayoutIdForPreferences(prefs));
     }
 
+    /** Adds a host and re-sorts by name. */
     public void addComputer(PcView.ComputerObject computer) {
         itemList.add(computer);
         sortList();
@@ -39,15 +47,17 @@ public class PcGridAdapter extends GenericGridAdapter<PcView.ComputerObject> {
         Collections.sort(itemList, new Comparator<PcView.ComputerObject>() {
             @Override
             public int compare(PcView.ComputerObject lhs, PcView.ComputerObject rhs) {
-                return lhs.details.name.toLowerCase().compareTo(rhs.details.name.toLowerCase());
+                return lhs.details.name.toLowerCase(Locale.getDefault()).compareTo(rhs.details.name.toLowerCase(Locale.getDefault()));
             }
         });
     }
 
+    /** @return true if the host was present and removed */
     public boolean removeComputer(PcView.ComputerObject computer) {
         return itemList.remove(computer);
     }
 
+    /** {@inheritDoc} Binds the host's name and its online, offline or unknown badge. */
     @Override
     public void populateView(View parentView, ImageView imgView, ProgressBar prgView, TextView txtView, ImageView overlayView, PcView.ComputerObject obj) {
         imgView.setImageResource(R.drawable.ic_computer);

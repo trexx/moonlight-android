@@ -1,6 +1,12 @@
 -- H264 NAL Parser
 -- Version: 1.0
 -- Cameron Gutman
+--
+-- Wireshark dissector that splits a reassembled H.264 elementary stream into NAL units by their
+-- Annex B start codes. A debugging aid, not part of the app: it is what makes a capture of the
+-- video stream readable when diagnosing a decoder that rejects the bitstream.
+--
+-- Assumes 4-byte start codes, which is what the host emits.
 
 -- NAL header
 local nal_start = ProtoField.bytes("nal.start", "H264 NAL Start Sequence") -- 4 Byte Start

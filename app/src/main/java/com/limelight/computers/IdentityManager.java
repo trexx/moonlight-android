@@ -11,12 +11,19 @@ import com.limelight.LimeLog;
 
 import android.content.Context;
 
+/**
+ * This client's persistent unique ID, generated once and stored thereafter.
+ *
+ * <p>Hosts key their pairing records on it, so a client that regenerates this ID appears as a new
+ * client and loses access to every host it was paired with.
+ */
 public class IdentityManager {
     private static final String UNIQUE_ID_FILE_NAME = "uniqueid";
     private static final int UID_SIZE_IN_BYTES = 8;
 
     private String uniqueId;
 
+    /** Loads the stored client ID, generating one on first run. */
     public IdentityManager(Context c) {
         uniqueId = loadUniqueId(c);
         if (uniqueId == null) {
@@ -26,6 +33,7 @@ public class IdentityManager {
         LimeLog.info("UID is now: "+uniqueId);
     }
 
+    /** @return the stable client ID, generating and storing one on first use */
     public String getUniqueId() {
         return uniqueId;
     }

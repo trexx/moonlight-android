@@ -24,6 +24,25 @@
 #include "minisdl.h"
 #include "usb_ids.h"
 
+// SDL removed these product IDs from usb_ids.h when SDL_IsJoystickXboxSeriesX() was
+// rewritten to assume every unlisted controller has a share button. We deliberately
+// keep the original explicit-list behaviour, so unknown controllers are reported to
+// the host as having no share button rather than a phantom one. The values below are
+// the ones SDL last published for these devices.
+#define USB_PRODUCT_8BITDO_XBOX_CONTROLLER                0x2002
+#define USB_PRODUCT_GAMESIR_G7                            0x1001
+#define USB_PRODUCT_HORI_FIGHTING_COMMANDER_OCTA_SERIES_X 0x0150
+#define USB_PRODUCT_HORI_HORIPAD_PRO_SERIES_X             0x014f
+#define USB_PRODUCT_THRUSTMASTER_ESWAPX_PRO               0xd012
+#define USB_PRODUCT_TURTLE_BEACH_SERIES_X_REACT_R         0x7013
+#define USB_PRODUCT_TURTLE_BEACH_SERIES_X_RECON           0x7009
+#define USB_PRODUCT_XBOX_SERIES_X_PDP_AFTERGLOW           0x02da
+#define USB_PRODUCT_XBOX_SERIES_X_PDP_BLUE                0x02d9
+#define USB_PRODUCT_XBOX_SERIES_X_POWERA_FUSION_PRO2      0x4001
+#define USB_PRODUCT_XBOX_SERIES_X_POWERA_MOGA_XP_ULTRA    0x890b
+#define USB_PRODUCT_XBOX_SERIES_X_POWERA_SPECTRA          0x4002
+#define USB_PRODUCT_XBOX_SERIES_X_VICTRIX_GAMBIT          0x02d6
+
 SDL_bool SDL_IsJoystickXboxOneElite(Uint16 vendor_id, Uint16 product_id)
 {
     if (vendor_id == USB_VENDOR_MICROSOFT) {

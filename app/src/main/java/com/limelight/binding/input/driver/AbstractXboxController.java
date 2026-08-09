@@ -14,6 +14,17 @@ import com.limelight.nvstream.jni.MoonBridge;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 
+/**
+ * Shared plumbing for the Xbox controller families: claiming the device, locating its bulk
+ * endpoints, and running the reader loop.
+ *
+ * <p>Subclasses supply only the parts that differ between generations — {@link #doInit()} for any
+ * handshake the device needs, {@link #handleRead(ByteBuffer)} to parse its report format, and
+ * their own rumble encoding.
+ *
+ * <p>The supported button set is fixed in the constructor rather than probed, since these
+ * controllers all expose the same buttons and only differ in how they encode them.
+ */
 public abstract class AbstractXboxController extends AbstractController {
     protected final UsbDevice device;
     protected final UsbDeviceConnection connection;
@@ -21,8 +32,11 @@ public abstract class AbstractXboxController extends AbstractController {
     private Thread inputThread;
     private boolean stopped;
 
+    // Bulk endpoints located by start(); input reports arrive on inEndpt and rumble goes out
+    // on outEndpt
     protected UsbEndpoint inEndpt, outEndpt;
 
+    /** Declares the button set and rumble support common to every Xbox controller generation. */
     public AbstractXboxController(UsbDevice device, UsbDeviceConnection connection, int deviceId, UsbDriverListener listener) {
         super(deviceId, listener, device.getVendorId(), device.getProductId());
         this.device = device;
@@ -37,6 +51,10 @@ public abstract class AbstractXboxController extends AbstractController {
                         ControllerPacket.BACK_FLAG | ControllerPacket.PLAY_FLAG | ControllerPacket.SPECIAL_BUTTON_FLAG;
     }
 
+    /**
+     * Builds the reader thread: announce the controller, then loop parsing input reports until
+     * stopped or the device disappears.
+     */
     private Thread createInputThread() {
         return new Thread() {
             public void run() {
@@ -96,6 +114,14 @@ public abstract class AbstractXboxController extends AbstractController {
         };
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Claims the interfaces, locates exactly one endpoint in each direction, runs the
+     * subclass's initialisation and only then starts reading. Duplicate endpoints are treated as
+     * a failure rather than guessed at, since picking the wrong one yields a controller that
+     * appears connected but never reports.
+     */
     public boolean start() {
         // Force claim all interfaces
         for (int i = 0; i < device.getInterfaceCount(); i++) {
@@ -145,6 +171,12 @@ public abstract class AbstractXboxController extends AbstractController {
         return true;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Reachable both from the service and from the reader thread's own error path, so the
+     * {@code stopped} guard is what keeps the teardown from running twice.
+     */
     public void stop() {
         if (stopped) {
             return;
@@ -161,6 +193,12 @@ public abstract class AbstractXboxController extends AbstractController {
             inputThread = null;
         }
 
+        // Release the interfaces we claimed, otherwise Android's own driver
+        // cannot take the device back over when it is reattached.
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            connection.releaseInterface(device.getInterface(i));
+        }
+
         // Close the USB connection
         connection.close();
 
@@ -168,6 +206,19 @@ public abstract class AbstractXboxController extends AbstractController {
         notifyDeviceRemoved();
     }
 
+    /**
+     * Parses one input report into the inherited state fields.
+     *
+     * @param buffer the report, little-endian, positioned at its start
+     * @return true if this report updated the controller state and should be reported onward;
+     *         false for reports of other types, which are ignored
+     */
     protected abstract boolean handleRead(ByteBuffer buffer);
+
+    /**
+     * Performs any handshake the device needs before it will send input reports.
+     *
+     * @return false to abort the claim
+     */
     protected abstract boolean doInit();
 }

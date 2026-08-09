@@ -1,18 +1,14 @@
 package com.limelight.preferences;
 
-import java.io.IOException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InterfaceAddress;
 import java.net.NetworkInterface;
-import java.net.SocketException;
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.net.UnknownHostException;
 import java.util.Collections;
 import java.util.concurrent.LinkedBlockingQueue;
 
-import com.limelight.binding.PlatformBinding;
 import com.limelight.computers.ComputerManagerService;
 import com.limelight.R;
 import com.limelight.nvstream.http.ComputerDetails;
@@ -38,6 +34,13 @@ import android.view.inputmethod.InputMethodManager;
 import android.widget.TextView;
 import android.widget.Toast;
 
+/**
+ * Screen for adding a host by hostname or IP.
+ *
+ * <p>Needed because host discovery was removed from this fork: hosts are always added by address.
+ * The address is polled before it is accepted, so the user finds out immediately whether it is
+ * reachable rather than getting an entry in the grid that never comes online.
+ */
 public class AddComputerManually extends Activity {
     private TextView hostText;
     private ComputerManagerService.ComputerManagerBinder managerBinder;
@@ -246,6 +249,7 @@ public class AddComputerManually extends Activity {
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     protected void onStop() {
         super.onStop();
@@ -254,6 +258,7 @@ public class AddComputerManually extends Activity {
         SpinnerDialog.closeDialogs(this);
     }
 
+    /** {@inheritDoc} Unbinds the computer manager. */
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -264,11 +269,11 @@ public class AddComputerManually extends Activity {
         }
     }
 
+    /** {@inheritDoc} Binds the computer manager so an entered address can be polled. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        UiHelper.setLocale(this);
 
         setContentView(R.layout.activity_add_computer_manually);
 

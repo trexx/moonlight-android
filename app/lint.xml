@@ -1,6 +1,112 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <lint>
     <issue id="InvalidPackage">
-        <ignore path="**/bcpkix-jdk15on-*.jar"/>
+        <ignore path="**/bcpkix-jdk18on-*.jar"/>
+    </issue>
+
+    <!--
+      Everything below is deliberate. Each entry is something lint is right to flag in
+      general but wrong about here, so it is suppressed with the reason rather than
+      "fixed" into a regression.
+    -->
+
+    <!--
+      Moonlight talks plain HTTP to hosts on port 47989 before TLS is negotiated, and pairs
+      with self-signed certificates it pins itself. Cleartext cannot be disabled.
+    -->
+    <issue id="InsecureBaseConfiguration" severity="ignore" />
+
+    <!--
+      PosterContentProvider must be exported so the Android TV launcher can read box art for
+      the recommendation row. It serves only cached box art keyed by PC UUID and app ID.
+    -->
+    <issue id="ExportedContentProvider" severity="ignore" />
+
+    <!--
+      Game locks orientation to match the stream resolution. That is the whole point on a
+      device that can rotate; letting it rotate mid-stream would resize the surface.
+    -->
+    <issue id="SourceLockedOrientationActivity" severity="ignore" />
+
+    <!--
+      targetSdk is deliberately held at 34; see the comment in build.gradle. API 35
+      force-enables edge-to-edge and changes insets handling, which collides with Game's
+      immersive-mode code.
+    -->
+    <issue id="OldTargetApi" severity="ignore" />
+
+    <!--
+      "AV1" is the codec name, not a typo for "AV!".
+    -->
+    <issue id="Typos">
+        <ignore path="src/main/res/values/strings.xml" />
+    </issue>
+
+    <!--
+      Attributes newer than minSdk are used intentionally for forward compatibility; they are
+      simply ignored on older releases. minSdk is 30 and the app targets Android TV boxes that
+      sit on 11 and 14.
+    -->
+    <issue id="UnusedAttribute" severity="ignore" />
+
+    <!--
+      BatteryState.STATUS_* are compile-time inlined ints from API 31 referenced under an
+      existing SDK_INT guard in ControllerHandler. Inlining is safe and intended.
+    -->
+    <issue id="InlinedApi" severity="ignore" />
+
+    <!--
+      @RequiresApi would be better than the existing @TargetApi (it propagates the version
+      contract to callers instead of just silencing the check), but it lives in
+      androidx.annotation, which this module does not depend on. Pulling in an AndroidX
+      artifact purely to satisfy a style check is not worth it here.
+    -->
+    <issue id="UseRequiresApi" severity="ignore" />
+
+    <!--
+      atv_banner and no_app_image ship at xhdpi only. Generating the missing density variants
+      needs the original artwork, which we don't have; Android scales the xhdpi asset.
+    -->
+    <issue id="IconMissingDensityFolder" severity="ignore" />
+
+    <!--
+      Gradle version currency is tracked separately from this codebase's lint hygiene.
+    -->
+    <issue id="AndroidGradlePluginVersion" severity="ignore" />
+
+    <!--
+      NvHTTP's X509TrustManager is deliberate and is how pairing works. It tries the platform
+      default trust manager FIRST and only falls back to comparing against the certificate
+      pinned for that specific host when the default rejects it - which is the expected case
+      for Sunshine's self-signed cert. It is not a trust-everything manager; making lint happy
+      here would mean being unable to pair with any host.
+    -->
+    <issue id="CustomX509TrustManager">
+        <ignore path="src/main/java/com/limelight/nvstream/http/NvHTTP.java" />
+    </issue>
+
+    <!--
+      Multi-window, split-screen, DeX and freeform were removed deliberately; every activity
+      sets resizeableActivity="false" on purpose. NonResizeableActivity argues for the
+      behaviour we just deleted.
+
+      DiscouragedApi is the more interesting one and is kept in mind rather than disputed: it
+      warns that the opt-out is ignored on large screens from Android 12 and entirely from
+      Android 16. That is understood and accepted - the target hardware is TV boxes. If the
+      app is ever forced into multi-window anyway, the stream draws under the system bars,
+      and the fix is to restore onMultiWindowModeChanged and the isInMultiWindowMode branch
+      in Game's hideSystemUi runnable.
+    -->
+    <issue id="NonResizeableActivity" severity="ignore" />
+    <issue id="DiscouragedApi">
+        <ignore path="src/main/AndroidManifest.xml" />
+    </issue>
+
+    <!--
+      Reported inside the BouncyCastle jar, not our code. Third-party, nothing to fix here.
+    -->
+    <issue id="TrustAllX509TrustManager">
+        <ignore path="**/bcpkix-jdk18on-*.jar" />
+        <ignore path="**/bcprov-jdk18on-*.jar" />
     </issue>
 </lint>

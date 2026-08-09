@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Every key here is read by PreferenceConfiguration.readPreferences(), which is the only place
+  they are interpreted - defaults declared here and defaults declared there must agree, since a
+  preference the user has never touched is read from the code-side default.
+
+  The seekbar: namespace belongs to com.limelight.preferences.SeekBarPreference. It adds min,
+  step, keyStep (the increment for a d-pad or keyboard press) and divisor (a display-only
+  divisor, so a value stored in Kbps can be shown in Mbps).
+-->
 <PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:seekbar="http://schemas.moonlight-stream.com/apk/res/seekbar">
 
@@ -18,6 +27,8 @@
             android:entries="@array/fps_names"
             android:entryValues="@array/fps_values"
             android:defaultValue="60" />
+        <!-- Stored in Kbps and displayed in Mbps via divisor. The code-side default is not fixed:
+             getDefaultBitrate() computes it from the chosen resolution and frame rate. -->
         <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_bitrate_kbps"
             android:dialogMessage="@string/summary_seekbar_bitrate"
@@ -29,6 +40,9 @@
             android:summary="@string/summary_seekbar_bitrate"
             android:text="@string/suffix_seekbar_bitrate_mbps"
             android:title="@string/title_seekbar_bitrate" />
+        <!-- Maps to PreferenceConfiguration.framePacing. 'latency' presents frames as soon as they
+             decode; 'balanced' presents on vsync via the Choreographer path in
+             MediaCodecDecoderRenderer, trading up to a frame of latency for smoothness. -->
         <ListPreference
             android:key="frame_pacing"
             android:title="@string/title_frame_pacing"
@@ -36,10 +50,13 @@
             android:entryValues="@array/video_frame_pacing_values"
             android:summary="@string/summary_frame_pacing"
             android:defaultValue="latency" />
-        <CheckBoxPreference
-            android:key="checkbox_stretch_video"
-            android:title="@string/title_checkbox_stretch_video"
-            android:defaultValue="false" />
+        <ListPreference
+            android:key="list_video_scale_mode"
+            android:title="@string/title_video_scale_mode"
+            android:entries="@array/video_scale_mode_names"
+            android:entryValues="@array/video_scale_mode_values"
+            android:summary="%s"
+            android:defaultValue="fit" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_audio_settings">
         <ListPreference
@@ -50,16 +67,20 @@
             android:entryValues="@array/audio_config_values"
             android:defaultValue="2" />
         <CheckBoxPreference
-            android:key="checkbox_enable_audiofx"
-            android:title="@string/title_checkbox_enable_audiofx"
-            android:summary="@string/summary_checkbox_enable_audiofx"
+            android:key="checkbox_enable_aaudio"
+            android:title="@string/title_checkbox_enable_aaudio"
+            android:summary="@string/summary_checkbox_enable_aaudio"
             android:defaultValue="false" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_gamepad_settings"
         android:key="category_gamepad_settings">
+        <!-- Percentage, and the sign is meaningful: positive values are a stick deadzone, negative
+             values are deadzone *compensation* for worn sticks that no longer reach full
+             deflection. See ControllerHandler.handleDeadZone(). -->
         <com.limelight.preferences.SeekBarPreference
             android:key="seekbar_deadzone"
             android:defaultValue="7"
+            seekbar:min="-20"
             android:max="20"
             android:summary="@string/summary_seekbar_deadzone"
             android:text="@string/suffix_seekbar_deadzone"
@@ -94,19 +115,6 @@
             android:entryValues="@array/analog_scrolling_values"
             android:defaultValue="right" />
         <CheckBoxPreference
-            android:key="checkbox_vibrate_fallback"
-            android:title="@string/title_checkbox_vibrate_fallback"
-            android:summary="@string/summary_checkbox_vibrate_fallback"
-            android:defaultValue="false" />
-        <com.limelight.preferences.SeekBarPreference
-            android:key="seekbar_vibrate_fallback_strength"
-            android:dependency="checkbox_vibrate_fallback"
-            android:defaultValue="100"
-            android:max="200"
-            android:summary="@string/summary_seekbar_vibrate_fallback_strength"
-            android:text="@string/suffix_seekbar_vibrate_fallback_strength"
-            android:title="@string/title_seekbar_vibrate_fallback_strength"/>
-        <CheckBoxPreference
             android:key="checkbox_flip_face_buttons"
             android:title="@string/title_checkbox_flip_face_buttons"
             android:summary="@string/summary_checkbox_flip_face_buttons"
@@ -121,19 +129,19 @@
             android:title="@string/title_checkbox_gamepad_motion_sensors"
             android:summary="@string/summary_checkbox_gamepad_motion_sensors"
             android:defaultValue="true" />
-        <CheckBoxPreference
-            android:key="checkbox_gamepad_motion_fallback"
-            android:title="@string/title_checkbox_gamepad_motion_fallback"
-            android:summary="@string/summary_checkbox_gamepad_motion_fallback"
-            android:defaultValue="false" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_input_settings"
         android:key="category_input_settings">
-        <CheckBoxPreference
-            android:key="checkbox_touchscreen_trackpad"
-            android:title="@string/title_checkbox_touchscreen_trackpad"
-            android:summary="@string/summary_checkbox_touchscreen_trackpad"
-            android:defaultValue="true" />
+        <!-- Maps to PreferenceConfiguration.mouseMode, which selects the TouchContext
+             implementation in Game.applyMouseMode(). Migrated from the older
+             checkbox_touchscreen_trackpad boolean on first read. -->
+        <ListPreference
+            android:key="list_mouse_mode"
+            android:title="@string/title_mouse_mode"
+            android:entries="@array/mouse_mode_names"
+            android:entryValues="@array/mouse_mode_values"
+            android:summary="%s"
+            android:defaultValue="relative" />
         <CheckBoxPreference
             android:key="checkbox_mouse_nav_buttons"
             android:title="@string/title_checkbox_mouse_nav_buttons"
@@ -144,54 +152,6 @@
             android:title="@string/title_checkbox_absolute_mouse_mode"
             android:summary="@string/summary_checkbox_absolute_mouse_mode"
             android:defaultValue="false" />
-    </PreferenceCategory>
-    <PreferenceCategory android:title="@string/category_on_screen_controls_settings"
-        android:key="category_onscreen_controls">
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:key="checkbox_show_onscreen_controls"
-            android:summary="@string/summary_checkbox_show_onscreen_controls"
-            android:title="@string/title_checkbox_show_onscreen_controls" />
-        <CheckBoxPreference
-            android:key="checkbox_vibrate_osc"
-            android:dependency="checkbox_show_onscreen_controls"
-            android:title="@string/title_checkbox_vibrate_osc"
-            android:summary="@string/summary_checkbox_vibrate_osc"
-            android:defaultValue="true" />
-        <CheckBoxPreference
-            android:defaultValue="false"
-            android:dependency="checkbox_show_onscreen_controls"
-            android:key="checkbox_only_show_L3R3"
-            android:summary="@string/summary_only_l3r3"
-            android:title="@string/title_only_l3r3" />
-        <CheckBoxPreference
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:defaultValue="true"
-            android:dependency="checkbox_show_onscreen_controls"
-            android:key="checkbox_show_guide_button"
-            android:summary="@string/summary_show_guide_button"
-            android:title="@string/title_show_guide_button" />
-        <com.limelight.preferences.SeekBarPreference
-            android:key="seekbar_osc_opacity"
-            android:dependency="checkbox_show_onscreen_controls"
-            android:dialogMessage="@string/summary_osc_opacity"
-            seekbar:min="0"
-            seekbar:step="1"
-            android:max="100"
-            android:defaultValue="90"
-            android:summary="@string/summary_osc_opacity"
-            android:text="@string/suffix_osc_opacity"
-            android:title="@string/dialog_title_osc_opacity" />
-        <com.limelight.preferences.ConfirmDeleteOscPreference
-            android:title="@string/title_reset_osc"
-            android:summary="@string/summary_reset_osc"
-            android:dialogTitle="@string/dialog_title_reset_osc"
-            android:dialogMessage="@string/dialog_text_reset_osc"
-            android:positiveButtonText="@string/yes"
-            android:negativeButtonText="@string/no"
-            />
-
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_host_settings">
         <CheckBoxPreference
@@ -207,18 +167,6 @@
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_ui_settings"
         android:key="category_ui_settings">
-        <CheckBoxPreference
-            android:key="checkbox_enable_pip"
-            android:title="@string/title_checkbox_enable_pip"
-            android:summary="@string/summary_checkbox_enable_pip"
-            android:defaultValue="false" />
-        <com.limelight.preferences.LanguagePreference
-            android:key="list_languages"
-            android:title="@string/title_language_list"
-            android:entries="@array/language_names"
-            android:entryValues="@array/language_values"
-            android:summary="@string/summary_language_list"
-            android:defaultValue="default" />
         <com.limelight.preferences.SmallIconCheckboxPreference
             android:key="checkbox_small_icon_mode"
             android:title="@string/title_checkbox_small_icon_mode"
@@ -237,10 +185,30 @@
             android:summary="@string/summary_checkbox_reduce_refresh_rate"
             android:defaultValue="false" />
         <CheckBoxPreference
+            android:key="checkbox_enforce_display_mode"
+            android:title="@string/title_checkbox_enforce_display_mode"
+            android:summary="@string/summary_checkbox_enforce_display_mode"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_resume_without_confirm"
+            android:title="@string/title_checkbox_resume_without_confirm"
+            android:summary="@string/summary_checkbox_resume_without_confirm"
+            android:defaultValue="false" />
+        <CheckBoxPreference
             android:key="checkbox_disable_warnings"
             android:title="@string/title_checkbox_disable_warnings"
             android:summary="@string/summary_checkbox_disable_warnings"
             android:defaultValue="false" />
+        <!-- Maps to ENCFLG_* via PreferenceConfiguration.getEncryptionFlagsValue(). The client
+             opts in; SdpGenerator enables encryption if either side asks, so "none" is a
+             request rather than a guarantee. -->
+        <ListPreference
+            android:key="list_encryption"
+            android:title="@string/title_encryption"
+            android:entries="@array/encryption_names"
+            android:entryValues="@array/encryption_values"
+            android:summary="@string/summary_encryption"
+            android:defaultValue="audio" />
         <ListPreference
             android:key="video_format"
             android:title="@string/title_video_format"
@@ -269,19 +237,4 @@
             android:summary="@string/summary_enable_post_stream_toast"
             android:defaultValue="false"/>
     </PreferenceCategory>
-    <!--PreferenceCategory android:title="@string/category_help"
-        android:key="category_help">
-        <com.limelight.preferences.WebLauncherPreference
-            android:title="@string/title_setup_guide"
-            android:summary="@string/summary_setup_guide"
-            url="https://github.com/moonlight-stream/moonlight-docs/wiki/Setup-Guide"/>
-        <com.limelight.preferences.WebLauncherPreference
-            android:title="@string/title_troubleshooting"
-            android:summary="@string/summary_troubleshooting"
-            url="https://github.com/moonlight-stream/moonlight-docs/wiki/Troubleshooting"/>
-        <com.limelight.preferences.WebLauncherPreference
-            android:title="@string/title_privacy_policy"
-            android:summary="@string/summary_privacy_policy"
-            url="https://moonlight-stream.org/privacy.html"/>
-    </PreferenceCategory-->
 </PreferenceScreen>

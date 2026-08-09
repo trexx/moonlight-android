@@ -15,7 +15,6 @@ import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
 import com.limelight.nvstream.http.PairingManager;
-import com.limelight.nvstream.wol.WakeOnLanSender;
 import com.limelight.utils.CacheHelper;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.ServerHelper;
@@ -30,12 +29,24 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Entry point for launcher shortcuts and TV channel programs, which start a stream directly
+ * without going through {@link PcView}.
+ *
+ * <p>It exists because a shortcut carries only a host UUID and an app ID, while starting a stream
+ * needs a paired, reachable host and its certificate. So this activity binds to the computer
+ * manager, waits for that host to come online, and only then launches {@link Game} — showing the
+ * user a spinner meanwhile, and a useful error rather than a silent failure if the host never
+ * appears.
+ *
+ * <p>It also builds the back stack the user would have had if they had navigated here manually, so
+ * backing out of the stream lands on the app list rather than on the launcher.
+ */
 public class ShortcutTrampoline extends Activity {
     private String uuidString;
     private NvApp app;
     private ArrayList<Intent> intentStack = new ArrayList<>();
 
-    private int wakeHostTries = 10;
     private ComputerDetails computer;
     private SpinnerDialog blockingLoadSpinner;
 
@@ -50,9 +61,6 @@ public class ShortcutTrampoline extends Activity {
             new Thread() {
                 @Override
                 public void run() {
-                    // Wait for the binder to be ready
-                    localBinder.waitForReady();
-
                     // Now make the binder visible
                     managerBinder = localBinder;
 
@@ -88,23 +96,6 @@ public class ShortcutTrampoline extends Activity {
                             // Don't care about other computers
                             if (!details.uuid.equalsIgnoreCase(uuidString)) {
                                 return;
-                            }
-
-                            // Try to wake the target PC if it's offline (up to some retry limit)
-                            if (details.state == ComputerDetails.State.OFFLINE && details.macAddress != null && --wakeHostTries >= 0) {
-                                try {
-                                    // Make a best effort attempt to wake the target PC
-                                    WakeOnLanSender.sendWolPacket(computer);
-
-                                    // If we sent at least one WoL packet, reset the computer state
-                                    // to force ComputerManager to poll it again.
-                                    managerBinder.invalidateStateForComputer(computer.uuid);
-                                    return;
-                                } catch (IOException e) {
-                                    // If we got an exception, we couldn't send a single WoL packet,
-                                    // so fallthrough into the offline error path.
-                                    e.printStackTrace();
-                                }
                             }
 
                             if (details.state != ComputerDetails.State.UNKNOWN) {
@@ -222,6 +213,12 @@ public class ShortcutTrampoline extends Activity {
         }
     };
 
+    /**
+     * Validates the extras a shortcut supplied.
+     *
+     * @return true if they are usable. Shortcuts outlive the data they point at — hosts get
+     *         removed, apps disappear — so the failure path here is routine, not exceptional.
+     */
     protected boolean validateInput(String uuidString, String appIdString, String nameString) {
         // Validate PC UUID/Name
         if (uuidString == null && nameString == null) {
@@ -269,6 +266,7 @@ public class ShortcutTrampoline extends Activity {
         return true;
     }
 
+    /** {@inheritDoc} Validates the shortcut's extras and binds the computer manager. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -363,6 +361,7 @@ public class ShortcutTrampoline extends Activity {
                 getResources().getString(R.string.applist_connect_msg), true);
     }
 
+    /** {@inheritDoc} Unbinds and dismisses the spinner if the user leaves before the host appears. */
     @Override
     protected void onStop() {
         super.onStop();

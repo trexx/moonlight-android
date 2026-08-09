@@ -7,10 +7,21 @@ import android.util.SparseArray;
 import android.view.InputDevice;
 import android.view.KeyEvent;
 
+import com.limelight.utils.KeyMapper;
+
 import java.util.Arrays;
 
 /**
  * Class to translate a Android key code into the codes GFE is expecting
+ *
+ * <p>The host expects Windows virtual key codes from a QWERTY layout, so translation happens in
+ * three stages: a non-QWERTY layout is first normalised to QWERTY using the device's own key
+ * character map, the Android keycode is then mapped to its Windows equivalent, and keys Android
+ * has no keycode for fall back to mapping the raw Linux scancode via {@link KeyMapper}.
+ *
+ * <p>Layout mappings are cached per input device and kept current by implementing
+ * {@link InputManager.InputDeviceListener}, since a keyboard's layout can change while attached.
+ *
  * @author Diego Waxemberg
  * @author Cameron Gutman
  */
@@ -24,6 +35,9 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
     public static final int VK_0 = 48;
     public static final int VK_9 = 57;
     public static final int VK_A = 65;
+    public static final int VK_D = 68;
+    public static final int VK_G = 71;
+    public static final int VK_V = 86;
     public static final int VK_Z = 90;
     public static final int VK_NUMPAD0 = 96;
     public static final int VK_BACK_SLASH = 92;
@@ -33,7 +47,10 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
     public static final int VK_BACK_SPACE = 8;
     public static final int VK_EQUALS = 61;
     public static final int VK_ESCAPE = 27;
+    public static final int VK_RETURN = 13;
     public static final int VK_F1 = 112;
+    public static final int VK_F4 = 115;
+    public static final int VK_F11 = 122;
     public static final int VK_END = 35;
     public static final int VK_HOME = 36;
     public static final int VK_NUM_LOCK = 144;
@@ -54,11 +71,24 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
     public static final int VK_BACK_QUOTE = 192;
     public static final int VK_QUOTE = 222;
     public static final int VK_PAUSE = 19;
+    public static final int VK_LWIN = 91;
+    public static final int VK_LSHIFT = 160;
+    public static final int VK_LCONTROL = 162;
+    public static final int VK_LMENU = 164;
 
+    /**
+     * One keyboard's layout, as a lookup from the keycodes it produces to the QWERTY keycodes
+     * they correspond to.
+     *
+     * <p>Built by asking the device which key produces each QWERTY character and inverting that,
+     * so an AZERTY keyboard's Q key resolves to {@code KEYCODE_A} — which is what the host, which
+     * assumes QWERTY, needs to receive.
+     */
     private static class KeyboardMapping {
         private final InputDevice device;
         private final int[] deviceKeyCodeToQwertyKeyCode;
 
+        /** Builds the reverse map by asking the device which key produces each QWERTY character. */
         @TargetApi(33)
         public KeyboardMapping(InputDevice device) {
             int maxKeyCode = KeyEvent.getMaxKeyCode();
@@ -77,11 +107,11 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
             }
         }
 
+        /**
+         * @return the QWERTY keycode this device's key corresponds to, or
+         *         {@link KeyEvent#KEYCODE_UNKNOWN} if the layout doesn't move this key
+         */
         @TargetApi(33)
-        public int getDeviceKeyCodeForQwertyKeyCode(int qwertyKeyCode) {
-            return device.getKeyCodeForKeyLocation(qwertyKeyCode);
-        }
-
         public int getQwertyKeyCodeForDeviceKeyCode(int deviceKeyCode) {
             if (deviceKeyCode > KeyEvent.getMaxKeyCode()) {
                 return KeyEvent.KEYCODE_UNKNOWN;
@@ -93,6 +123,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
 
     private final SparseArray<KeyboardMapping> keyboardMappings = new SparseArray<>();
 
+    /** Caches layout mappings for every alphabetic keyboard currently attached. */
     public KeyboardTranslator() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             for (int deviceId : InputDevice.getDeviceIds()) {
@@ -104,6 +135,10 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
         }
     }
 
+    /**
+     * @return true if this device's layout maps the keycode onto a different QWERTY key, meaning
+     *         the raw keycode would be wrong to send as-is
+     */
     public boolean hasNormalizedMapping(int keycode, int deviceId) {
         if (deviceId >= 0) {
             KeyboardMapping mapping = keyboardMappings.get(deviceId);
@@ -127,6 +162,20 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
      * @return a GFE keycode for the given keycode
      */
     public short translate(int keycode, int deviceId) {
+        return translate(keycode, deviceId, -1);
+    }
+
+    /**
+     * Translates an Android keycode, falling back to the hardware scancode for keys
+     * that Android has no keycode for (many international and media keys). Without the
+     * fallback those keystrokes are silently dropped.
+     *
+     * @param keycode the code to be translated
+     * @param deviceId InputDevice.getId() or -1 if unknown
+     * @param scancode KeyEvent.getScanCode() or -1 if unknown
+     * @return a GFE keycode for the given keycode
+     */
+    public short translate(int keycode, int deviceId, int scancode) {
         int translated;
 
         // If a device ID was provided, look up the keyboard mapping
@@ -164,7 +213,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
         else {
             switch (keycode) {
             case KeyEvent.KEYCODE_ALT_LEFT:
-                translated = 0xA4;
+                translated = VK_LMENU;
                 break;
 
             case KeyEvent.KEYCODE_ALT_RIGHT:
@@ -188,7 +237,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 break;
                 
             case KeyEvent.KEYCODE_CTRL_LEFT:
-                translated = 0xA2;
+                translated = VK_LCONTROL;
                 break;
 
             case KeyEvent.KEYCODE_CTRL_RIGHT:
@@ -225,7 +274,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 break;
 
             case KeyEvent.KEYCODE_META_LEFT:
-                translated = 0x5b;
+                translated = VK_LWIN;
                 break;
 
             case KeyEvent.KEYCODE_META_RIGHT:
@@ -277,7 +326,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 break;
                 
             case KeyEvent.KEYCODE_SHIFT_LEFT:
-                translated = 0xA0;
+                translated = VK_LSHIFT;
                 break;
 
             case KeyEvent.KEYCODE_SHIFT_RIGHT:
@@ -350,6 +399,15 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 break;
 
             default:
+                // Android has no keycode for this key. Fall back to translating the
+                // hardware scancode, which is a Linux evdev code, into a Windows VK.
+                if (scancode >= 0) {
+                    translated = KeyMapper.getWindowsKeyCode(scancode);
+                    if (translated < 0) {
+                        return 0;
+                    }
+                    break;
+                }
                 return 0;
             }
         }
@@ -357,6 +415,17 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
         return (short) ((KEY_PREFIX << 8) | translated);
     }
 
+    /**
+     * Applies the on-the-wire key prefix to a raw Windows virtual key code, producing the same
+     * encoding {@link #translate} emits. Callers that already know the VK they want to send
+     * (rather than deriving it from a {@link KeyEvent}) should use this instead of passing the
+     * bare VK, so every keyboard packet we send is encoded identically.
+     */
+    public static short toWireKeycode(int windowsVirtualKey) {
+        return (short) ((KEY_PREFIX << 8) | windowsVirtualKey);
+    }
+
+    /** {@inheritDoc} Caches the layout mapping for a newly attached keyboard. */
     @Override
     public void onInputDeviceAdded(int index) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -367,11 +436,13 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
         }
     }
 
+    /** {@inheritDoc} Drops the cached layout mapping. */
     @Override
     public void onInputDeviceRemoved(int index) {
         keyboardMappings.remove(index);
     }
 
+    /** {@inheritDoc} Rebuilds the cached mapping, since the device's layout may have changed. */
     @Override
     public void onInputDeviceChanged(int index) {
         keyboardMappings.remove(index);

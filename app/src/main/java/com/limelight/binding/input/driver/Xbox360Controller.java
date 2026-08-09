@@ -9,7 +9,18 @@ import com.limelight.nvstream.input.ControllerPacket;
 
 import java.nio.ByteBuffer;
 
+/**
+ * Driver for wired Xbox 360 controllers and the many third-party pads that speak the same
+ * protocol.
+ *
+ * <p>Devices are recognised by their vendor-specific interface descriptor rather than by exact
+ * VID/PID, because the clone ecosystem is far too large to enumerate; the vendor list below only
+ * narrows that check.
+ *
+ * @see Xbox360WirelessDongle for the wireless variant
+ */
 public class Xbox360Controller extends AbstractXboxController {
+    // Interface descriptor values that identify the XInput protocol
     private static final int XB360_IFACE_SUBCLASS = 93;
     private static final int XB360_IFACE_PROTOCOL = 1; // Wired only
 
@@ -42,6 +53,7 @@ public class Xbox360Controller extends AbstractXboxController {
             0x2dc8, // 8BitDo
     };
 
+    /** @return true if this device presents a wired XInput interface from a known vendor */
     public static boolean canClaimDevice(UsbDevice device) {
         for (int supportedVid : SUPPORTED_VENDORS) {
             if (device.getVendorId() == supportedVid &&
@@ -56,10 +68,12 @@ public class Xbox360Controller extends AbstractXboxController {
         return false;
     }
 
+    /** {@inheritDoc} */
     public Xbox360Controller(UsbDevice device, UsbDeviceConnection connection, int deviceId, UsbDriverListener listener) {
         super(device, connection, deviceId, listener);
     }
 
+    /** @return the byte reinterpreted as unsigned, since triggers report 0 to 255 */
     private int unsignByte(byte b) {
         if (b < 0) {
             return b + 256;
@@ -69,6 +83,7 @@ public class Xbox360Controller extends AbstractXboxController {
         }
     }
 
+    /** {@inheritDoc} Parses the fixed-layout XInput report. */
     @Override
     protected boolean handleRead(ByteBuffer buffer) {
         if (buffer.remaining() < 14) {
@@ -112,7 +127,8 @@ public class Xbox360Controller extends AbstractXboxController {
         leftTrigger = unsignByte(buffer.get()) / 255.0f;
         rightTrigger = unsignByte(buffer.get()) / 255.0f;
 
-        // Left stick
+        // Left stick. Y is inverted with ~ rather than unary minus so that the most negative
+        // value maps to +1.0 instead of overflowing back to itself.
         leftStickX = buffer.getShort() / 32767.0f;
         leftStickY = ~buffer.getShort() / 32767.0f;
 
@@ -124,6 +140,12 @@ public class Xbox360Controller extends AbstractXboxController {
         return true;
     }
 
+    /**
+     * Sets the ring-of-light state.
+     *
+     * @param command LED command; 2 through 5 light one quadrant each for players 1 through 4
+     * @return true if the command reached the controller
+     */
     private boolean sendLedCommand(byte command) {
         byte[] commandBuffer = {0x01, 0x03, command};
 
@@ -136,6 +158,7 @@ public class Xbox360Controller extends AbstractXboxController {
         return true;
     }
 
+    /** {@inheritDoc} Sets the player LED. Failure is not fatal; the pad still works. */
     @Override
     protected boolean doInit() {
         // Turn the LED on corresponding to our device ID
@@ -145,6 +168,12 @@ public class Xbox360Controller extends AbstractXboxController {
         return true;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The wire format carries 8-bit amplitudes, so the 16-bit values are truncated to their
+     * high byte.
+     */
     @Override
     public void rumble(short lowFreqMotor, short highFreqMotor) {
         byte[] data = {
@@ -158,6 +187,7 @@ public class Xbox360Controller extends AbstractXboxController {
         }
     }
 
+    /** {@inheritDoc} No trigger motors on this generation. */
     @Override
     public void rumbleTriggers(short leftTrigger, short rightTrigger) {
         // Trigger motors not present on Xbox 360 controllers

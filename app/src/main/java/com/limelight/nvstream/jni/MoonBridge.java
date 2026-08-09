@@ -4,6 +4,19 @@ import com.limelight.nvstream.NvConnectionListener;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 
+/**
+ * JNI boundary between this app and moonlight-common-c.
+ *
+ * <p>Traffic crosses in both directions. The {@code send*} and {@code startConnection} natives go
+ * down into the library; the {@code bridge*} static methods are called back up from it, on native
+ * threads, and dispatched to the renderers and listener registered by {@link #setupBridge}.
+ *
+ * <p>The constants mirror {@code Limelight.h} and must stay in step with it — they are passed
+ * across the boundary as raw values, so a mismatch is silent rather than a build error.
+ *
+ * <p>The static initialiser loads {@code libmoonlight-core}, which makes this class the load point
+ * for every native component in the app.
+ */
 public class MoonBridge {
     /* See documentation in Limelight.h for information about these functions and constants */
 
@@ -12,15 +25,21 @@ public class MoonBridge {
     public static final AudioConfiguration AUDIO_CONFIGURATION_71_SURROUND = new AudioConfiguration(8, 0x63F);
 
     public static final int VIDEO_FORMAT_H264 = 0x0001;
+    public static final int VIDEO_FORMAT_H264_HIGH8_444 = 0x0004;
     public static final int VIDEO_FORMAT_H265 = 0x0100;
     public static final int VIDEO_FORMAT_H265_MAIN10 = 0x0200;
+    public static final int VIDEO_FORMAT_H265_REXT8_444 = 0x0400;
+    public static final int VIDEO_FORMAT_H265_REXT10_444 = 0x0800;
     public static final int VIDEO_FORMAT_AV1_MAIN8 = 0x1000;
     public static final int VIDEO_FORMAT_AV1_MAIN10 = 0x2000;
+    public static final int VIDEO_FORMAT_AV1_HIGH8_444 = 0x4000;
+    public static final int VIDEO_FORMAT_AV1_HIGH10_444 = 0x8000;
 
     public static final int VIDEO_FORMAT_MASK_H264 = 0x000F;
     public static final int VIDEO_FORMAT_MASK_H265 = 0x0F00;
     public static final int VIDEO_FORMAT_MASK_AV1 = 0xF000;
-    public static final int VIDEO_FORMAT_MASK_10BIT = 0x2200;
+    public static final int VIDEO_FORMAT_MASK_10BIT = 0xAA00;
+    public static final int VIDEO_FORMAT_MASK_YUV444 = 0xCC04;
 
     public static final int BUFFER_TYPE_PICDATA = 0;
     public static final int BUFFER_TYPE_SPS = 1;
@@ -112,6 +131,18 @@ public class MoonBridge {
     public static final short LI_CCAP_BATTERY_STATE   = 0x40;
     public static final short LI_CCAP_RGB_LED         = 0x80;
 
+    // Mirrors Limelight.h but intentionally unused. Android's InputDevice API exposes a
+    // single SOURCE_TOUCHPAD per device with no way to address a second one, so we must
+    // never advertise this capability to the host.
+    public static final short LI_CCAP_DUAL_TOUCHPAD   = 0x100;
+
+    // Mirrors Limelight.h but intentionally unwired. Android has no API to apply
+    // adaptive trigger effects, so the setAdaptiveTriggers callback is left NULL and
+    // moonlight-common-c substitutes its own stub.
+    public static final int DS_EFFECT_PAYLOAD_SIZE  = 10;
+    public static final byte DS_EFFECT_RIGHT_TRIGGER = 0x04;
+    public static final byte DS_EFFECT_LEFT_TRIGGER  = 0x08;
+
     public static final byte LI_MOTION_TYPE_ACCEL = 0x01;
     public static final byte LI_MOTION_TYPE_GYRO  = 0x02;
 
@@ -133,6 +164,7 @@ public class MoonBridge {
         init();
     }
 
+    /** @return the capability bits encoding a requested slice count, for {@code getCapabilities()} */
     public static int CAPABILITY_SLICES_PER_FRAME(byte slices) {
         return slices << 24;
     }
@@ -188,6 +220,7 @@ public class MoonBridge {
         }
     }
 
+    /** Callback from native: set up the video decoder for the negotiated format. */
     public static int bridgeDrSetup(int videoFormat, int width, int height, int redrawRate) {
         if (videoRenderer != null) {
             return videoRenderer.setup(videoFormat, width, height, redrawRate);
@@ -197,18 +230,21 @@ public class MoonBridge {
         }
     }
 
+    /** Callback from native: start decoding. */
     public static void bridgeDrStart() {
         if (videoRenderer != null) {
             videoRenderer.start();
         }
     }
 
+    /** Callback from native: stop decoding. */
     public static void bridgeDrStop() {
         if (videoRenderer != null) {
             videoRenderer.stop();
         }
     }
 
+    /** Callback from native: release the decoder. */
     public static void bridgeDrCleanup() {
         if (videoRenderer != null) {
             videoRenderer.cleanup();
@@ -217,16 +253,17 @@ public class MoonBridge {
 
     public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                                int frameNumber, int frameType, char frameHostProcessingLatency,
-                                               long receiveTimeMs, long enqueueTimeMs) {
+                                               long receiveTimeUs, long enqueueTimeUs) {
         if (videoRenderer != null) {
             return videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
-                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeMs, enqueueTimeMs);
+                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs);
         }
         else {
             return DR_OK;
         }
     }
 
+    /** Callback from native: set up audio output for the negotiated configuration. */
     public static int bridgeArInit(int audioConfiguration, int sampleRate, int samplesPerFrame) {
         if (audioRenderer != null) {
             return audioRenderer.setup(new AudioConfiguration(audioConfiguration), sampleRate, samplesPerFrame);
@@ -236,102 +273,122 @@ public class MoonBridge {
         }
     }
 
+    /** Callback from native: start audio playback. */
     public static void bridgeArStart() {
         if (audioRenderer != null) {
             audioRenderer.start();
         }
     }
 
+    /** Callback from native: stop audio playback. */
     public static void bridgeArStop() {
         if (audioRenderer != null) {
             audioRenderer.stop();
         }
     }
 
+    /** Callback from native: release the audio output. */
     public static void bridgeArCleanup() {
         if (audioRenderer != null) {
             audioRenderer.cleanup();
         }
     }
 
+    /** Callback from native: play one frame of decoded PCM. The buffer is reused, so do not retain it. */
     public static void bridgeArPlaySample(short[] pcmData) {
         if (audioRenderer != null) {
             audioRenderer.playDecodedAudio(pcmData);
         }
     }
 
+    /** Callback from native: a connection stage has begun. */
     public static void bridgeClStageStarting(int stage) {
         if (connectionListener != null) {
             connectionListener.stageStarting(getStageName(stage));
         }
     }
 
+    /** Callback from native: a connection stage completed. */
     public static void bridgeClStageComplete(int stage) {
         if (connectionListener != null) {
             connectionListener.stageComplete(getStageName(stage));
         }
     }
 
+    /** Callback from native: a connection stage failed. */
     public static void bridgeClStageFailed(int stage, int errorCode) {
         if (connectionListener != null) {
             connectionListener.stageFailed(getStageName(stage), getPortFlagsFromStage(stage), errorCode);
         }
     }
 
+    /** Callback from native: the stream is live. */
     public static void bridgeClConnectionStarted() {
         if (connectionListener != null) {
             connectionListener.connectionStarted();
         }
     }
 
+    /** Callback from native: the stream ended, gracefully if the error code is zero. */
     public static void bridgeClConnectionTerminated(int errorCode) {
         if (connectionListener != null) {
             connectionListener.connectionTerminated(errorCode);
         }
     }
 
+    /** Callback from native: the host requested rumble. */
     public static void bridgeClRumble(short controllerNumber, short lowFreqMotor, short highFreqMotor) {
         if (connectionListener != null) {
             connectionListener.rumble(controllerNumber, lowFreqMotor, highFreqMotor);
         }
     }
 
+    /** Callback from native: connection quality changed. */
     public static void bridgeClConnectionStatusUpdate(int connectionStatus) {
         if (connectionListener != null) {
             connectionListener.connectionStatusUpdate(connectionStatus);
         }
     }
 
+    /** Callback from native: the host switched HDR on or off. */
     public static void bridgeClSetHdrMode(boolean enabled, byte[] hdrMetadata) {
         if (connectionListener != null) {
             connectionListener.setHdrMode(enabled, hdrMetadata);
         }
     }
 
+    /** Callback from native: the host requested trigger rumble. */
     public static void bridgeClRumbleTriggers(short controllerNumber, short leftTrigger, short rightTrigger) {
         if (connectionListener != null) {
             connectionListener.rumbleTriggers(controllerNumber, leftTrigger, rightTrigger);
         }
     }
 
+    /** Callback from native: the host wants motion reporting started or stopped. */
     public static void bridgeClSetMotionEventState(short controllerNumber, byte eventType, short sampleRateHz) {
         if (connectionListener != null) {
             connectionListener.setMotionEventState(controllerNumber, eventType, sampleRateHz);
         }
     }
 
+    /** Callback from native: the host set a controller's LED colour. */
     public static void bridgeClSetControllerLED(short controllerNumber, byte r, byte g, byte b) {
         if (connectionListener != null) {
             connectionListener.setControllerLED(controllerNumber, r, g, b);
         }
     }
 
+    /**
+     * Registers the sinks the native library will call back into. Must be called before
+     * {@link #startConnection}.
+     */
     public static void setupBridge(VideoDecoderRenderer videoRenderer, AudioRenderer audioRenderer, NvConnectionListener connectionListener) {
         MoonBridge.videoRenderer = videoRenderer;
         MoonBridge.audioRenderer = audioRenderer;
         MoonBridge.connectionListener = connectionListener;
     }
 
+    /** Clears the registered sinks so late callbacks can't reach a torn-down session. */
     public static void cleanupBridge() {
         MoonBridge.videoRenderer = null;
         MoonBridge.audioRenderer = null;
@@ -346,7 +403,15 @@ public class MoonBridge {
                                               int clientRefreshRateX100,
                                               byte[] riAesKey, byte[] riAesIv,
                                               int videoCapabilities,
-                                              int colorSpace, int colorRange);
+                                              int colorSpace, int colorRange,
+                                              int encryptionFlags);
+
+    /**
+     * @return true if this CPU has hardware AES, meaning encryption is cheap enough that
+     *         encrypting video is reasonable. Only used to warn in settings; it no longer
+     *         influences what the client requests.
+     */
+    public static native boolean hasFastAes();
 
     public static native void stopConnection();
 
@@ -391,11 +456,26 @@ public class MoonBridge {
 
     public static native String getStageName(int stage);
 
-    public static native String findExternalAddressIP4(String stunHostName, int stunPort);
-
     public static native int getPendingAudioDuration();
 
-    public static native int getPendingVideoFrames();
+
+    // Indices into the arrays returned by getRTPAudioStats()/getRTPVideoStats().
+    public static final int RTP_STAT_PACKETS       = 0; // audio or video packets, per stream
+    public static final int RTP_STAT_FEC           = 1;
+    public static final int RTP_STAT_FEC_RECOVERED = 2;
+    public static final int RTP_STAT_FEC_FAILED    = 3;
+    public static final int RTP_STAT_OOS           = 4;
+    public static final int RTP_STAT_INVALID       = 5;
+    public static final int RTP_STAT_FEC_INVALID   = 6;
+    // Packets that arrived but could not be decrypted. Read against RTP_STAT_PACKETS, which
+    // counts every packet before decryption runs and so is the denominator.
+    public static final int RTP_STAT_DECRYPT_FAILED = 7;
+
+    // Counters are cumulative for the lifetime of the stream. Safe to call at any
+    // time - moonlight-common-c returns a zeroed struct when no stream is active.
+    public static native long[] getRTPAudioStats();
+
+    public static native long[] getRTPVideoStats();
 
     public static native int testClientConnectivity(String testServerHostName, int referencePort, int testFlags);
 

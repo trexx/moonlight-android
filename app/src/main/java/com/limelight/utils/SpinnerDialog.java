@@ -8,6 +8,12 @@ import android.app.ProgressDialog;
 import android.content.DialogInterface;
 import android.content.DialogInterface.OnCancelListener;
 
+/**
+ * Progress spinner for blocking operations, shown and updated from any thread.
+ *
+ * <p>Tracked per activity so they can all be dismissed when it goes away, for the same reason as
+ * {@link Dialog}.
+ */
 public class SpinnerDialog implements Runnable,OnCancelListener {
     private final String title;
     private final String message;
@@ -55,6 +61,7 @@ public class SpinnerDialog implements Runnable,OnCancelListener {
         activity.runOnUiThread(this);
     }
 
+    /** Updates the message in place, used to report connection progress as stages complete. */
     public void setMessage(final String message)
     {
         activity.runOnUiThread(new Runnable() {
@@ -65,6 +72,7 @@ public class SpinnerDialog implements Runnable,OnCancelListener {
         });
     }
 
+    /** {@inheritDoc} Shows the dialog on the UI thread. */
     @Override
     public void run() {
 
@@ -108,6 +116,7 @@ public class SpinnerDialog implements Runnable,OnCancelListener {
         }
     }
 
+    /** {@inheritDoc} Ends the activity when the user dismisses a blocking operation. */
     @Override
     public void onCancel(DialogInterface dialog) {
         synchronized (rundownDialogs) {

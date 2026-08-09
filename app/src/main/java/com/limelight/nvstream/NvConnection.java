@@ -7,7 +7,6 @@ import android.net.IpPrefix;
 import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
-import android.net.NetworkInfo;
 import android.net.RouteInfo;
 import android.os.Build;
 
@@ -19,8 +18,6 @@ import java.nio.ByteBuffer;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.Semaphore;
 
 import javax.crypto.KeyGenerator;
@@ -40,12 +37,31 @@ import com.limelight.nvstream.http.PairingManager;
 import com.limelight.nvstream.input.MouseButtonPacket;
 import com.limelight.nvstream.jni.MoonBridge;
 
+/**
+ * A streaming session: the handshake with the host, and the input channel once it is running.
+ *
+ * <p>Startup is the involved part. It resolves the host address, works out whether this is a local
+ * or remote connection (which changes bitrate and packet size), launches or resumes the app over
+ * HTTPS, and only then hands off to moonlight-common-c, which owns the actual streams.
+ *
+ * <p>Afterwards this is mostly a thin, thread-safe façade over the native input API: the
+ * {@code send*} methods below are called from the UI thread as input arrives and simply forward to
+ * {@link MoonBridge}.
+ *
+ * <p>Only one connection may exist at a time, enforced by a static semaphore — the native library
+ * holds global state, so a second overlapping connection would corrupt the first.
+ */
 public class NvConnection {
     // Context parameters
     private LimelightCryptoProvider cryptoProvider;
     private String uniqueId;
     private ConnectionContext context;
     private static Semaphore connectionAllowed = new Semaphore(1);
+
+    // Retry budget for the app launch stage. See the loop in start().
+    private static final int LAUNCH_ATTEMPTS = 5;
+    private static final int LAUNCH_RETRY_DELAY_MS = 2000;
+
     private final boolean isMonkey;
     private final Context appContext;
 
@@ -68,6 +84,7 @@ public class NvConnection {
         this.isMonkey = ActivityManager.isUserAMonkey();
     }
     
+    /** @return a fresh AES key for the remote input stream, generated per session */
     private static SecretKey generateRiAesKey() {
         try {
             KeyGenerator keyGen = KeyGenerator.getInstance("AES");
@@ -82,10 +99,12 @@ public class NvConnection {
         }
     }
     
+    /** @return the key ID sent to the host alongside the remote input key */
     private static int generateRiKeyId() {
         return new SecureRandom().nextInt();
     }
 
+    /** Ends the stream and releases the connection slot. Safe to call more than once. */
     public void stop() {
         // Interrupt any pending connection. This is thread-safe.
         MoonBridge.interruptConnection();
@@ -101,6 +120,7 @@ public class NvConnection {
         connectionAllowed.release();
     }
 
+    /** @throws IOException if the host's address can't be resolved, which aborts the connection */
     private InetAddress resolveServerAddress() throws IOException {
         // Try to find an address that works for this host
         InetAddress[] addrs = InetAddress.getAllByName(context.serverAddress.address);
@@ -124,93 +144,68 @@ public class NvConnection {
         }
     }
 
+    /**
+     * @return whether this connection should be treated as local or remote, which the host uses to
+     *         pick its own defaults. Determined from the resolved address rather than trusted from
+     *         configuration, since a host saved by hostname can be either.
+     */
     private int detectServerConnectionType() {
         ConnectivityManager connMgr = (ConnectivityManager) appContext.getSystemService(Context.CONNECTIVITY_SERVICE);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Network activeNetwork = connMgr.getActiveNetwork();
-            if (activeNetwork != null) {
-                NetworkCapabilities netCaps = connMgr.getNetworkCapabilities(activeNetwork);
-                if (netCaps != null) {
-                    if (netCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
-                            !netCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) {
-                        // VPNs are treated as remote connections
-                        return StreamConfiguration.STREAM_CFG_REMOTE;
-                    }
-                    else if (netCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-                        // Cellular is always treated as remote to avoid any possible
-                        // issues with 464XLAT or similar technologies.
-                        return StreamConfiguration.STREAM_CFG_REMOTE;
-                    }
+        Network activeNetwork = connMgr.getActiveNetwork();
+        if (activeNetwork != null) {
+            NetworkCapabilities netCaps = connMgr.getNetworkCapabilities(activeNetwork);
+            if (netCaps != null) {
+                if (netCaps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
+                        !netCaps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)) {
+                    // VPNs are treated as remote connections
+                    return StreamConfiguration.STREAM_CFG_REMOTE;
                 }
-
-                // Check if the server address is on-link
-                LinkProperties linkProperties = connMgr.getLinkProperties(activeNetwork);
-                if (linkProperties != null) {
-                    InetAddress serverAddress;
-                    try {
-                        serverAddress = resolveServerAddress();
-                    } catch (IOException e) {
-                        e.printStackTrace();
-
-                        // We can't decide without being able to resolve the server address
-                        return StreamConfiguration.STREAM_CFG_AUTO;
-                    }
-
-                    // If the address is in the NAT64 prefix, always treat it as remote
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                        IpPrefix nat64Prefix = linkProperties.getNat64Prefix();
-                        if (nat64Prefix != null && nat64Prefix.contains(serverAddress)) {
-                            return StreamConfiguration.STREAM_CFG_REMOTE;
-                        }
-                    }
-
-                    for (RouteInfo route : linkProperties.getRoutes()) {
-                        // Skip non-unicast routes (which are all we get prior to Android 13)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && route.getType() != RouteInfo.RTN_UNICAST) {
-                            continue;
-                        }
-
-                        // Find the first route that matches this address
-                        if (route.matches(serverAddress)) {
-                            // If there's no gateway, this is an on-link destination
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                // We want to use hasGateway() because getGateway() doesn't adhere
-                                // to documented behavior of returning null for on-link addresses.
-                                if (!route.hasGateway()) {
-                                    return StreamConfiguration.STREAM_CFG_LOCAL;
-                                }
-                            }
-                            else {
-                                // getGateway() is documented to return null for on-link destinations,
-                                // but it actually returns the unspecified address (0.0.0.0 or ::).
-                                InetAddress gateway = route.getGateway();
-                                if (gateway == null || gateway.isAnyLocalAddress()) {
-                                    return StreamConfiguration.STREAM_CFG_LOCAL;
-                                }
-                            }
-
-                            // We _should_ stop after the first matching route, but for some reason
-                            // Android doesn't always report IPv6 routes in descending order of
-                            // specificity and metric. To handle that case, we enumerate all matching
-                            // routes, assuming that an on-link route will always be preferred.
-                        }
-                    }
+                else if (netCaps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                    // Cellular is always treated as remote to avoid any possible
+                    // issues with 464XLAT or similar technologies.
+                    return StreamConfiguration.STREAM_CFG_REMOTE;
                 }
             }
-        }
-        else {
-            NetworkInfo activeNetworkInfo = connMgr.getActiveNetworkInfo();
-            if (activeNetworkInfo != null) {
-                switch (activeNetworkInfo.getType()) {
-                    case ConnectivityManager.TYPE_VPN:
-                    case ConnectivityManager.TYPE_MOBILE:
-                    case ConnectivityManager.TYPE_MOBILE_DUN:
-                    case ConnectivityManager.TYPE_MOBILE_HIPRI:
-                    case ConnectivityManager.TYPE_MOBILE_MMS:
-                    case ConnectivityManager.TYPE_MOBILE_SUPL:
-                    case ConnectivityManager.TYPE_WIMAX:
-                        // VPNs and cellular connections are always remote connections
-                        return StreamConfiguration.STREAM_CFG_REMOTE;
+
+            // Check if the server address is on-link
+            LinkProperties linkProperties = connMgr.getLinkProperties(activeNetwork);
+            if (linkProperties != null) {
+                InetAddress serverAddress;
+                try {
+                    serverAddress = resolveServerAddress();
+                } catch (IOException e) {
+                    e.printStackTrace();
+
+                    // We can't decide without being able to resolve the server address
+                    return StreamConfiguration.STREAM_CFG_AUTO;
+                }
+
+                // If the address is in the NAT64 prefix, always treat it as remote
+                IpPrefix nat64Prefix = linkProperties.getNat64Prefix();
+                if (nat64Prefix != null && nat64Prefix.contains(serverAddress)) {
+                    return StreamConfiguration.STREAM_CFG_REMOTE;
+                }
+
+                for (RouteInfo route : linkProperties.getRoutes()) {
+                    // Skip non-unicast routes (which are all we get prior to Android 13)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && route.getType() != RouteInfo.RTN_UNICAST) {
+                        continue;
+                    }
+
+                    // Find the first route that matches this address
+                    if (route.matches(serverAddress)) {
+                        // If there's no gateway, this is an on-link destination
+                        // We want to use hasGateway() because getGateway() doesn't adhere
+                        // to documented behavior of returning null for on-link addresses.
+                        if (!route.hasGateway()) {
+                            return StreamConfiguration.STREAM_CFG_LOCAL;
+                        }
+
+                        // We _should_ stop after the first matching route, but for some reason
+                        // Android doesn't always report IPv6 routes in descending order of
+                        // specificity and metric. To handle that case, we enumerate all matching
+                        // routes, assuming that an on-link route will always be preferred.
+                    }
                 }
             }
         }
@@ -219,6 +214,15 @@ public class NvConnection {
         return StreamConfiguration.STREAM_CFG_AUTO;
     }
     
+    /**
+     * Launches or resumes the requested app on the host and negotiates the session.
+     *
+     * <p>Resume and launch are distinct host operations: if the requested app is already running
+     * it is resumed, a different running app has to be quit first, and only then can a new one be
+     * launched.
+     *
+     * @return true if the app is running and the stream may begin
+     */
     private boolean startApp() throws XmlPullParserException, IOException
     {
         NvHTTP h = new NvHTTP(context.serverAddress, context.httpsPort, uniqueId, context.serverCert, cryptoProvider);
@@ -231,10 +235,7 @@ public class NvConnection {
             return false;
         }
 
-        ComputerDetails details = h.getComputerDetails(serverInfo);
-        context.isNvidiaServerSoftware = details.nvidiaServer;
-
-        // May be missing for older servers
+        // May be missing on some hosts
         context.serverGfeVersion = h.getGfeVersion(serverInfo);
                 
         if (h.getPairState(serverInfo) != PairingManager.PairState.PAIRED) {
@@ -256,22 +257,9 @@ public class NvConnection {
         
         // Check for a supported stream resolution
         if ((context.streamConfig.getWidth() > 4096 || context.streamConfig.getHeight() > 4096) &&
-                (h.getServerCodecModeSupport(serverInfo) & 0x200) == 0 && context.isNvidiaServerSoftware) {
-            context.connListener.displayMessage("Your host PC does not support streaming at resolutions above 4K.");
-            return false;
-        }
-        else if ((context.streamConfig.getWidth() > 4096 || context.streamConfig.getHeight() > 4096) &&
                 (context.streamConfig.getSupportedVideoFormats() & ~MoonBridge.VIDEO_FORMAT_MASK_H264) == 0) {
             context.connListener.displayMessage("Your streaming device must support HEVC or AV1 to stream at resolutions above 4K.");
             return false;
-        }
-        else if (context.streamConfig.getHeight() >= 2160 && !h.supports4K(serverInfo)) {
-            // Client wants 4K but the server can't do it
-            context.connListener.displayTransientMessage("You must update GeForce Experience to stream in 4K. The stream will be 1080p.");
-            
-            // Lower resolution to 1080p
-            context.negotiatedWidth = 1920;
-            context.negotiatedHeight = 1080;
         }
         else {
             // Take what the client wanted
@@ -302,7 +290,7 @@ public class NvConnection {
             LimeLog.info("Using deprecated app lookup method - Please specify an app ID in your StreamConfiguration instead");
             app = h.getAppByName(context.streamConfig.getApp().getAppName());
             if (app == null) {
-                context.connListener.displayMessage("The app " + context.streamConfig.getApp().getAppName() + " is not in GFE app list");
+                context.connListener.displayMessage("The app " + context.streamConfig.getApp().getAppName() + " is not in the host's app list");
                 return false;
             }
         }
@@ -344,6 +332,7 @@ public class NvConnection {
         }
     }
 
+    /** Quits whatever the host is running, then launches the requested app in its place. */
     protected boolean quitAndLaunch(NvHTTP h, ConnectionContext context) throws IOException,
             XmlPullParserException {
         try {
@@ -366,6 +355,7 @@ public class NvConnection {
         return launchNotRunningApp(h, context);
     }
     
+    /** Launches an app on a host that currently has nothing running. */
     private boolean launchNotRunningApp(NvHTTP h, ConnectionContext context)
             throws IOException, XmlPullParserException {
         // Launch the app since it's not running
@@ -379,6 +369,12 @@ public class NvConnection {
         return true;
     }
 
+    /**
+     * Starts the connection on a background thread, reporting progress through the listener.
+     *
+     * <p>Returns immediately; success or failure arrives as
+     * {@link NvConnectionListener#connectionStarted()} or a stage failure.
+     */
     public void start(final AudioRenderer audioRenderer, final VideoDecoderRenderer videoDecoderRenderer, final NvConnectionListener connectionListener)
     {
         new Thread(new Runnable() {
@@ -390,22 +386,42 @@ public class NvConnection {
 
                 context.connListener.stageStarting(appName);
 
-                try {
-                    if (!startApp()) {
-                        context.connListener.stageFailed(appName, 0, 0);
+                // A host that has just woken up can accept our connection while Sunshine is
+                // still initialising, which fails the launch in a way that succeeds moments
+                // later. Retry a few times before surfacing the failure to the user.
+                int launchAttempt = 0;
+                while (true) {
+                    boolean retry;
+
+                    try {
+                        if (startApp()) {
+                            context.connListener.stageComplete(appName);
+                            break;
+                        }
+                        retry = context.connListener.stageFailed(appName, 0, 0);
+                    } catch (HostHttpResponseException e) {
+                        e.printStackTrace();
+                        retry = context.connListener.stageFailed(appName, 0, e.getErrorCode());
+                        if (!retry) {
+                            context.connListener.displayMessage(e.getMessage());
+                        }
+                    } catch (XmlPullParserException | IOException e) {
+                        e.printStackTrace();
+                        retry = context.connListener.stageFailed(appName, MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989, 0);
+                        if (!retry) {
+                            context.connListener.displayMessage(e.getMessage());
+                        }
+                    }
+
+                    if (!retry || ++launchAttempt >= LAUNCH_ATTEMPTS) {
                         return;
                     }
-                    context.connListener.stageComplete(appName);
-                } catch (HostHttpResponseException e) {
-                    e.printStackTrace();
-                    context.connListener.displayMessage(e.getMessage());
-                    context.connListener.stageFailed(appName, 0, e.getErrorCode());
-                    return;
-                } catch (XmlPullParserException | IOException e) {
-                    e.printStackTrace();
-                    context.connListener.displayMessage(e.getMessage());
-                    context.connListener.stageFailed(appName, MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989, 0);
-                    return;
+
+                    try {
+                        Thread.sleep(LAUNCH_RETRY_DELAY_MS);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
                 }
 
                 ByteBuffer ib = ByteBuffer.allocate(16);
@@ -437,7 +453,8 @@ public class NvConnection {
                             context.riKey.getEncoded(), ib.array(),
                             context.videoCapabilities,
                             context.streamConfig.getColorSpace(),
-                            context.streamConfig.getColorRange());
+                            context.streamConfig.getColorRange(),
+                            context.streamConfig.getEncryptionFlags());
                     if (ret != 0) {
                         // LiStartConnection() failed, so the caller is not expected
                         // to stop the connection themselves. We need to release their
@@ -450,6 +467,7 @@ public class NvConnection {
         }).start();
     }
     
+    /** Sends relative mouse movement in host pixels. */
     public void sendMouseMove(final short deltaX, final short deltaY)
     {
         if (!isMonkey) {
@@ -457,6 +475,13 @@ public class NvConnection {
         }
     }
 
+    /**
+     * Sends an absolute cursor position.
+     *
+     * @param referenceWidth  width of the coordinate space x is expressed in, so the host can
+     *                        rescale to its own resolution
+     * @param referenceHeight height of that coordinate space
+     */
     public void sendMousePosition(short x, short y, short referenceWidth, short referenceHeight)
     {
         if (!isMonkey) {
@@ -464,6 +489,7 @@ public class NvConnection {
         }
     }
 
+    /** Sends relative movement as an absolute position, for hosts that handle relative input poorly. */
     public void sendMouseMoveAsMousePosition(short deltaX, short deltaY, short referenceWidth, short referenceHeight)
     {
         if (!isMonkey) {
@@ -471,6 +497,7 @@ public class NvConnection {
         }
     }
 
+    /** @param mouseButton a {@code MouseButtonPacket.BUTTON_*} constant */
     public void sendMouseButtonDown(final byte mouseButton)
     {
         if (!isMonkey) {
@@ -478,6 +505,7 @@ public class NvConnection {
         }
     }
     
+    /** @param mouseButton a {@code MouseButtonPacket.BUTTON_*} constant */
     public void sendMouseButtonUp(final byte mouseButton)
     {
         if (!isMonkey) {
@@ -485,6 +513,7 @@ public class NvConnection {
         }
     }
     
+    /** Sends one controller's complete state. State is absolute, not incremental. */
     public void sendControllerInput(final short controllerNumber,
             final short activeGamepadMask, final int buttonFlags,
             final byte leftTrigger, final byte rightTrigger,
@@ -497,30 +526,39 @@ public class NvConnection {
         }
     }
 
+    /**
+     * @param keyMap       wire keycode from {@code KeyboardTranslator}, prefix already applied
+     * @param keyDirection {@code KeyboardPacket.KEY_DOWN} or {@code KEY_UP}
+     * @param modifier     modifier bitfield in effect for this keystroke
+     */
     public void sendKeyboardInput(final short keyMap, final byte keyDirection, final byte modifier, final byte flags) {
         if (!isMonkey) {
             MoonBridge.sendKeyboardInput(keyMap, keyDirection, modifier, flags);
         }
     }
     
+    /** Sends vertical scrolling in whole wheel clicks. */
     public void sendMouseScroll(final byte scrollClicks) {
         if (!isMonkey) {
             MoonBridge.sendMouseHighResScroll((short)(scrollClicks * 120)); // WHEEL_DELTA
         }
     }
 
+    /** Sends horizontal scrolling in whole wheel clicks. */
     public void sendMouseHScroll(final byte scrollClicks) {
         if (!isMonkey) {
             MoonBridge.sendMouseHighResHScroll((short)(scrollClicks * 120)); // WHEEL_DELTA
         }
     }
 
+    /** Sends vertical scrolling at sub-click resolution, for smooth touch scrolling. */
     public void sendMouseHighResScroll(final short scrollAmount) {
         if (!isMonkey) {
             MoonBridge.sendMouseHighResScroll(scrollAmount);
         }
     }
 
+    /** Sends horizontal scrolling at sub-click resolution. */
     public void sendMouseHighResHScroll(final short scrollAmount) {
         if (!isMonkey) {
             MoonBridge.sendMouseHighResHScroll(scrollAmount);
@@ -575,17 +613,19 @@ public class NvConnection {
         }
     }
 
+    /** Reports a controller's battery state, so the host can display it. */
     public void sendControllerBatteryEvent(byte controllerNumber, byte batteryState, byte batteryPercentage) {
         MoonBridge.sendControllerBatteryEvent(controllerNumber, batteryState, batteryPercentage);
     }
 
+    /**
+     * Sends text directly, bypassing keycodes entirely. Used for soft keyboard input, where the
+     * characters produced don't necessarily correspond to any key the host would recognise.
+     */
     public void sendUtf8Text(final String text) {
         if (!isMonkey) {
             MoonBridge.sendUtf8Text(text);
         }
     }
 
-    public static String findExternalAddressForMdns(String stunHostname, int stunPort) {
-        return MoonBridge.findExternalAddressIP4(stunHostname, stunPort);
-    }
 }

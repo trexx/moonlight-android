@@ -13,6 +13,13 @@ import com.limelight.R;
 
 import java.util.ArrayList;
 
+/**
+ * Base adapter for the app and host grids.
+ *
+ * <p>Holds the common view structure — icon, label, progress spinner and an overlay badge — and
+ * leaves subclasses to fill it in via {@link #populateView}. The spinner and overlay exist because
+ * both grids show items whose artwork and state arrive asynchronously.
+ */
 public abstract class GenericGridAdapter<T> extends BaseAdapter {
     protected final Context context;
     private int layoutId;
@@ -35,27 +42,38 @@ public abstract class GenericGridAdapter<T> extends BaseAdapter {
         }
     }
 
+    /** Removes every item. */
     public void clear() {
         itemList.clear();
     }
 
+    /** {@inheritDoc} */
     @Override
     public int getCount() {
         return itemList.size();
     }
 
+    /** {@inheritDoc} */
     @Override
     public Object getItem(int i) {
         return itemList.get(i);
     }
 
+    /** {@inheritDoc} Position is the ID; items have no stable identity of their own. */
     @Override
     public long getItemId(int i) {
         return i;
     }
 
+    /**
+     * Binds one item to the recycled views for its cell.
+     *
+     * @param prgView     progress spinner, shown while the item's artwork is still loading
+     * @param overlayView badge drawn over the icon, for state such as "running" or "offline"
+     */
     public abstract void populateView(View parentView, ImageView imgView, ProgressBar prgView, TextView txtView, ImageView overlayView, T obj);
 
+    /** {@inheritDoc} Inflates or recycles a cell, then hands it to {@link #populateView}. */
     @Override
     public View getView(int i, View convertView, ViewGroup viewGroup) {
         if (convertView == null) {

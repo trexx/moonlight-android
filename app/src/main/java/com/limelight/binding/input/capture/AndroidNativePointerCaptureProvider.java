@@ -1,37 +1,47 @@
 package com.limelight.binding.input.capture;
 
-import android.annotation.TargetApi;
 import android.app.Activity;
 import android.hardware.input.InputManager;
-import android.os.Build;
 import android.os.Handler;
+import android.os.Looper;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
 
 
+/**
+ * Mouse capture via Android's native pointer capture API.
+ *
+ * <p>This is the capture provider used on all supported devices. Captured events arrive with true
+ * relative axes, so the host cursor keeps moving past the edges of the local screen.
+ *
+ * <p>Capture is conditional on a compatible pointing device actually being present, and is
+ * re-evaluated as devices come and go, because requesting capture with no mouse attached breaks
+ * touch and stylus input on some devices. It also has to be re-requested after focus loss, since
+ * Android drops capture whenever the window loses focus.
+ */
 // We extend AndroidPointerIconCaptureProvider because we want to also get the
 // pointer icon hiding behavior over our stream view just in case pointer capture
 // is unavailable on this system (ex: DeX, ChromeOS)
-@TargetApi(Build.VERSION_CODES.O)
 public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptureProvider implements InputManager.InputDeviceListener {
     private final InputManager inputManager;
     private final View targetView;
 
+    /** @param targetView the view that receives captured pointer events */
     public AndroidNativePointerCaptureProvider(Activity activity, View targetView) {
         super(activity, targetView);
         this.inputManager = activity.getSystemService(InputManager.class);
         this.targetView = targetView;
     }
 
-    public static boolean isCaptureProviderSupported() {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O;
-    }
-
     // We only capture the pointer if we have a compatible InputDevice
     // present. This is a workaround for an Android 12 regression causing
     // incorrect mouse input when using the SPen.
     // https://github.com/moonlight-stream/moonlight-android/issues/1030
+    /**
+     * @return true if a mouse, relative mouse or touchpad is attached. Touchscreens are excluded
+     *         except on ChromeOS; see the comment below for why.
+     */
     private boolean hasCaptureCompatibleInputDevice() {
         for (int id : InputDevice.getDeviceIds()) {
             InputDevice device = InputDevice.getDevice(id);
@@ -61,6 +71,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
         return false;
     }
 
+    /** {@inheritDoc} Releases capture and stops watching for device changes. */
     @Override
     public void showCursor() {
         super.showCursor();
@@ -72,6 +83,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
         targetView.releasePointerCapture();
     }
 
+    /** {@inheritDoc} Captures the pointer if a compatible device is present, and watches for one arriving. */
     @Override
     public void hideCursor() {
         super.hideCursor();
@@ -85,6 +97,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
         }
     }
 
+    /** {@inheritDoc} Re-requests capture after regaining focus, which Android drops on focus loss. */
     @Override
     public void onWindowFocusChanged(boolean focusActive) {
         // NB: We have to check cursor visibility here because Android pointer capture
@@ -98,7 +111,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
         // we have to delay a bit before requesting capture because otherwise
         // we'll hit the "requestPointerCapture called for a window that has no focus"
         // error and it will not actually capture the cursor.
-        Handler h = new Handler();
+        Handler h = new Handler(Looper.getMainLooper());
         h.postDelayed(new Runnable() {
             @Override
             public void run() {
@@ -109,6 +122,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
         }, 500);
     }
 
+    /** {@inheritDoc} */
     @Override
     public boolean eventHasRelativeMouseAxes(MotionEvent event) {
         // SOURCE_MOUSE_RELATIVE is how SOURCE_MOUSE appears when our view has pointer capture.
@@ -119,6 +133,12 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
                 (eventSource == InputDevice.SOURCE_TOUCHPAD && targetView.hasPointerCapture());
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Historical samples are summed in rather than discarded: relative axes report deltas, so
+     * dropping the batched samples would lose real movement.
+     */
     @Override
     public float getRelativeAxisX(MotionEvent event) {
         int axis = (event.getSource() == InputDevice.SOURCE_MOUSE_RELATIVE) ?
@@ -130,6 +150,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
         return x;
     }
 
+    /** {@inheritDoc} Sums historical samples; see {@link #getRelativeAxisX(MotionEvent)}. */
     @Override
     public float getRelativeAxisY(MotionEvent event) {
         int axis = (event.getSource() == InputDevice.SOURCE_MOUSE_RELATIVE) ?
@@ -141,6 +162,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
         return y;
     }
 
+    /** {@inheritDoc} Starts capturing if the new device makes capture viable. */
     @Override
     public void onInputDeviceAdded(int deviceId) {
         // Check if we've added a capture-compatible device
@@ -149,6 +171,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
         }
     }
 
+    /** {@inheritDoc} Stops capturing once the last compatible device is gone. */
     @Override
     public void onInputDeviceRemoved(int deviceId) {
         // Check if the capture-compatible device was removed
@@ -157,6 +180,7 @@ public class AndroidNativePointerCaptureProvider extends AndroidPointerIconCaptu
         }
     }
 
+    /** {@inheritDoc} Treated as a removal followed by an addition; see the note below. */
     @Override
     public void onInputDeviceChanged(int deviceId) {
         // Emulating a remove+add should be sufficient for our purposes.

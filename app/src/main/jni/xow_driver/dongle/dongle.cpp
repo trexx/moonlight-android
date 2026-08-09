@@ -51,6 +51,12 @@ bool Dongle::start(std::string firmwarePath) {
     return true;
 }
 
+bool Dongle::setPairing(bool enable) {
+    std::lock_guard<std::mutex> lock(pairingMutex);
+
+    return setPairingStatus(enable);
+}
+
 void Dongle::stop() {
     if(stopThreads) {
         return;
@@ -191,7 +197,7 @@ void Dongle::handleControllerPair(Bytes address, const Bytes &packet)
         return;
     }
 
-    if (!setPairingStatus(false))
+    if (!setPairing(false))
     {
         Log::error("Failed to disable pairing");
 
@@ -323,8 +329,9 @@ void Dongle::handleBulkData(const Bytes &data)
         switch (info->eventType)
         {
             case EVT_BUTTON_PRESS:
-                // Setting the pairing status doesn't require locking the mutex
-                setPairingStatus(true);
+                // Doesn't need controllerMutex, but does need pairingMutex, which
+                // setPairing() takes: the app can request a pairing change concurrently.
+                setPairing(true);
                 break;
 
             case EVT_PACKET_RX:
