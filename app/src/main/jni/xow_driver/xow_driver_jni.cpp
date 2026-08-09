@@ -37,6 +37,16 @@ Java_com_limelight_binding_input_driver_XboxWirelessDongle_startDriver(JNIEnv *e
 }
 
 extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_binding_input_driver_XboxWirelessDongle_setPairingModeNative(JNIEnv *env,
+                                                                                jobject thiz,
+                                                                                jlong handle,
+                                                                                jboolean enable) {
+    auto *dongle = (Dongle *) handle;
+    return dongle->setPairing(enable == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
 JNIEXPORT void JNICALL
 Java_com_limelight_binding_input_driver_XboxWirelessDongle_stopDriver(JNIEnv *env, jobject thiz,
                                                                       jlong handle) {

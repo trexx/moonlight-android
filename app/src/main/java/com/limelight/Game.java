@@ -204,6 +204,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private WifiManager.WifiLock lowLatencyWifiLock;
 
     private boolean connectedToUsbDriverService = false;
+    // Retained so the game menu can ask about, and drive, the USB driver's dongles
+    private UsbDriverService.UsbDriverBinder usbDriverBinder;
     private ServiceConnection usbDriverServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
@@ -211,11 +213,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             binder.setListener(controllerHandler);
             binder.setStateListener(Game.this);
             binder.start();
+            usbDriverBinder = binder;
             connectedToUsbDriverService = true;
         }
 
         @Override
         public void onServiceDisconnected(ComponentName componentName) {
+            usbDriverBinder = null;
             connectedToUsbDriverService = false;
         }
     };
@@ -1046,6 +1050,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         if (connectedToUsbDriverService) {
             // Unbind from the discovery service
+            usbDriverBinder = null;
             unbindService(usbDriverServiceConnection);
         }
 
@@ -2490,6 +2495,25 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
 
         new GameMenu(this, conn, device);
+    }
+
+    /**
+     * @return true if the USB driver has an Xbox wireless adapter running, which is what decides
+     *         whether the game menu offers to pair a controller with it. False when the USB
+     *         driver preference is off, since nothing binds the service then.
+     */
+    public boolean hasXboxWirelessDongle() {
+        return usbDriverBinder != null && usbDriverBinder.hasXboxWirelessDongle();
+    }
+
+    /**
+     * Puts the Xbox wireless adapter into pairing mode, standing in for the adapter's physical
+     * pairing button. The driver turns it back off once a controller pairs.
+     */
+    public void startDonglePairing() {
+        if (usbDriverBinder != null) {
+            usbDriverBinder.setDonglePairingMode(true);
+        }
     }
 
     /** Ends the stream and finishes the activity. */

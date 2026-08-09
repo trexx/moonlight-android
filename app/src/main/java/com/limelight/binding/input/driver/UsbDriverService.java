@@ -177,6 +177,50 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         public void stop() {
             UsbDriverService.this.stop();
         }
+
+        /**
+         * @return true if an Xbox wireless adapter is claimed and running. Stricter than "one is
+         *         plugged in": a dongle only lands in the list once its driver has started, so
+         *         this answers whether {@link #setDonglePairingMode} can do anything.
+         */
+        public boolean hasXboxWirelessDongle() {
+            return !xboxWirelessDongles.isEmpty();
+        }
+
+        /** Turns pairing mode on or off for every claimed adapter; see the service method. */
+        public void setDonglePairingMode(boolean enable) {
+            UsbDriverService.this.setDonglePairingMode(enable);
+        }
+    }
+
+    /**
+     * Puts every claimed Xbox wireless adapter into (or out of) pairing mode, reporting the
+     * outcome to the user.
+     *
+     * <p>This exists because the adapter's physical pairing button is the only trigger the
+     * bundled driver has, and that button is dead on some units — leaving no way to pair at all.
+     * It sets the same state Windows does from "Add a device".
+     *
+     * <p>The work is a handful of USB transfers, so it runs off the main thread. The list is
+     * copied first because it is main-thread-owned.
+     */
+    private void setDonglePairingMode(boolean enable) {
+        final ArrayList<XboxWirelessDongle> dongles = new ArrayList<>(xboxWirelessDongles);
+
+        new Thread(() -> {
+            boolean succeeded = !dongles.isEmpty();
+            for (XboxWirelessDongle dongle : dongles) {
+                if (!dongle.setPairingMode(enable)) {
+                    succeeded = false;
+                }
+            }
+
+            final int message = succeeded
+                    ? R.string.toast_dongle_pairing_enabled
+                    : R.string.toast_dongle_pairing_failed;
+            new Handler(Looper.getMainLooper()).post(
+                    () -> Toast.makeText(UsbDriverService.this, message, Toast.LENGTH_LONG).show());
+        }).start();
     }
 
     /**

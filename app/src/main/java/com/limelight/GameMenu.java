@@ -191,6 +191,13 @@ public class GameMenu {
             options.addAll(device.getGameMenuOptions());
         }
 
+        // Only worth offering when an adapter is actually claimed and running. It stands in for
+        // the adapter's physical pairing button, which is dead on some units.
+        if (game.hasXboxWirelessDongle()) {
+            options.add(new MenuOption(getString(R.string.game_menu_pair_xbox_controller),
+                    () -> game.startDonglePairing()));
+        }
+
         options.add(new MenuOption(getString(R.string.game_menu_toggle_performance_overlay), () -> game.togglePerformanceOverlay()));
         options.add(new MenuOption(getString(R.string.game_menu_send_keys), () -> showSpecialKeysMenu()));
         options.add(new MenuOption(getString(R.string.game_menu_disconnect), () -> game.disconnect()));

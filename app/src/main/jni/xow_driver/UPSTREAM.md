@@ -33,6 +33,15 @@ clean copy. Differences from the baseline commit:
   `firmwarePath` parameter for signature compatibility but ignores it and uses the
   embedded `FW_ACC_00U` array.
 * **Added** `Android.mk` for ndk-build.
+* **Added** `Dongle::setPairing()` in `dongle/dongle.{h,cpp}` and a JNI entry point for it.
+  Upstream reaches pairing mode from exactly one place — an `EVT_BUTTON_PRESS` from the
+  adapter's physical button — which leaves no way to pair at all on a unit whose button has
+  failed. This exposes the same state Windows sets from "Add a device". It is a mutex-guarded
+  wrapper around the inherited `Mt76::setPairingStatus()`, and upstream's two call sites
+  (`handleControllerPair`, and the `EVT_BUTTON_PRESS` case in `handleBulkData`) now go through
+  it, so the beacon write and the LED command cannot interleave between the two read threads
+  and the app. It replaces the port's earlier `using Mt76::setPairingStatus;` re-export, which
+  had no callers and allowed the lock to be bypassed.
 * **Removed** `controller/input.{cpp,h}`, `utils/reader.{cpp,h}` and `xow.cpp` —
   Linux input-device handling and the standalone daemon entry point, none of which
   apply on Android.

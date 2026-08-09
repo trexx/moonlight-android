@@ -51,8 +51,11 @@ public class XboxWirelessDongle {
      * the adapter is running, not that anything is paired.
      *
      * @return true if the driver started
+     *
+     * <p>Synchronized against {@link #stop} and {@link #setPairingMode}: the pairing call runs
+     * off the main thread, and the native handle must not be destroyed underneath it.
      */
-    public boolean start() {
+    public synchronized boolean start() {
         if(this.driverHandle != -1) {
             return false; //we already started;
         }
@@ -72,8 +75,11 @@ public class XboxWirelessDongle {
      *
      * <p>Idempotent: the handle is cleared before anything else can fail, so a second call after
      * the driver has already been destroyed does nothing rather than reaching into freed memory.
+     *
+     * <p>Synchronized so it waits for an in-flight {@link #setPairingMode} rather than freeing
+     * the handle from under it. That call is a handful of USB transfers — about a millisecond.
      */
-    public void stop() {
+    public synchronized void stop() {
         if(this.driverHandle == -1) {
             return; //we already cleaned;
         }
@@ -93,6 +99,23 @@ public class XboxWirelessDongle {
         for (AbstractController controller : removedControllers) {
             this.listener.deviceRemoved(controller);
         }
+    }
+
+    /**
+     * Turns the adapter's pairing mode on or off — the same state Windows sets from
+     * "Add a device", and the only way in on an adapter whose physical pairing button is dead.
+     *
+     * <p>Blocks on a few USB transfers, so call it off the main thread. The driver clears
+     * pairing mode by itself once a controller pairs.
+     *
+     * @return true if the adapter accepted the change
+     */
+    public synchronized boolean setPairingMode(boolean enable) {
+        if (this.driverHandle == -1) {
+            return false;
+        }
+
+        return setPairingModeNative(this.driverHandle, enable);
     }
 
     /** @return true if this is a Microsoft Xbox wireless adapter (either hardware revision) */
@@ -136,6 +159,7 @@ public class XboxWirelessDongle {
 
     private native long createDriver(int fd);
     private native boolean startDriver(long handle, String fwPath);
+    private native boolean setPairingModeNative(long handle, boolean enable);
     private native void stopDriver(long handle);
     private native void destroyDriver(long handle);
 }

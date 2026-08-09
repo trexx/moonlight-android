@@ -122,6 +122,7 @@
     <string name="game_menu_toggle_performance_overlay">Toggle Performance Overlay</string>
     <string name="game_menu_toggle_mouse_on">Enable Controller Mouse Emulation</string>
     <string name="game_menu_toggle_mouse_off">Disable Controller Mouse Emulation</string>
+    <string name="game_menu_pair_xbox_controller">Pair Xbox Wireless Controller</string>
     <string name="game_menu_disconnect">Disconnect</string>
     <string name="game_menu_cancel">Cancel</string>
     <string name="game_menu_send_keys">Send special Key(s)</string>
@@ -259,6 +260,8 @@
 
     <!-- Toasts -->
     <string name="toast_controller_type_changed">Gamepad type may be changed due to motion sensor emulation</string>
+    <string name="toast_dongle_pairing_enabled">Pairing mode on. Hold the pair button on your controller until it connects.</string>
+    <string name="toast_dongle_pairing_failed">Could not put the Xbox Wireless Adapter into pairing mode</string>
 
     <!-- Array strings -->
     <string name="resolution_360p">360p</string>

@@ -164,8 +164,19 @@ Small changes, but each touches a path that is easy to break silently.
 - [ ] **PowerA Pro (Switch)** maps correctly. It reports no VID/PID, so it is matched on the
       device name `"Lic Pro Controller"` — confirm the name matches on the device to hand,
       since a rename would silently disable the mapping.
-- [ ] **Xbox Wireless Adapter still works.** The USB claim chain gained a branch; confirm
+- [x] **Xbox Wireless Adapter still works.** The USB claim chain gained a branch; confirm
       no regression to the existing dongle path, including multiple controllers.
+      *Verified on the Homatics Box R 4K Plus (adapter `045e:02e6`): claims, loads firmware,
+      brings the radio up, and an already-paired controller reconnects on its own.*
+- [ ] **"Pair Xbox Wireless Controller" in the game menu.** Only appears when an adapter is
+      claimed and running — check it is **absent** with the adapter unplugged, and with the
+      "Xbox 360/One USB gamepad driver" setting off. When selected, the adapter's LED must
+      start blinking (`Pairing enabled` in logcat) and a controller must be able to pair.
+      This exists because the adapter's physical pairing button is dead on at least one unit,
+      so open the menu with the **TV remote's Back button** — needing a working pad to reach
+      the thing that pairs a pad would defeat the point.
+- [ ] **Pairing mode does not disturb a connected pad.** Trigger it while a controller is
+      already connected, and trigger it twice in a row.
 - [ ] **`+` on a hardware keyboard types `+`** on the host, not `=`. Test on a layout where
       `+` is its own key rather than Shift+`=`.
 - [ ] **HEVC on Amlogic hardware** (Onn 4K Plus, Chromecast 4K, or a Fire TV Cube): stream

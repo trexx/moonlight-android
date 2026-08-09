@@ -6,9 +6,14 @@ or committing into it, the diff is kept under patches/ and applied to the submod
 working tree before ndk-build runs. The submodule pointer never moves, so `git diff`
 on the parent repo still shows exactly which upstream commit we build against.
 
-The trade-off is that a patched submodule reports as dirty ("modified content") for as
-long as the patch is carried. `git submodule update --force` resets it and the next
-build re-applies.
+The trade-off is that a patched submodule's working tree stays modified for as long as the
+patch is carried. `.gitmodules` sets `ignore = dirty` on it so the parent repo's status is
+not permanently noisy - a changed submodule *commit* is still reported, which is the part
+worth seeing, and `git -C <submodule> status` still shows the patched files. Nothing here
+can be committed by accident from the parent: staging a submodule path records its HEAD
+commit, and this script only ever touches the working tree.
+
+`git submodule update --force` resets a patched submodule and the next build re-applies.
 
 Idempotent: already-applied patches are detected and skipped, so this is safe to run on
 every build. A patch that no longer applies is a hard error rather than a warning - it
