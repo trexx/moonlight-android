@@ -61,8 +61,10 @@ android {
     }
 
     lint {
-        disable 'MissingTranslation'
-        lintConfig file('lint.xml')
+        // Non-English locales were removed from this fork, so every string is 'missing' a
+        // translation by definition.
+        disable += 'MissingTranslation'
+        lintConfig = file('lint.xml')
     }
 
     bundle {
