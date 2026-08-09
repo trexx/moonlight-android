@@ -125,6 +125,28 @@
     <string name="applist_quit_confirmation">Are you sure you want to quit the running app? All unsaved data will be lost.</string>
     <string name="applist_details_id">App ID:</string>
 
+    <!-- In-game menu -->
+    <string name="game_menu_title">Game Menu</string>
+    <string name="game_menu_toggle_keyboard">Toggle On-screen Keyboard</string>
+    <string name="game_menu_toggle_performance_overlay">Toggle Performance Overlay</string>
+    <string name="game_menu_toggle_mouse_on">Enable Controller Mouse Emulation</string>
+    <string name="game_menu_toggle_mouse_off">Disable Controller Mouse Emulation</string>
+    <string name="game_menu_pair_xbox_controller">Pair Xbox Wireless Controller</string>
+    <string name="game_menu_disconnect">Disconnect</string>
+    <string name="game_menu_cancel">Cancel</string>
+    <string name="game_menu_send_keys">Send special Key(s)</string>
+    <string name="game_menu_send_keys_esc">Send ESC (Menu)</string>
+    <string name="game_menu_send_keys_f11">Send F11 (Toggle Full Screen)</string>
+    <string name="game_menu_send_keys_alt_enter">Send ALT + ENTER (Toggle Full Screen)</string>
+    <string name="game_menu_send_keys_alt_f4">Send ALT + F4 (Close Window)</string>
+    <string name="game_menu_send_keys_ctrl_v">Send CTRL + V (Paste Clipboard)</string>
+    <string name="game_menu_send_keys_ctrl_shift_esc">Send CTRL + SHIFT + ESC (Task Manager)</string>
+    <string name="game_menu_send_keys_win">Send WIN (Toggle Windows Start Menu)</string>
+    <string name="game_menu_send_keys_win_d">Send WIN + D (Switch to Desktop)</string>
+    <string name="game_menu_send_keys_win_g">Send WIN + G (Open Xbox Game Bar)</string>
+    <string name="game_menu_send_keys_win_shift_left">Send WIN + SHIFT + LEFT (Move Window Left)</string>
+    <string name="game_menu_send_keys_shift_tab">Send SHIFT + TAB (Open Steam Overlay)</string>
+
     <!-- Add computer manually activity -->
     <string name="title_add_pc">Add PC Manually</string>
     <string name="msg_add_pc">Connecting to the PC…</string>
@@ -221,6 +243,8 @@
 
     <!-- Toasts -->
     <string name="toast_controller_type_changed">Gamepad type may be changed due to motion sensor emulation</string>
+    <string name="toast_dongle_pairing_enabled">Pairing mode on. Hold the pair button on your controller until it connects.</string>
+    <string name="toast_dongle_pairing_failed">Could not put the Xbox Wireless Adapter into pairing mode</string>
 
     <!-- Array strings -->
     <string name="resolution_360p">360p</string>

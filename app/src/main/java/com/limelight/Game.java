@@ -4,6 +4,7 @@ package com.limelight;
 import com.limelight.binding.PlatformBinding;
 import com.limelight.binding.audio.LowLatencyAudioRenderer;
 import com.limelight.binding.input.ControllerHandler;
+import com.limelight.binding.input.GameInputDevice;
 import com.limelight.binding.input.KeyboardTranslator;
 import com.limelight.binding.input.capture.InputCaptureManager;
 import com.limelight.binding.input.capture.InputCaptureProvider;
@@ -161,6 +162,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private TextView performanceOverlayView;
+    private int requestedPerformanceOverlayVisibility = View.GONE;
 
     private MediaCodecDecoderRenderer decoderRenderer;
     private boolean reportedCrash;
@@ -169,18 +171,21 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private WifiManager.WifiLock lowLatencyWifiLock;
 
     private boolean connectedToUsbDriverService = false;
+    // Retained so the game menu can ask about, and drive, the USB driver's dongles
+    private UsbDriverService.UsbDriverBinder usbDriverBinder;
     private ServiceConnection usbDriverServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
             UsbDriverService.UsbDriverBinder binder = (UsbDriverService.UsbDriverBinder) iBinder;
             binder.setListener(controllerHandler);
-            binder.setStateListener(Game.this);
             binder.start();
+            usbDriverBinder = binder;
             connectedToUsbDriverService = true;
         }
 
         @Override
         public void onServiceDisconnected(ComponentName componentName) {
+            usbDriverBinder = null;
             connectedToUsbDriverService = false;
         }
     };
@@ -379,10 +384,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
         }
 
-        // Check if the user has enabled performance stats overlay
-        if (prefConfig.enablePerfOverlay) {
-            performanceOverlayView.setVisibility(View.VISIBLE);
-        }
+        // The preference sets the initial state only. From here it's owned by the game menu,
+        // which can toggle the overlay on and off without restarting the stream.
+        requestedPerformanceOverlayVisibility = prefConfig.enablePerfOverlay ? View.VISIBLE : View.GONE;
+        performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
 
         decoderRenderer = new MediaCodecDecoderRenderer(
                 this,
@@ -869,6 +874,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         if (connectedToUsbDriverService) {
             // Unbind from the discovery service
+            usbDriverBinder = null;
             unbindService(usbDriverServiceConnection);
         }
 
@@ -2463,5 +2469,71 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             default:
                 return false;
         }
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean isPerfOverlayVisible() {
+        return requestedPerformanceOverlayVisibility == View.VISIBLE;
+    }
+
+    /** Shows or hides the performance overlay, from the game menu or a keyboard shortcut. */
+    public void togglePerformanceOverlay() {
+        requestedPerformanceOverlayVisibility =
+                requestedPerformanceOverlayVisibility == View.VISIBLE ? View.GONE : View.VISIBLE;
+        performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
+    }
+
+    /**
+     * Opens the in-stream menu.
+     *
+     * @param device the controller that requested it, so the menu can offer that controller's own
+     *               options, or null when opened from a keyboard or gesture
+     */
+    @Override
+    public void showGameMenu(GameInputDevice device) {
+        new GameMenu(this, conn, device);
+    }
+
+    /**
+     * @return true if the USB driver has an Xbox wireless adapter running, which is what decides
+     *         whether the game menu offers to pair a controller with it. False when the USB
+     *         driver preference is off, since nothing binds the service then.
+     */
+    public boolean hasXboxWirelessDongle() {
+        return usbDriverBinder != null && usbDriverBinder.hasXboxWirelessDongle();
+    }
+
+    /**
+     * Puts the Xbox wireless adapter into pairing mode, standing in for the adapter's physical
+     * pairing button. The driver turns it back off once a controller pairs.
+     */
+    public void startDonglePairing() {
+        if (usbDriverBinder != null) {
+            usbDriverBinder.setDonglePairingMode(true);
+        }
+    }
+
+    /** Ends the stream and finishes the activity. */
+    public void disconnect() {
+        finish();
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Used instead of the key handler because that also fires while the soft keyboard is open,
+     * where Back should dismiss the keyboard rather than leave the stream.
+     */
+    @Override
+    public void onBackPressed() {
+        // Instead of "closing" the game activity, open the game menu. The user has to select
+        // "Disconnect" within the game menu to actually disconnect from the remote host.
+        //
+        // Use onBackPressed() instead of the onKey handler, since onKey also captures events
+        // while the on-screen keyboard is open. Going through onBackPressed ensures Android
+        // handles the back key normally and we only open the menu when the activity would
+        // otherwise be closed.
+        showGameMenu(null);
     }
 }
