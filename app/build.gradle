@@ -1,17 +1,19 @@
-apply plugin: 'com.android.application'
+plugins {
+    id 'com.android.application'
+}
 
 android {
     ndkVersion "27.0.12077973"
 
     compileSdk 34
 
-    namespace 'com.limelight'
+    namespace = 'com.limelight'
 
     defaultConfig {
         minSdk 21
         targetSdk 34
 
-        versionName "12.1"
+        versionName = "12.1"
         versionCode = 314
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
@@ -32,9 +34,10 @@ android {
     }
 
     compileOptions {
-        encoding "UTF-8"
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
+        // Explicit so the build does not depend on the platform default encoding
+        encoding = "UTF-8"
+        sourceCompatibility = JavaVersion.VERSION_25
+        targetCompatibility = JavaVersion.VERSION_25
     }
 
     lint {
@@ -42,6 +45,13 @@ android {
         // translation by definition.
         disable += 'MissingTranslation'
         lintConfig = file('lint.xml')
+    }
+
+    packaging {
+        resources {
+            // BouncyCastle ships these in every one of its jars
+            excludes += ['META-INF/LICENSE.md', 'META-INF/NOTICE.md']
+        }
     }
 
     bundle {
@@ -60,11 +70,13 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix ".debug"
+            // Suffixed so a debug build installs alongside a release one
+            applicationIdSuffix = ".debug"
             resValue "string", "app_label", "Moonlight (Debug)"
 
-            minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {
             // To whomever is releasing/using an APK in release mode with
@@ -97,25 +109,37 @@ android {
             // is to please change the applicationId before you publish.
             //
             // TL;DR: Leave the following line alone!
-            applicationIdSuffix ".unofficial"
+            applicationIdSuffix = ".unofficial"
             resValue "string", "app_label", "Moonlight"
 
-            minifyEnabled true
-            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
     externalNativeBuild {
         ndkBuild {
-            path "src/main/jni/Android.mk"
+            path = file("src/main/jni/Android.mk")
         }
     }
 }
 
+// Compile with JDK 25 regardless of the JDK running Gradle.
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
 dependencies {
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.77'
-    implementation 'org.bouncycastle:bcpkix-jdk18on:1.77'
+    // BouncyCastle, not the platform crypto: pairing needs certificate generation and signing
+    // primitives that Android's providers do not expose.
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.85'
+    implementation 'org.bouncycastle:bcpkix-jdk18on:1.85'
+    // jcodec is used only to parse and rewrite H.264 SPS for the decoder bitstream fixups
     implementation 'org.jcodec:jcodec:0.2.5'
-    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.squareup.okhttp3:okhttp:5.4.0'
+    // Battery and connection state for SHIELD controllers, which Android does not report
     implementation 'com.github.cgutman:ShieldControllerExtensions:1.0.1'
 }

@@ -1,1 +1,27 @@
+// Repositories are declared centrally here rather than per project, which is what
+// FAIL_ON_PROJECT_REPOS below enforces.
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+// Allows Gradle to fetch the JDK named by the toolchain if it isn't installed.
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
+dependencyResolutionManagement {
+    // Fail rather than silently resolve from a repository a subproject declared for itself
+    repositoriesMode = RepositoriesMode.FAIL_ON_PROJECT_REPOS
+    repositories {
+        google()
+        mavenCentral()
+        // JitPack serves ShieldControllerExtensions, which is not published to Maven Central
+        maven { url = uri('https://jitpack.io') }
+    }
+}
+
 include ':app'
