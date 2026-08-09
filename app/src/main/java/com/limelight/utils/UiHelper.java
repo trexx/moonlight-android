@@ -67,16 +67,6 @@ public class UiHelper {
         setGameModeStatus(context, true, false);
     }
 
-    /** Signals that the stream has moved into picture-in-picture. */
-    public static void notifyStreamEnteringPiP(Context context) {
-        setGameModeStatus(context, true, true);
-    }
-
-    /** Signals that the stream has returned to fullscreen. */
-    public static void notifyStreamExitingPiP(Context context) {
-        setGameModeStatus(context, true, false);
-    }
-
     /** Signals that the stream has ended and normal behaviour can resume. */
     public static void notifyStreamEnded(Context context) {
         setGameModeStatus(context, false, false);

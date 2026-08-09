@@ -55,9 +55,8 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
     private final ArrayList<AbstractController> controllers = new ArrayList<>();
 
-    // Client callbacks, null when nothing is bound
+    // Client callback, null when nothing is bound
     private UsbDriverListener listener;
-    private UsbDriverStateListener stateListener;
     // Monotonic ID handed to each new controller; never reused within a process
     private int nextDeviceId;
 
@@ -133,11 +132,6 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             else if (action.equals(ACTION_USB_PERMISSION)) {
                 UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
 
-                // Permission dialog is now closed
-                if (stateListener != null) {
-                    stateListener.onUsbPermissionPromptCompleted();
-                }
-
                 // If we got this far, we've already found we're able to handle this device
                 if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
                     handleUsbDeviceState(device);
@@ -161,11 +155,6 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                     listener.deviceAdded(controller);
                 }
             }
-        }
-
-        /** Installs the sink for permission dialog notifications; see {@link UsbDriverStateListener}. */
-        public void setStateListener(UsbDriverStateListener stateListener) {
-            UsbDriverService.this.stateListener = stateListener;
         }
 
         /** Begins watching for devices and claims any that are already attached. */
@@ -234,11 +223,6 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             if (!usbManager.hasPermission(device)) {
                 // Let's ask for permission
                 try {
-                    // Tell the state listener that we're about to display a permission dialog
-                    if (stateListener != null) {
-                        stateListener.onUsbPermissionPromptStarting();
-                    }
-
                     int intentFlags = 0;
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         // This PendingIntent must be mutable to allow the framework to populate EXTRA_DEVICE and EXTRA_PERMISSION_GRANTED.
@@ -259,9 +243,6 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                     usbManager.requestPermission(device, PendingIntent.getBroadcast(UsbDriverService.this, 0, i, intentFlags));
                 } catch (SecurityException e) {
                     Toast.makeText(this, this.getText(R.string.error_usb_prohibited), Toast.LENGTH_LONG).show();
-                    if (stateListener != null) {
-                        stateListener.onUsbPermissionPromptCompleted();
-                    }
                 }
                 return;
             }
@@ -479,26 +460,13 @@ public class UsbDriverService extends Service implements UsbDriverListener {
     public void onDestroy() {
         stop();
 
-        // Remove listeners
+        // Remove the listener
         listener = null;
-        stateListener = null;
     }
 
     /** {@inheritDoc} @return the binder clients use to start, stop and listen */
     @Override
     public IBinder onBind(Intent intent) {
         return binder;
-    }
-
-    /**
-     * Notifies the client that the system permission dialog is coming up or has closed.
-     *
-     * <p>{@code Game} uses this to suppress picture-in-picture and its idle timers while the
-     * dialog has focus, so a permission prompt during a stream doesn't look like the user
-     * leaving the app.
-     */
-    public interface UsbDriverStateListener {
-        void onUsbPermissionPromptStarting();
-        void onUsbPermissionPromptCompleted();
     }
 }

@@ -121,7 +121,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // Crashes in previous sessions, used to progressively disable risky features
     private int consecutiveCrashCount;
     private String glRenderer;
-    private boolean foreground = true;
     private PerfOverlayListener perfListener;
 
     // The overlay text is built here rather than on the decode thread that produces the numbers.
@@ -533,19 +532,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         else {
             return MoonBridge.COLOR_RANGE_LIMITED;
         }
-    }
-
-    /**
-     * The stream is visible again. Decoder failures while backgrounded are expected — the
-     * surface goes away — so this distinction decides whether a failure is reported as a crash.
-     */
-    public void notifyVideoForeground() {
-        foreground = true;
-    }
-
-    /** The stream is no longer visible; see {@link #notifyVideoForeground()}. */
-    public void notifyVideoBackground() {
-        foreground = false;
     }
 
     /** @return the {@code MoonBridge.VIDEO_FORMAT_*} currently being decoded */
@@ -1416,9 +1402,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     /**
      * Obtains an input buffer to write the next decode unit into, blocking until one is free.
      *
-     * <p>A decoder that stops returning input buffers is hung, and how long that is tolerated
-     * depends on why: briefly while the app is in the foreground, since the user is watching a
-     * frozen picture, and much longer in the background where the decoder is expected to stall.
+     * <p>A decoder that stops returning input buffers is hung, and is tolerated only briefly:
+     * the user is watching a frozen picture.
      *
      * @return true if {@link #nextInputBuffer} is ready to be filled
      */

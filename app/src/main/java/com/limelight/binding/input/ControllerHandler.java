@@ -26,13 +26,10 @@ import android.os.VibrationEffect;
 import android.os.Vibrator;
 import android.os.VibratorManager;
 import android.util.SparseArray;
-import android.hardware.display.DisplayManager;
-import android.view.Display;
 import android.view.InputDevice;
 import android.view.InputEvent;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
-import android.view.Surface;
 import android.widget.Toast;
 
 import com.limelight.GameMenu;
@@ -153,9 +150,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final InputDeviceContext defaultContext = new InputDeviceContext();
     private final GameGestures gestures;
     private final InputManager inputManager;
-    private final Vibrator deviceVibrator;
-    private final VibratorManager deviceVibratorManager;
-    private final SensorManager deviceSensorManager;
     private final SceManager sceManager;
     private final Handler mainThreadHandler;
     private final HandlerThread backgroundHandlerThread;
@@ -179,8 +173,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         this.conn = conn;
         this.gestures = gestures;
         this.prefConfig = prefConfig;
-        this.deviceVibrator = (Vibrator) activityContext.getSystemService(Context.VIBRATOR_SERVICE);
-        this.deviceSensorManager = (SensorManager) activityContext.getSystemService(Context.SENSOR_SERVICE);
         this.inputManager = (InputManager) activityContext.getSystemService(Context.INPUT_SERVICE);
         this.mainThreadHandler = new Handler(Looper.getMainLooper());
 
@@ -189,13 +181,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         this.backgroundHandlerThread = new HandlerThread("ControllerHandler");
         this.backgroundHandlerThread.start();
         this.backgroundThreadHandler = new Handler(backgroundHandlerThread.getLooper());
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            this.deviceVibratorManager = (VibratorManager) activityContext.getSystemService(Context.VIBRATOR_MANAGER_SERVICE);
-        }
-        else {
-            this.deviceVibratorManager = null;
-        }
 
         this.sceManager = new SceManager(activityContext);
         this.sceManager.start();
@@ -343,8 +328,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
             deviceContext.destroy();
         }
-
-        deviceVibrator.cancel();
     }
 
     /** Tears down everything {@link #stop()} left in place. The handler is unusable afterwards. */
@@ -355,26 +338,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         sceManager.stop();
         backgroundHandlerThread.quit();
-    }
-
-    /** Stops motion reporting, e.g. while the stream is backgrounded, without forgetting that the host asked for it. */
-    public void disableSensors() {
-        for (int i = 0; i < inputDeviceContexts.size(); i++) {
-            InputDeviceContext deviceContext = inputDeviceContexts.valueAt(i);
-            deviceContext.disableSensors();
-        }
-    }
-
-    /** Resumes motion reporting for every controller whose host session had it enabled. */
-    public void enableSensors() {
-        if (stopped) {
-            return;
-        }
-
-        for (int i = 0; i < inputDeviceContexts.size(); i++) {
-            InputDeviceContext deviceContext = inputDeviceContexts.valueAt(i);
-            deviceContext.enableSensors();
-        }
     }
 
     /** @return true if the device reports the two analog sticks a gamepad would have */
@@ -607,11 +570,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 LimeLog.info("Not reserving a controller number");
                 context.controllerNumber = 0;
             }
-
-            // If the gamepad doesn't have motion sensors, use the on-device sensors as a fallback for player 1
-            if (prefConfig.gamepadMotionSensorsFallbackToDevice && context.controllerNumber == 0 && devContext.sensorManager == null) {
-                devContext.sensorManager = deviceSensorManager;
-            }
         }
         else {
             if (prefConfig.multiController) {
@@ -811,20 +769,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
         else if (dev.getVibrator().hasVibrator()) {
             context.vibrator = dev.getVibrator();
-        }
-        else if (!context.external) {
-            // If this is an internal controller, try to use the device's vibrator
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasQuadAmplitudeControlledRumbleVibrators(deviceVibratorManager)) {
-                context.vibratorManager = deviceVibratorManager;
-                context.quadVibrators = true;
-            }
-            else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && hasDualAmplitudeControlledRumbleVibrators(deviceVibratorManager)) {
-                context.vibratorManager = deviceVibratorManager;
-                context.quadVibrators = false;
-            }
-            else if (deviceVibrator.hasVibrator()) {
-                context.vibrator = deviceVibrator;
-            }
         }
 
         // On Android 12, we can try to use the InputDevice's sensors. This may not work if the
@@ -2239,24 +2183,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 deviceContext.device.rumble(lowFreqMotor, highFreqMotor);
             }
         }
-
-        // We may decide to rumble the device for player 1
-        if (controllerNumber == 0) {
-            if (foundMatchingDevice && !vibrated && prefConfig.vibrateFallbackToDevice) {
-                // We found a device to vibrate but it didn't have rumble support. The user
-                // has requested us to vibrate the device in this case.
-
-                // We cast the unsigned short value to a signed int before multiplying by
-                // the preferred strength. The resulting value is capped at 65534 before
-                // we cast it back to a short so it doesn't go above 100%.
-                short lowFreqMotorAdjusted = (short)(Math.min((((lowFreqMotor & 0xffff)
-                        * prefConfig.vibrateFallbackToDeviceStrength) / 100), Short.MAX_VALUE*2));
-                short highFreqMotorAdjusted = (short)(Math.min((((highFreqMotor & 0xffff)
-                        * prefConfig.vibrateFallbackToDeviceStrength) / 100), Short.MAX_VALUE*2));
-
-                rumbleSingleVibrator(deviceVibrator, lowFreqMotorAdjusted, highFreqMotorAdjusted);
-            }
-        }
     }
 
     /** Host trigger rumble callback, ignored by controllers without trigger motors. */
@@ -2291,14 +2217,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
     }
 
-    /**
-     * Builds the listener that forwards one sensor's samples to the host.
-     *
-     * @param needsDeviceOrientationCorrection rotate samples to match the display orientation, for
-     *                                         built-in sensors that report in the device's frame
-     *                                         rather than the controller's
-     */
-    private SensorEventListener createSensorListener(final short controllerNumber, final byte motionType, final boolean needsDeviceOrientationCorrection) {
+    /** Builds the listener that forwards one gamepad sensor's samples to the host. */
+    private SensorEventListener createSensorListener(final short controllerNumber, final byte motionType) {
         return new SensorEventListener() {
             private float[] lastValues = new float[3];
 
@@ -2318,51 +2238,15 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     lastValues[2] = sensorEvent.values[2];
                 }
 
-                int x = 0;
-                int y = 1;
-                int z = 2;
-                int xFactor = 1;
-                int yFactor = 1;
-                int zFactor = 1;
-
-                if (needsDeviceOrientationCorrection) {
-                    Display contextDisplay = activityContext.getDisplay();
-                    if (contextDisplay == null) {
-                        contextDisplay = activityContext.getSystemService(DisplayManager.class)
-                                .getDisplay(Display.DEFAULT_DISPLAY);
-                    }
-                    int deviceRotation = contextDisplay.getRotation();
-                    switch (deviceRotation) {
-                        case Surface.ROTATION_0:
-                        case Surface.ROTATION_180:
-                            x = 0;
-                            y = 2;
-                            z = 1;
-                            break;
-
-                        case Surface.ROTATION_90:
-                        case Surface.ROTATION_270:
-                            x = 1;
-                            y = 2;
-                            z = 0;
-                            break;
-                    }
-
-                    switch (deviceRotation) {
-                        case Surface.ROTATION_0:
-                            zFactor = -1;
-                            break;
-                        case Surface.ROTATION_90:
-                            xFactor = -1;
-                            zFactor = -1;
-                            break;
-                        case Surface.ROTATION_180:
-                            xFactor = -1;
-                            break;
-                        case Surface.ROTATION_270:
-                            break;
-                    }
-                }
+                // Axes come straight from the gamepad, in the gamepad's own frame. The
+                // swizzle that used to live here corrected for display rotation, and only
+                // applied to the device's own IMU standing in for a pad without one.
+                final int x = 0;
+                final int y = 1;
+                final int z = 2;
+                final int xFactor = 1;
+                final int yFactor = 1;
+                final int zFactor = 1;
 
                 if (motionType == MoonBridge.LI_MOTION_TYPE_GYRO) {
                     // Convert from rad/s to deg/s
@@ -2434,7 +2318,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                         // Enable the accelerometer if requested
                         Sensor accelSensor = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
                         if (reportRateHz != 0 && accelSensor != null) {
-                            deviceContext.accelListener = createSensorListener(controllerNumber, motionType, sm == deviceSensorManager);
+                            deviceContext.accelListener = createSensorListener(controllerNumber, motionType);
                             sm.registerListener(deviceContext.accelListener, accelSensor, 1000000 / reportRateHz);
                         }
                         break;
@@ -2447,7 +2331,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                         // Enable the gyroscope if requested
                         Sensor gyroSensor = sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
                         if (reportRateHz != 0 && gyroSensor != null) {
-                            deviceContext.gyroListener = createSensorListener(controllerNumber, motionType, sm == deviceSensorManager);
+                            deviceContext.gyroListener = createSensorListener(controllerNumber, motionType);
                             sm.registerListener(deviceContext.gyroListener, gyroSensor, 1000000 / reportRateHz);
                         }
                         break;
@@ -3418,11 +3302,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             this.assignedControllerNumber = oldContext.assignedControllerNumber;
             this.reservedControllerNumber = oldContext.reservedControllerNumber;
             this.controllerNumber = oldContext.controllerNumber;
-
-            // We may have set this device to use the built-in sensor manager. If so, do that again.
-            if (oldContext.sensorManager == deviceSensorManager) {
-                this.sensorManager = deviceSensorManager;
-            }
 
             // Copy state initialized in reportControllerArrival()
             this.needsClickpadEmulation = oldContext.needsClickpadEmulation;

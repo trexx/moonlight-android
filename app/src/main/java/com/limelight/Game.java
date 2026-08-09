@@ -38,7 +38,6 @@ import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.app.PictureInPictureParams;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Context;
@@ -48,7 +47,6 @@ import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
-import android.graphics.Rect;
 import android.hardware.input.InputManager;
 import android.media.AudioManager;
 import android.net.wifi.WifiManager;
@@ -57,7 +55,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.util.Rational;
 import android.hardware.display.DisplayManager;
 import android.view.Display;
 import android.view.InputDevice;
@@ -106,8 +103,8 @@ import java.util.Queue;
  *       {@link #prepareDisplayForRendering()}.</li>
  *   <li><b>Input grab.</b> Capturing the pointer and the meta keys so they reach the host instead
  *       of Android, and releasing them when the user needs to get out.</li>
- *   <li><b>Lifecycle.</b> Pausing, picture-in-picture, and tearing the connection down in the
- *       right order when the activity goes away.</li>
+ *   <li><b>Lifecycle.</b> Pausing and tearing the connection down in the right order when the
+ *       activity goes away. It never survives being stopped: {@code onStop} always finishes.</li>
  *   <li><b>Escape hatches.</b> The gestures and key combinations that open the game menu, toggle
  *       the keyboard, or disconnect, since a fullscreen stream hides every normal affordance.</li>
  * </ul>
@@ -118,7 +115,7 @@ import java.util.Queue;
 public class Game extends Activity implements SurfaceHolder.Callback,
         OnGenericMotionListener, OnTouchListener, NvConnectionListener,
         GameGestures, StreamView.InputCallbacks,
-        PerfOverlayListener, UsbDriverService.UsbDriverStateListener, View.OnKeyListener {
+        PerfOverlayListener, View.OnKeyListener {
     private int lastButtonState = 0;
 
     // Only 2 touches are supported
@@ -127,12 +124,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     private static final int REFERENCE_HORIZ_RES = 1280;
     private static final int REFERENCE_VERT_RES = 720;
-
-    private static final int STYLUS_DOWN_DEAD_ZONE_DELAY = 100;
-    private static final int STYLUS_DOWN_DEAD_ZONE_RADIUS = 20;
-
-    private static final int STYLUS_UP_DEAD_ZONE_DELAY = 150;
-    private static final int STYLUS_UP_DEAD_ZONE_RADIUS = 50;
 
     private static final int THREE_FINGER_TAP_THRESHOLD = 300;
 
@@ -170,10 +161,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private boolean displayedFailureDialog = false;
     private boolean connecting = false;
     private boolean connected = false;
-    private boolean autoEnterPip = false;
     private boolean surfaceCreated = false;
     private boolean attemptedConnection = false;
-    private int suppressPipRefCount = 0;
     private String pcName;
     private String appName;
     private NvApp app;
@@ -186,12 +175,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private boolean waitingForAllModifiersUp = false;
     private int specialKeyCode = KeyEvent.KEYCODE_UNKNOWN;
     private StreamView streamView;
-    private long lastAbsTouchUpTime = 0;
-    private long lastAbsTouchDownTime = 0;
-    private float lastAbsTouchUpX, lastAbsTouchUpY;
-    private float lastAbsTouchDownX, lastAbsTouchDownY;
 
-    private boolean isHidingOverlays;
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private TextView performanceOverlayView;
@@ -211,7 +195,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
             UsbDriverService.UsbDriverBinder binder = (UsbDriverService.UsbDriverBinder) iBinder;
             binder.setListener(controllerHandler);
-            binder.setStateListener(Game.this);
             binder.start();
             usbDriverBinder = binder;
             connectedToUsbDriverService = true;
@@ -572,41 +555,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     /**
-     * Locks orientation to whichever way round the stream fits best, unless the user has asked to
-     * keep it free. A portrait stream on a landscape tablet should not rotate the video away.
+     * Locks the stream to landscape.
+     *
+     * <p>There used to be a branch here for squarish displays — foldables and some tablets —
+     * that allowed portrait or free rotation when the stream resolution called for it. It went
+     * with the rest of the phone-shaped handling; a streaming client on a TV is landscape.
      */
     private void setPreferredOrientationForCurrentDisplay() {
-        Display display = getActivityDisplay();
-
-        // For semi-square displays, we use more complex logic to determine which orientation to use (if any)
-        if (PreferenceConfiguration.isSquarishScreen(display)) {
-            int desiredOrientation = Configuration.ORIENTATION_UNDEFINED;
-
-            // For native resolution, we will lock the orientation to the one that matches the specified resolution
-            if (PreferenceConfiguration.isNativeResolution(prefConfig.width, prefConfig.height)) {
-                if (prefConfig.width > prefConfig.height) {
-                    desiredOrientation = Configuration.ORIENTATION_LANDSCAPE;
-                }
-                else {
-                    desiredOrientation = Configuration.ORIENTATION_PORTRAIT;
-                }
-            }
-
-            if (desiredOrientation == Configuration.ORIENTATION_LANDSCAPE) {
-                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
-            }
-            else if (desiredOrientation == Configuration.ORIENTATION_PORTRAIT) {
-                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT);
-            }
-            else {
-                // If we don't have a reason to lock to portrait or landscape, allow any orientation
-                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
-            }
-        }
-        else {
-            // For regular displays, we always request landscape
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
-        }
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
     }
 
     /** {@inheritDoc} Re-evaluates orientation, insets and the system UI after a config change. */
@@ -616,84 +572,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // Set requested orientation for possible new screen size
         setPreferredOrientationForCurrentDisplay();
-
-        // Hide on-screen overlays in PiP mode
-        if (isInPictureInPictureMode()) {
-            isHidingOverlays = true;
-
-            performanceOverlayView.setVisibility(View.GONE);
-            notificationOverlayView.setVisibility(View.GONE);
-
-            // Disable sensors while in PiP mode
-            controllerHandler.disableSensors();
-
-            // Update GameManager state to indicate we're in PiP (still gaming, but interruptible)
-            UiHelper.notifyStreamEnteringPiP(this);
-        }
-        else {
-            isHidingOverlays = false;
-
-            // Restore overlays to previous state when leaving PiP
-            performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
-            notificationOverlayView.setVisibility(requestedNotificationOverlayVisibility);
-
-            // Enable sensors again after exiting PiP
-            controllerHandler.enableSensors();
-
-            // Update GameManager state to indicate we're out of PiP (gaming, non-interruptible)
-            UiHelper.notifyStreamExitingPiP(this);
-        }
-    }
-
-    /**
-     * @param autoEnter whether PiP should be entered automatically when the user leaves, which is
-     *                  only appropriate while actually streaming
-     */
-    private PictureInPictureParams getPictureInPictureParams(boolean autoEnter) {
-        PictureInPictureParams.Builder builder =
-                new PictureInPictureParams.Builder()
-                        .setAspectRatio(new Rational(prefConfig.width, prefConfig.height))
-                        .setSourceRectHint(new Rect(
-                                streamView.getLeft(), streamView.getTop(),
-                                streamView.getRight(), streamView.getBottom()));
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builder.setAutoEnterEnabled(autoEnter);
-            builder.setSeamlessResizeEnabled(true);
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (appName != null) {
-                builder.setTitle(appName);
-                if (pcName != null) {
-                    builder.setSubtitle(pcName);
-                }
-            }
-            else if (pcName != null) {
-                builder.setTitle(pcName);
-            }
-        }
-
-        return builder.build();
-    }
-
-    /**
-     * Enables automatic picture-in-picture only while a stream is live and nothing is suppressing
-     * it — dialogs and permission prompts must not fling the user into PiP.
-     */
-    private void updatePipAutoEnter() {
-        if (!prefConfig.enablePip) {
-            return;
-        }
-
-        boolean autoEnter = connected && suppressPipRefCount == 0;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            setPictureInPictureParams(getPictureInPictureParams(autoEnter));
-        }
-        else {
-            autoEnterPip = autoEnter;
-        }
     }
 
     /**
@@ -729,16 +607,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         } catch (IllegalAccessException e) {
             e.printStackTrace();
         }
-    }
-
-    /** {@inheritDoc} Enters PiP rather than letting the framework take a screenshot of the stream. */
-    @Override
-    public boolean onPictureInPictureRequested() {
-        // Enter PiP when requested unless we're on Android 12 which supports auto-enter.
-        if (autoEnterPip && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            enterPictureInPictureMode(getPictureInPictureParams(false));
-        }
-        return true;
     }
 
     /** {@inheritDoc} Re-establishes pointer capture and the system UI state on regaining focus. */
@@ -975,20 +843,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     return;
                 }
 
-                // In multi-window mode, we need to drop out of edge-to-edge or we'll
-                // be drawing underneath the system UI.
-                if (isInMultiWindowMode()) {
-                    Game.this.getWindow().setDecorFitsSystemWindows(true);
-                    controller.show(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                }
-                else {
-                    // Use immersive mode. BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE is the
-                    // WindowInsetsController equivalent of SYSTEM_UI_FLAG_IMMERSIVE_STICKY.
-                    Game.this.getWindow().setDecorFitsSystemWindows(false);
-                    controller.setSystemBarsBehavior(
-                            WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                    controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                }
+                // Use immersive mode. BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE is the
+                // WindowInsetsController equivalent of SYSTEM_UI_FLAG_IMMERSIVE_STICKY.
+                Game.this.getWindow().setDecorFitsSystemWindows(false);
+                controller.setSystemBarsBehavior(
+                        WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
             }
     };
 
@@ -1004,28 +864,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             h.removeCallbacks(hideSystemUi);
             h.postDelayed(hideSystemUi, delay);
         }
-    }
-
-    /** {@inheritDoc} Restores immersive fullscreen when leaving multi-window or PiP. */
-    @Override
-    public void onMultiWindowModeChanged(boolean isInMultiWindowMode) {
-        super.onMultiWindowModeChanged(isInMultiWindowMode);
-
-        // In multi-window, we don't want to use the full-screen layout
-        // flag. It will cause us to collide with the system UI.
-        // This function will also be called for PiP so we can cover
-        // that case here too.
-        if (isInMultiWindowMode) {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-            decoderRenderer.notifyVideoBackground();
-        }
-        else {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-            decoderRenderer.notifyVideoForeground();
-        }
-
-        // Correct the system UI visibility flags
-        hideSystemUi(50);
     }
 
     /** {@inheritDoc} Unbinds services and releases the decoder and input plumbing. */
@@ -1074,7 +912,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         super.onPause();
     }
 
-    /** {@inheritDoc} Ends the stream unless we are heading into picture-in-picture. */
+    /** {@inheritDoc} Always ends the stream and finishes: the activity does not survive being stopped. */
     @Override
     protected void onStop() {
         super.onStop();
@@ -1948,33 +1786,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             eventY = event.getY(0) - streamView.getY();
         }
 
-        if (event.getPointerCount() == 1 && event.getActionIndex() == 0 &&
-                (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER ||
-                event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS))
-        {
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                case MotionEvent.ACTION_HOVER_ENTER:
-                case MotionEvent.ACTION_HOVER_EXIT:
-                case MotionEvent.ACTION_HOVER_MOVE:
-                    if (event.getEventTime() - lastAbsTouchUpTime <= STYLUS_UP_DEAD_ZONE_DELAY &&
-                            Math.sqrt(Math.pow(eventX - lastAbsTouchUpX, 2) + Math.pow(eventY - lastAbsTouchUpY, 2)) <= STYLUS_UP_DEAD_ZONE_RADIUS) {
-                        // Enforce a small deadzone between touch up and hover or touch down to allow more precise double-clicking
-                        return;
-                    }
-                    break;
-
-                case MotionEvent.ACTION_MOVE:
-                case MotionEvent.ACTION_UP:
-                    if (event.getEventTime() - lastAbsTouchDownTime <= STYLUS_DOWN_DEAD_ZONE_DELAY &&
-                            Math.sqrt(Math.pow(eventX - lastAbsTouchDownX, 2) + Math.pow(eventY - lastAbsTouchDownY, 2)) <= STYLUS_DOWN_DEAD_ZONE_RADIUS) {
-                        // Enforce a small deadzone between touch down and move or touch up to allow more precise double-clicking
-                        return;
-                    }
-                    break;
-            }
-        }
-
         // We may get values slightly outside our view region on ACTION_HOVER_ENTER and ACTION_HOVER_EXIT.
         // Normalize these to the view size. We can't just drop them because we won't always get an event
         // right at the boundary of the view, so dropping them would result in our cursor never really
@@ -2030,7 +1841,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private void stopConnection() {
         if (connecting || connected) {
             connecting = connected = false;
-            updatePipAutoEnter();
 
             controllerHandler.stop();
 
@@ -2227,9 +2037,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     requestedNotificationOverlayVisibility = View.GONE;
                 }
 
-                if (!isHidingOverlays) {
-                    notificationOverlayView.setVisibility(requestedNotificationOverlayVisibility);
-                }
+                notificationOverlayView.setVisibility(requestedNotificationOverlayVisibility);
             }
         });
     }
@@ -2247,7 +2055,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
                 connected = true;
                 connecting = false;
-                updatePipAutoEnter();
 
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
@@ -2437,22 +2244,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         });
     }
 
-    /** {@inheritDoc} Suppresses PiP while the system permission dialog has focus. */
-    @Override
-    public void onUsbPermissionPromptStarting() {
-        // Disable PiP auto-enter while the USB permission prompt is on-screen. This prevents
-        // us from entering PiP while the user is interacting with the OS permission dialog.
-        suppressPipRefCount++;
-        updatePipAutoEnter();
-    }
-
-    /** {@inheritDoc} Releases the PiP suppression taken when the prompt appeared. */
-    @Override
-    public void onUsbPermissionPromptCompleted() {
-        suppressPipRefCount--;
-        updatePipAutoEnter();
-    }
-
     /** {@inheritDoc} Key events from the stream view, before the IME sees them. */
     @Override
     public boolean onKey(View view, int keyCode, KeyEvent keyEvent) {
@@ -2489,11 +2280,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      */
     @Override
     public void showGameMenu(GameInputDevice device) {
-        // An AlertDialog is unusable in a PiP window, and we've hidden the overlays anyway.
-        if (isHidingOverlays) {
-            return;
-        }
-
         new GameMenu(this, conn, device);
     }
 

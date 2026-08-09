@@ -86,6 +86,23 @@
     </issue>
 
     <!--
+      Multi-window, split-screen, DeX and freeform were removed deliberately; every activity
+      sets resizeableActivity="false" on purpose. NonResizeableActivity argues for the
+      behaviour we just deleted.
+
+      DiscouragedApi is the more interesting one and is kept in mind rather than disputed: it
+      warns that the opt-out is ignored on large screens from Android 12 and entirely from
+      Android 16. That is understood and accepted - the target hardware is TV boxes. If the
+      app is ever forced into multi-window anyway, the stream draws under the system bars,
+      and the fix is to restore onMultiWindowModeChanged and the isInMultiWindowMode branch
+      in Game's hideSystemUi runnable.
+    -->
+    <issue id="NonResizeableActivity" severity="ignore" />
+    <issue id="DiscouragedApi">
+        <ignore path="src/main/AndroidManifest.xml" />
+    </issue>
+
+    <!--
       Reported inside the BouncyCastle jar, not our code. Third-party, nothing to fix here.
     -->
     <issue id="TrustAllX509TrustManager">

@@ -62,8 +62,18 @@ feature checks.
 - [ ] **Right-click does not open the menu.** Mouse-sourced `KEYCODE_BACK` is intercepted in
       `Game.handleKeyDown`/`handleKeyUp` before `onBackPressed()` is reached — verify with a
       real mouse, and confirm right-click still registers as a right button press on the host.
-- [ ] **PiP:** enter picture-in-picture with the overlay on — overlays hide on entry and
-      return on exit; the menu cannot be opened while in PiP.
+- [ ] **The soft keyboard never appears on its own.** Start a stream, exit, start another,
+      several times over. This was intermittent before `.Game` gained
+      `windowSoftInputMode="stateAlwaysHidden"`: `StreamView` always reports itself as a text
+      editor, so with no state policy the framework was free to restore the IME on focus gain.
+      Then confirm the menu entry still *opens* it — `stateAlwaysHidden` governs focus gain
+      only and must not have disabled explicit shows.
+- [ ] **Pointer capture survives focus loss.** With a mouse attached, open the game menu,
+      dismiss it, and confirm the host cursor does not stop at the screen edges. Nothing in
+      the PiP/multi-window removal should have touched `onWindowFocusChanged`, and this is the
+      check that proves it.
+- [ ] **No multi-window.** The stream opens fullscreen with no system bars, and they stay
+      hidden after opening and dismissing the game menu. On a phone, split-screen is refused.
 
 ### Special keys
 
@@ -177,6 +187,16 @@ Small changes, but each touches a path that is easy to break silently.
       the thing that pairs a pad would defeat the point.
 - [ ] **Pairing mode does not disturb a connected pad.** Trigger it while a controller is
       already connected, and trigger it twice in a row.
+- [ ] **Gamepad rumble still works.** The phone-vibrator fallback was removed along with the
+      other phone-only fallbacks, but the `VIBRATE` permission had to stay, because
+      `InputDevice.getVibrator()` goes through the same `Vibrator` API. If that permission were
+      ever dropped, gamepad rumble is what breaks — so this is the check that guards it.
+- [ ] **Gamepad gyro still reaches the host** on a pad that has one (DualSense/DualShock). The
+      device-IMU fallback and its axis-swizzle are gone; a real pad reports in its own frame
+      and needs no correction.
+- [ ] **The settings screen renders** with `checkbox_enable_pip`, `checkbox_vibrate_fallback`,
+      `seekbar_vibrate_fallback_strength` and `checkbox_gamepad_motion_fallback` all removed —
+      a dangling preference key would crash it or leave a dead row.
 - [ ] **`+` on a hardware keyboard types `+`** on the host, not `=`. Test on a layout where
       `+` is its own key rather than Shift+`=`.
 - [ ] **HEVC on Amlogic hardware** (Onn 4K Plus, Chromecast 4K, or a Fire TV Cube): stream
