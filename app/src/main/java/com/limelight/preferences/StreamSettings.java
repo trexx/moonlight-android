@@ -24,7 +24,6 @@ import android.view.DisplayCutout;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.view.WindowInsets;
 
 import com.limelight.LimeLog;
 import com.limelight.PcView;
@@ -33,7 +32,6 @@ import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.UiHelper;
 
-import java.lang.reflect.Method;
 import java.util.Arrays;
 
 /**
@@ -50,14 +48,28 @@ public class StreamSettings extends Activity {
     private PreferenceConfiguration previousPrefs;
     private int previousDisplayPixelCount;
 
-    // HACK for Android 9
-    static DisplayCutout displayCutoutP;
+    /**
+     * Returns the display the given activity is attached to.
+     *
+     * Replaces the deprecated getWindowManager().getDefaultDisplay(). Activity.getDisplay()
+     * can return null when the activity isn't attached to a display, which the old API never
+     * did, so fall back to the default display to preserve the previous non-null contract.
+     */
+    static Display getActivityDisplay(Activity activity) {
+        Display display = activity.getDisplay();
+        if (display == null) {
+            display = activity.getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
+        }
+        return display;
+    }
+
+    private Display getActivityDisplay() {
+        return getActivityDisplay(this);
+    }
 
     void reloadSettings() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Display.Mode mode = getWindowManager().getDefaultDisplay().getMode();
-            previousDisplayPixelCount = mode.getPhysicalWidth() * mode.getPhysicalHeight();
-        }
+        Display.Mode mode = getActivityDisplay().getMode();
+        previousDisplayPixelCount = mode.getPhysicalWidth() * mode.getPhysicalHeight();
         getFragmentManager().beginTransaction().replace(
                 R.id.stream_settings, new SettingsFragment()
         ).commitAllowingStateLoss();
@@ -80,17 +92,6 @@ public class StreamSettings extends Activity {
     @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
-
-        // We have to use this hack on Android 9 because we don't have Display.getCutout()
-        // which was added in Android 10.
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.P) {
-            // Insets can be null when the activity is recreated on screen rotation
-            // https://stackoverflow.com/questions/61241255/windowinsets-getdisplaycutout-is-null-everywhere-except-within-onattachedtowindo
-            WindowInsets insets = getWindow().getDecorView().getRootWindowInsets();
-            if (insets != null) {
-                displayCutoutP = insets.getDisplayCutout();
-            }
-        }
 
         reloadSettings();
     }
@@ -371,8 +372,8 @@ public class StreamSettings extends Activity {
                             DisplayMetrics metrics = new DisplayMetrics();
                             display.getRealMetrics(metrics);
 
-                            int width = Math.max(metrics.widthPixels - widthInsets, metrics.heightPixels - heightInsets);
-                            int height = Math.min(metrics.widthPixels - widthInsets, metrics.heightPixels - heightInsets);
+            MediaCodecInfo avcDecoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", -1);
+            MediaCodecInfo hevcDecoder = MediaCodecHelper.findProbableSafeDecoder("video/hevc", -1);
 
                             addNativeResolutionEntries(width, height, false);
                             hasInsets = true;
@@ -500,15 +501,7 @@ public class StreamSettings extends Activity {
                     }
                     // Never remove 720p
                 }
-            }
-            else {
-                // We can get the true metrics via the getRealMetrics() function (unlike the lies
-                // that getWidth() and getHeight() tell to us).
-                DisplayMetrics metrics = new DisplayMetrics();
-                display.getRealMetrics(metrics);
-                int width = Math.max(metrics.widthPixels, metrics.heightPixels);
-                int height = Math.min(metrics.widthPixels, metrics.heightPixels);
-                addNativeResolutionEntries(width, height, false);
+                // Never remove 720p
             }
 
             if (!PreferenceConfiguration.readPreferences(this.getActivity()).unlockFps) {
@@ -562,14 +555,7 @@ public class StreamSettings extends Activity {
                 }
             });
 
-            // Remove HDR preference for devices below Nougat
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
-                LimeLog.info("Excluding HDR toggle based on OS");
-                PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_advanced_settings");
-                category.removePreference(findPreference("checkbox_enable_hdr"));
-            }
-            else {
+            {
                 Display.HdrCapabilities hdrCaps = display.getHdrCapabilities();
 
                 // We must now ensure our display is compatible with HDR10

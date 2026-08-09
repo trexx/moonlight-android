@@ -3,15 +3,22 @@ plugins {
 }
 
 android {
-    ndkVersion "27.0.12077973"
+    // Pinned so every build produces identical native binaries; the NDK is not source
+    // compatible across major versions.
+    ndkVersion = "29.0.14206865"
 
-    compileSdk 34
+    compileSdk = 37
 
     namespace = 'com.limelight'
 
     defaultConfig {
-        minSdk 21
-        targetSdk 34
+        applicationId = "com.limelight"
+
+        minSdk = 30
+        // Deliberately behind compileSdk. API 35 force-enables edge-to-edge and changes
+        // insets handling, which collides with Game's immersive-mode code for no benefit to
+        // a fullscreen streaming client. Lint's OldTargetApi is suppressed in lint.xml.
+        targetSdk = 34
 
         versionName = "12.1"
         versionCode = 314

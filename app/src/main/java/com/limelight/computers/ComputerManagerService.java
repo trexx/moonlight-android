@@ -24,7 +24,6 @@ import android.content.Intent;
 import android.net.ConnectivityManager;
 import android.net.Network;
 import android.os.Binder;
-import android.os.Build;
 import android.os.IBinder;
 import android.os.SystemClock;
 
@@ -588,52 +587,43 @@ public class ComputerManagerService extends Service {
         releaseLocalDatabaseReference();
 
         // Monitor for network changes to invalidate our PC state
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            networkCallback = new ConnectivityManager.NetworkCallback() {
-                @Override
-                public void onAvailable(Network network) {
-                    LimeLog.info("Resetting PC state for new available network");
-                    synchronized (pollingTuples) {
-                        for (PollingTuple tuple : pollingTuples) {
-                            tuple.computer.state = ComputerDetails.State.UNKNOWN;
-                            if (listener != null) {
-                                listener.notifyComputerUpdated(tuple.computer);
-                            }
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                LimeLog.info("Resetting PC state for new available network");
+                synchronized (pollingTuples) {
+                    for (PollingTuple tuple : pollingTuples) {
+                        tuple.computer.state = ComputerDetails.State.UNKNOWN;
+                        if (listener != null) {
+                            listener.notifyComputerUpdated(tuple.computer);
                         }
                     }
                 }
+            }
 
-                @Override
-                public void onLost(Network network) {
-                    LimeLog.info("Offlining PCs due to network loss");
-                    synchronized (pollingTuples) {
-                        for (PollingTuple tuple : pollingTuples) {
-                            tuple.computer.state = ComputerDetails.State.OFFLINE;
-                            if (listener != null) {
-                                listener.notifyComputerUpdated(tuple.computer);
-                            }
+            @Override
+            public void onLost(Network network) {
+                LimeLog.info("Offlining PCs due to network loss");
+                synchronized (pollingTuples) {
+                    for (PollingTuple tuple : pollingTuples) {
+                        tuple.computer.state = ComputerDetails.State.OFFLINE;
+                        if (listener != null) {
+                            listener.notifyComputerUpdated(tuple.computer);
                         }
                     }
                 }
-            };
+            }
+        };
 
-            ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            connMgr.registerDefaultNetworkCallback(networkCallback);
-        }
+        ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        connMgr.registerDefaultNetworkCallback(networkCallback);
     }
 
     /** {@inheritDoc} Stops all polling threads and closes the database. */
     @Override
     public void onDestroy() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            connMgr.unregisterNetworkCallback(networkCallback);
-        }
-
-        if (discoveryBinder != null) {
-            // Unbind from the discovery service
-            unbindService(discoveryServiceConnection);
-        }
+        ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        connMgr.unregisterNetworkCallback(networkCallback);
 
         // FIXME: Should await termination here but we have timeout issues in HttpURLConnection
 

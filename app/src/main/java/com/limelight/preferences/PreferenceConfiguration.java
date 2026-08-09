@@ -316,10 +316,8 @@ public class PreferenceConfiguration {
             }
 
             // API 21 uses LEANBACK instead of TELEVISION
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
-                if (manager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
-                    return false;
-                }
+            if (manager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
+                return false;
             }
         }
 
