@@ -145,6 +145,7 @@
             android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="false"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="stateAlwaysHidden"
             android:excludeFromRecents="true"
             android:theme="@style/StreamTheme"
             android:preferMinimalPostProcessing="true">

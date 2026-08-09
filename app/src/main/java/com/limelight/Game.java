@@ -55,6 +55,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.hardware.display.DisplayManager;
 import android.view.Display;
 import android.view.InputDevice;
@@ -81,7 +82,10 @@ import java.lang.reflect.Method;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.Locale;
+import java.util.Queue;
 
 
 /**
@@ -122,13 +126,30 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private static final int REFERENCE_HORIZ_RES = 1280;
     private static final int REFERENCE_VERT_RES = 720;
 
-    private static final int STYLUS_DOWN_DEAD_ZONE_DELAY = 100;
-    private static final int STYLUS_DOWN_DEAD_ZONE_RADIUS = 20;
-
-    private static final int STYLUS_UP_DEAD_ZONE_DELAY = 150;
-    private static final int STYLUS_UP_DEAD_ZONE_RADIUS = 50;
-
     private static final int THREE_FINGER_TAP_THRESHOLD = 300;
+
+    // Soft-keyboard text input. The control stream has a payload limit, so committed
+    // text is split on UTF-8 code point boundaries and drained on a timer.
+    private static final int UTF8_CHUNK_SIZE = 512;
+    private static final int UTF8_CHUNK_INTERVAL_MS = 15;
+    private final Queue<String> commitTextQueue = new ArrayDeque<>();
+    private final Handler commitTextHandler = new Handler(Looper.getMainLooper());
+
+    private final Runnable flushCommitTextQueue = new Runnable() {
+        @Override
+        public void run() {
+            String chunk = commitTextQueue.poll();
+            if (chunk == null) {
+                return;
+            }
+            if (conn != null) {
+                conn.sendUtf8Text(chunk);
+            }
+            if (!commitTextQueue.isEmpty()) {
+                commitTextHandler.postDelayed(this, UTF8_CHUNK_INTERVAL_MS);
+            }
+        }
+    };
 
     private ControllerHandler controllerHandler;
     private KeyboardTranslator keyboardTranslator;
@@ -271,6 +292,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         streamView.setOnGenericMotionListener(this);
         streamView.setOnKeyListener(this);
         streamView.setInputCallbacks(this);
+        // StreamView is the IME's target, so it has to be focusable and hold focus for the
+        // soft keyboard to attach to anything.
+        streamView.setFocusableInTouchMode(true);
+        streamView.requestFocus();
 
         // Listen for touch events on the background touch view to enable trackpad mode
         // to work on areas outside of the StreamView itself. We use a separate View
@@ -1123,6 +1148,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         if (event.isMetaPressed()) {
             modifier |= KeyboardPacket.MODIFIER_META;
         }
+        if (event.getKeyCode() == KeyEvent.KEYCODE_PLUS) {
+            // The host protocol only has the single US =/+ virtual key, which we send for both
+            // KEYCODE_EQUALS and KEYCODE_PLUS. Android's KEYCODE_PLUS is semantic rather than
+            // positional, so it arrives without a Shift modifier and would otherwise type '='.
+            modifier |= KeyboardPacket.MODIFIER_SHIFT;
+        }
         return modifier;
     }
 
@@ -1169,6 +1200,73 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
         }
     }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean handleCommitText(CharSequence text) {
+        if (conn == null || text == null) {
+            return false;
+        }
+        enqueueCommitText(text.toString());
+        return true;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean handleDeleteSurroundingText(int beforeLength, int afterLength) {
+        if (conn == null) {
+            return false;
+        }
+
+        // The host has no notion of our IME's buffer, so approximate a deletion with
+        // the equivalent number of backspaces.
+        if (beforeLength > 0) {
+            short backspaceCode = keyboardTranslator.translate(KeyEvent.KEYCODE_DEL, -1);
+            for (int i = 0; i < beforeLength; i++) {
+                conn.sendKeyboardInput(backspaceCode, KeyboardPacket.KEY_DOWN, (byte)0, (byte)0);
+                conn.sendKeyboardInput(backspaceCode, KeyboardPacket.KEY_UP, (byte)0, (byte)0);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Splits committed IME text into control-stream-sized chunks and starts draining them.
+     *
+     * <p>Split on UTF-8 code point boundaries: a chunk that ends mid-sequence would arrive at the
+     * host as mojibake. The queue is drained on a timer rather than sent at once because the
+     * control stream has a payload limit and no flow control of its own.
+     */
+    private void enqueueCommitText(String text) {
+        if (text.isEmpty()) {
+            return;
+        }
+
+        byte[] utf8 = text.getBytes(StandardCharsets.UTF_8);
+        int offset = 0;
+        while (offset < utf8.length) {
+            int end = Math.min(offset + UTF8_CHUNK_SIZE, utf8.length);
+
+            // Never split inside a multi-byte sequence
+            while (end < utf8.length && (utf8[end] & 0xC0) == 0x80) {
+                end--;
+            }
+            if (end <= offset) {
+                break;
+            }
+
+            commitTextQueue.add(new String(utf8, offset, end - offset, StandardCharsets.UTF_8));
+            offset = end;
+        }
+
+        // Start draining if the timer isn't already running
+        if (!commitTextQueue.isEmpty()) {
+            commitTextHandler.removeCallbacks(flushCommitTextQueue);
+            commitTextHandler.post(flushCommitTextQueue);
+        }
+    }
+
+    /** {@inheritDoc} Forwards a key press to the host unless it is a client shortcut. */
     @Override
     public boolean handleKeyDown(KeyEvent event) {
         // Pass-through virtual navigation keys
@@ -1218,7 +1316,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
             // We'll send it as a raw key event if we have a key mapping, otherwise we'll send it
             // as UTF-8 text (if it's a printable character).
-            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
+            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId(), event.getScanCode());
             if (translated == 0) {
                 // Make sure it has a valid Unicode representation and it's not a dead character
                 // (which we don't support). If those are true, we can send it as UTF-8 text.
@@ -1302,7 +1400,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 return false;
             }
 
-            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
+            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId(), event.getScanCode());
             if (translated == 0) {
                 // If we sent this event as UTF-8 on key down, also report that it was handled
                 // when we get the key up event for it.
