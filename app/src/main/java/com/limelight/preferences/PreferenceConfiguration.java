@@ -5,7 +5,6 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.preference.PreferenceManager;
-import android.view.Display;
 
 import com.limelight.nvstream.StreamConfiguration;
 import com.limelight.nvstream.jni.MoonBridge;
@@ -62,6 +61,7 @@ public class PreferenceConfiguration {
     private static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
     private static final String ENFORCE_DISPLAY_MODE_PREF_STRING = "checkbox_enforce_display_mode";
+    private static final String RESUME_WITHOUT_CONFIRM_PREF_STRING = "checkbox_resume_without_confirm";
     private static final String SMALL_ICONS_PREF_STRING = "checkbox_small_icon_mode";
     private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
     static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
@@ -96,6 +96,7 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_HOST_AUDIO = false;
     private static final int DEFAULT_DEADZONE = 7;
     private static final boolean DEFAULT_ENFORCE_DISPLAY_MODE = false;
+    private static final boolean DEFAULT_RESUME_WITHOUT_CONFIRM = false;
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
     private static final String DEFAULT_VIDEO_FORMAT = "auto";
@@ -139,6 +140,7 @@ public class PreferenceConfiguration {
     public int encryptionFlags;
     public int deadzonePercentage;
     public boolean enforceDisplayMode;
+    public boolean resumeWithoutConfirm;
     public boolean stretchVideo, enableSops, playHostAudio, disableWarnings;
     public ScaleMode scaleMode;
     public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
@@ -198,21 +200,6 @@ public class PreferenceConfiguration {
 
         // We just put the arbitrary cutoff for a square-ish screen at 1.3
         return longDim / shortDim < 1.3f;
-    }
-
-    public static boolean isSquarishScreen(Display display) {
-        int width, height;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            width = display.getMode().getPhysicalWidth();
-            height = display.getMode().getPhysicalHeight();
-        }
-        else {
-            width = display.getWidth();
-            height = display.getHeight();
-        }
-
-        return isSquarishScreen(width, height);
     }
 
     private static String convertFromLegacyResolutionString(String resString) {
@@ -607,6 +594,7 @@ public class PreferenceConfiguration {
 
         config.deadzonePercentage = prefs.getInt(DEADZONE_PREF_STRING, DEFAULT_DEADZONE);
         config.enforceDisplayMode = prefs.getBoolean(ENFORCE_DISPLAY_MODE_PREF_STRING, DEFAULT_ENFORCE_DISPLAY_MODE);
+        config.resumeWithoutConfirm = prefs.getBoolean(RESUME_WITHOUT_CONFIRM_PREF_STRING, DEFAULT_RESUME_WITHOUT_CONFIRM);
 
 
 

@@ -15,11 +15,9 @@
     <string name="pcview_menu_header_unknown">Refreshing</string>
     <string name="pcview_menu_app_list">View All Apps</string>
     <string name="pcview_menu_pair_pc">Pair with PC</string>
-    <string name="pcview_menu_unpair_pc">Unpair</string>
     <string name="pcview_menu_delete_pc">Delete PC</string>
     <string name="pcview_menu_test_network">Test Network Connection</string>
     <string name="pcview_menu_details">View Details</string>
-    <string name="pcview_menu_eol">NVIDIA GameStream End-of-Service</string>
 
     <!-- Network test strings -->
     <string name="nettest_title_waiting">Testing Network Connection</string>
@@ -109,20 +107,15 @@
     <string name="applist_menu_resume">Resume Session</string>
     <string name="applist_menu_quit">Quit Session</string>
     <string name="applist_menu_quit_and_start">Quit Current Game and Start</string>
-    <string name="applist_menu_cancel">Cancel</string>
     <string name="applist_menu_details">View Details</string>
     <string name="applist_menu_scut">Create Shortcut</string>
-    <string name="applist_menu_tv_channel">Add to Channel</string>
     <string name="applist_menu_hide_app">Hide App</string>
     <string name="applist_refresh_title">App List</string>
     <string name="applist_refresh_msg">Refreshing apps…</string>
-    <string name="applist_refresh_error_title">Error</string>
-    <string name="applist_refresh_error_msg">Failed to get app list</string>
     <string name="applist_quit_app">Quitting</string>
     <string name="applist_quit_success">Successfully quit</string>
     <string name="applist_quit_fail">Failed to quit</string>
     <string name="applist_quit_confirmation">Are you sure you want to quit the running app? All unsaved data will be lost.</string>
-    <string name="applist_details_id">App ID:</string>
 
     <!-- In-game menu -->
     <string name="game_menu_title">Game Menu</string>
@@ -148,6 +141,7 @@
 
     <!-- Add computer manually activity -->
     <string name="title_add_pc">Add PC Manually</string>
+    <string name="title_settings">Settings</string>
     <string name="msg_add_pc">Connecting to the PC…</string>
     <string name="addpc_fail">Unable to connect to the specified computer. Make sure the required ports are allowed through the firewall.</string>
     <string name="addpc_success">Successfully added computer</string>
@@ -176,6 +170,10 @@
     <string name="scale_mode_fit">Fit (show the whole image)</string>
     <string name="scale_mode_fill">Fill (crop to remove black bars)</string>
     <string name="scale_mode_stretch">Stretch (distort to fill)</string>
+    <string name="title_checkbox_resume_without_confirm">Resume without confirmation</string>
+    <string name="summary_checkbox_resume_without_confirm">Tapping the app that is already running resumes it immediately, instead of opening a menu first.</string>
+    <string name="pcview_menu_management_page">Open host management page</string>
+    <string name="error_no_browser">No web browser is available to open this page.</string>
     <string name="title_checkbox_enforce_display_mode">Force display mode change</string>
     <string name="summary_checkbox_enforce_display_mode">Always switch the display mode to match the stream, instead of only requesting a frame rate. Enable this if your display stays at the wrong refresh rate while streaming.</string>
     <string name="suffix_seekbar_bitrate_mbps">Mbps</string>

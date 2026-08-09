@@ -2061,7 +2061,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 // when the spinner gets displayed. On Android Q, even now
                 // is too early to capture. We will delay a second to allow
                 // the spinner to dismiss before capturing.
-                Handler h = new Handler();
+                Handler h = new Handler(Looper.getMainLooper());
                 h.postDelayed(new Runnable() {
                     @Override
                     public void run() {

@@ -20,10 +20,18 @@ import com.limelight.preferences.PreferenceConfiguration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+/**
+ * Adapter for the app grid, including box art loading and the hidden-app filter.
+ *
+ * <p>Box art is fetched through {@link com.limelight.grid.assets.CachedAppAssetLoader}, whose
+ * loads are cancelled when cells are recycled — a grid that scrolls faster than the network would
+ * otherwise queue work for cells that are long gone.
+ */
 @SuppressWarnings("unchecked")
 public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
     private static final int ART_WIDTH_PX = 300;
@@ -38,6 +46,7 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
     private Set<Integer> hiddenAppIds = new HashSet<>();
     private ArrayList<AppView.AppObject> allApps = new ArrayList<>();
 
+    /** @param showHiddenApps include apps the user has hidden, for the settings-driven view */
     public AppGridAdapter(Context context, PreferenceConfiguration prefs, ComputerDetails computer, String uniqueId, boolean showHiddenApps) {
         super(context, getLayoutIdForPreferences(prefs));
 
@@ -48,6 +57,12 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         updateLayoutWithPreferences(context, prefs);
     }
 
+    /**
+     * Applies the hidden-app selection.
+     *
+     * @param hideImmediately remove them from the grid now rather than on the next rebuild, which
+     *                        is what lets the user hide several apps in one pass
+     */
     public void updateHiddenApps(Set<Integer> newHiddenAppIds, boolean hideImmediately) {
         this.hiddenAppIds.clear();
         this.hiddenAppIds.addAll(newHiddenAppIds);
@@ -82,6 +97,7 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         }
     }
 
+    /** Re-reads the cell size and box art preferences, then rebuilds the layout. */
     public void updateLayoutWithPreferences(Context context, PreferenceConfiguration prefs) {
         int dpi = context.getResources().getDisplayMetrics().densityDpi;
         int dp;
@@ -115,6 +131,7 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         setLayoutId(getLayoutIdForPreferences(prefs));
     }
 
+    /** Cancels pending box art loads, e.g. when leaving the screen. */
     public void cancelQueuedOperations() {
         loader.cancelForegroundLoads();
         loader.cancelBackgroundLoads();
@@ -125,11 +142,12 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         Collections.sort(list, new Comparator<AppView.AppObject>() {
             @Override
             public int compare(AppView.AppObject lhs, AppView.AppObject rhs) {
-                return lhs.app.getAppName().toLowerCase().compareTo(rhs.app.getAppName().toLowerCase());
+                return lhs.app.getAppName().toLowerCase(Locale.getDefault()).compareTo(rhs.app.getAppName().toLowerCase(Locale.getDefault()));
             }
         });
     }
 
+    /** Adds an app and re-sorts, so the grid order is stable regardless of arrival order. */
     public void addApp(AppView.AppObject app) {
         // Update hidden state
         app.isHidden = hiddenAppIds.contains(app.app.getAppId());
@@ -149,17 +167,20 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         }
     }
 
+    /** Removes an app from the grid. */
     public void removeApp(AppView.AppObject app) {
         itemList.remove(app);
         allApps.remove(app);
     }
 
+    /** {@inheritDoc} Also cancels any box art loads still queued for the removed cells. */
     @Override
     public void clear() {
         super.clear();
         allApps.clear();
     }
 
+    /** {@inheritDoc} Binds name and box art, starting an asynchronous load if it isn't cached. */
     @Override
     public void populateView(View parentView, ImageView imgView, ProgressBar prgView, TextView txtView, ImageView overlayView, AppView.AppObject obj) {
         // Let the cached asset loader handle it

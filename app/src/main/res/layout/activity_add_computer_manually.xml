@@ -20,13 +20,12 @@
 
     <EditText
         android:id="@+id/hostTextView"
+        android:importantForAutofill="no"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_below="@+id/manuallyAddPcText"
-        android:layout_toLeftOf="@+id/addPcButton"
         android:layout_toStartOf="@+id/addPcButton"
         android:layout_marginTop="25dp"
-        android:layout_alignParentLeft="true"
         android:layout_alignParentStart="true"
         android:ems="10"
         android:singleLine="true"
@@ -43,7 +42,6 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="25dp"
         android:layout_below="@+id/manuallyAddPcText"
-        android:layout_alignParentRight="true"
         android:layout_alignParentEnd="true"
         android:preferKeepClear="true"
         android:text="@android:string/ok"/>

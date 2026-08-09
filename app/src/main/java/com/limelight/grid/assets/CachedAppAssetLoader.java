@@ -4,7 +4,8 @@ import android.content.res.Resources;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
-import android.os.AsyncTask;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.View;
 import android.view.animation.Animation;
 import android.view.animation.AnimationUtils;
@@ -18,10 +19,23 @@ import com.limelight.nvstream.http.NvApp;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
+import java.util.concurrent.Executor;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Loads box art through a three-tier cache: memory, disk, then the host.
+ *
+ * <p>Each tier gets its own bounded thread pool, so a slow network fetch can't hold up a load that
+ * would have been satisfied from memory, and the queue bounds mean a fast scroll discards work
+ * rather than accumulating it.
+ *
+ * <p>Loads are tied to the {@link ImageView} that requested them and are cancelled when that view
+ * is recycled. The view is held weakly: the grid can be destroyed while loads are in flight, and
+ * the load has no business keeping it alive.
+ */
 public class CachedAppAssetLoader {
     private static final int MAX_CONCURRENT_DISK_LOADS = 3;
     private static final int MAX_CONCURRENT_NETWORK_LOADS = 3;
@@ -49,6 +63,8 @@ public class CachedAppAssetLoader {
             new LinkedBlockingQueue<Runnable>(MAX_PENDING_NETWORK_LOADS),
             new ThreadPoolExecutor.DiscardOldestPolicy());
 
+    private final Handler mainThreadHandler = new Handler(Looper.getMainLooper());
+
     private final ComputerDetails computer;
     private final double scalingDivider;
     private final NetworkAssetLoader networkLoader;
@@ -69,6 +85,7 @@ public class CachedAppAssetLoader {
         this.placeholderBitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
     }
 
+    /** Drops queued loads that no visible cell is waiting on. */
     public void cancelBackgroundLoads() {
         Runnable r;
         while ((r = cacheExecutor.getQueue().poll()) != null) {
@@ -76,6 +93,7 @@ public class CachedAppAssetLoader {
         }
     }
 
+    /** Drops queued loads for cells that are no longer on screen. */
     public void cancelForegroundLoads() {
         Runnable r;
 
@@ -88,6 +106,7 @@ public class CachedAppAssetLoader {
         }
     }
 
+    /** Releases the memory tier, leaving the disk cache intact. */
     public void freeCacheMemory() {
         memoryLoader.clearCache();
     }
@@ -142,10 +161,20 @@ public class CachedAppAssetLoader {
         return null;
     }
 
-    private class LoaderTask extends AsyncTask<LoaderTuple, Void, ScaledBitmap> {
+    /**
+     * Box art load for a single app.
+     *
+     * Was an AsyncTask, deprecated in API 30. This keeps the same contract the rest of the
+     * class relies on - cancel()/isCancelled(), a background phase, a "show the placeholder
+     * now" progress callback and a completion callback on the main thread - without it. The
+     * three ThreadPoolExecutors above already provided the threading; AsyncTask was only
+     * supplying the cancellation flag and the hops back to the main thread.
+     */
+    private class LoaderTask implements Runnable {
         private final WeakReference<ImageView> imageViewRef;
         private final WeakReference<TextView> textViewRef;
         private final boolean diskOnly;
+        private final AtomicBoolean cancelled = new AtomicBoolean(false);
 
         private LoaderTuple tuple;
 
@@ -155,10 +184,39 @@ public class CachedAppAssetLoader {
             this.diskOnly = diskOnly;
         }
 
-        @Override
-        protected ScaledBitmap doInBackground(LoaderTuple... params) {
-            tuple = params[0];
+        public boolean isCancelled() {
+            return cancelled.get();
+        }
 
+        /**
+         * @param mayInterruptIfRunning accepted for parity with the old AsyncTask call sites.
+         *                              The background phase polls isCancelled() at each step
+         *                              rather than being interrupted, which is what
+         *                              doNetworkAssetLoad() already expected.
+         */
+        public void cancel(boolean mayInterruptIfRunning) {
+            cancelled.set(true);
+        }
+
+        public void executeOnExecutor(Executor executor, LoaderTuple tuple) {
+            this.tuple = tuple;
+            executor.execute(this);
+        }
+
+        @Override
+        public void run() {
+            final ScaledBitmap bitmap = doInBackground();
+            if (!isCancelled()) {
+                mainThreadHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        onPostExecute(bitmap);
+                    }
+                });
+            }
+        }
+
+        private ScaledBitmap doInBackground() {
             // Check whether it has been cancelled or the views are gone
             if (isCancelled() || imageViewRef.get() == null || textViewRef.get() == null) {
                 return null;
@@ -172,7 +230,12 @@ public class CachedAppAssetLoader {
                 } else {
                     // Report progress to display the placeholder and spin
                     // off the network-capable task
-                    publishProgress();
+                    mainThreadHandler.post(new Runnable() {
+                        @Override
+                        public void run() {
+                            onProgressUpdate();
+                        }
+                    });
                 }
             }
 
@@ -184,8 +247,7 @@ public class CachedAppAssetLoader {
             return bmp;
         }
 
-        @Override
-        protected void onProgressUpdate(Void... nothing) {
+        private void onProgressUpdate() {
             // Do nothing if cancelled
             if (isCancelled()) {
                 return;
@@ -194,6 +256,13 @@ public class CachedAppAssetLoader {
             // If the current loader task for this view isn't us, do nothing
             final ImageView imageView = imageViewRef.get();
             final TextView textView = textViewRef.get();
+
+            // AsyncTask's callbacks could not run after the views were collected, but ours are
+            // posted independently, so re-check the weak references before touching them.
+            if (imageView == null || textView == null) {
+                return;
+            }
+
             if (getLoaderTask(imageView) == this) {
                 // Set off another loader task on the network executor. This time our AsyncDrawable
                 // will use the app image placeholder bitmap, rather than an empty bitmap.
@@ -207,8 +276,7 @@ public class CachedAppAssetLoader {
             }
         }
 
-        @Override
-        protected void onPostExecute(final ScaledBitmap bitmap) {
+        private void onPostExecute(final ScaledBitmap bitmap) {
             // Do nothing if cancelled
             if (isCancelled()) {
                 return;
@@ -216,6 +284,10 @@ public class CachedAppAssetLoader {
 
             final ImageView imageView = imageViewRef.get();
             final TextView textView = textViewRef.get();
+            if (imageView == null || textView == null) {
+                return;
+            }
+
             if (getLoaderTask(imageView) == this) {
                 // Fade in the box art
                 if (bitmap != null) {
@@ -302,6 +374,7 @@ public class CachedAppAssetLoader {
         return true;
     }
 
+    /** Warms the memory cache for an app in the background, before its cell scrolls into view. */
     public void queueCacheLoad(NvApp app) {
         final LoaderTuple tuple = new LoaderTuple(computer, app);
 
@@ -331,6 +404,11 @@ public class CachedAppAssetLoader {
                 (bitmap.originalWidth == 628 && bitmap.originalHeight == 888); // GFE 3.0
     }
 
+    /**
+     * Loads an app's box art into a view, from cache if possible and asynchronously otherwise.
+     *
+     * @return true if the art was available immediately, meaning no placeholder is needed
+     */
     public boolean populateImageView(NvApp app, ImageView imgView, TextView textView) {
         LoaderTuple tuple = new LoaderTuple(computer, app);
 

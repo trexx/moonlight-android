@@ -30,6 +30,7 @@ import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Service;
 import android.content.ComponentName;
+import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.res.Configuration;
@@ -48,7 +49,7 @@ import android.widget.AbsListView;
 import android.widget.AdapterView;
 import android.widget.AdapterView.OnItemClickListener;
 import android.widget.ImageButton;
-import android.widget.RelativeLayout;
+import android.net.Uri;
 import android.widget.Toast;
 import android.widget.AdapterView.AdapterContextMenuInfo;
 
@@ -68,7 +69,10 @@ import javax.microedition.khronos.opengles.GL10;
  * here, which is why so much of this class is dialog and menu handling rather than view code.
  */
 public class PcView extends Activity implements AdapterFragmentCallbacks {
-    private RelativeLayout noPcFoundLayout;
+    // Typed as View, not the concrete widget: this is only ever used to toggle
+    // visibility, and the empty state is a plain TextView since the wrapper layout
+    // was flattened.
+    private View noPcFoundLayout;
     private PcGridAdapter pcGridAdapter;
     private ShortcutHelper shortcutHelper;
     private ComputerManagerService.ComputerManagerBinder managerBinder;
@@ -123,7 +127,7 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
     private final static int VIEW_DETAILS_ID = 8;
     private final static int FULL_APP_LIST_ID = 9;
     private final static int TEST_NETWORK_ID = 10;
-    private final static int GAMESTREAM_EOL_ID = 11;
+    private final static int MANAGEMENT_PAGE_ID = 12;
 
     /** Wires up the grid, the empty-state text and the add-computer affordances. */
     private void initializeViews() {
@@ -367,9 +371,6 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
             computer.details.state != ComputerDetails.State.UNKNOWN &&
             computer.details.pairState != PairState.PAIRED) {
             menu.add(Menu.NONE, PAIR_ID, 1, getResources().getString(R.string.pcview_menu_pair_pc));
-            if (computer.details.nvidiaServer) {
-                menu.add(Menu.NONE, GAMESTREAM_EOL_ID, 2, getResources().getString(R.string.pcview_menu_eol));
-            }
         }
         else {
             if (computer.details.runningGameId != 0) {
@@ -377,12 +378,11 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
                 menu.add(Menu.NONE, QUIT_ID, 2, getResources().getString(R.string.applist_menu_quit));
             }
 
-            if (computer.details.nvidiaServer) {
-                menu.add(Menu.NONE, GAMESTREAM_EOL_ID, 3, getResources().getString(R.string.pcview_menu_eol));
-            }
-
             menu.add(Menu.NONE, FULL_APP_LIST_ID, 4, getResources().getString(R.string.pcview_menu_app_list));
         }
+
+        // Sunshine serves its web UI one port above the HTTP port
+        menu.add(Menu.NONE, MANAGEMENT_PAGE_ID, 5, getResources().getString(R.string.pcview_menu_management_page));
 
         menu.add(Menu.NONE, TEST_NETWORK_ID, 5, getResources().getString(R.string.pcview_menu_test_network));
         menu.add(Menu.NONE, DELETE_ID, 6, getResources().getString(R.string.pcview_menu_delete_pc));
@@ -650,10 +650,20 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
                 Dialog.displayDialog(PcView.this, getResources().getString(R.string.title_details), computer.details.toString(), false);
                 return true;
 
-            case TEST_NETWORK_ID:
-                ServerHelper.doNetworkTest(PcView.this);
+            case MANAGEMENT_PAGE_ID:
+                if (computer.details.activeAddress != null) {
+                    String url = "https://" + computer.details.activeAddress.address + ":" +
+                            (computer.details.activeAddress.port + 1);
+                    try {
+                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                    } catch (ActivityNotFoundException e) {
+                        Toast.makeText(PcView.this, getResources().getString(R.string.error_no_browser), Toast.LENGTH_LONG).show();
+                    }
+                }
                 return true;
 
+            case TEST_NETWORK_ID:
+                ServerHelper.doNetworkTest(PcView.this);
                 return true;
 
             default:
