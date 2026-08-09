@@ -1,0 +1,60 @@
+Count audio and video packets that fail to decrypt
+
+Local to this fork; not an upstream PR. moonlight-common-c records no counter
+for a decryption failure - the paths only Limelog() and return - so a stream
+that decrypts nothing looks identical to a host sending nothing. That is exactly
+how the mbedTLS 3.x CBC padding bug (see 0001) stayed invisible: perfect video,
+silent audio, and no signal on any surface the client can show.
+
+Counted only on failure, inside the branch that already exists, so a healthy
+stream does no extra work at all - the branch is never taken. No success counter
+is added because packetCountAudio/packetCountVideo already count every packet
+before decryption runs, which makes them the denominator for free.
+
+Fields are appended to the end of both structs so existing indices in the JNI
+long[] stay stable.
+
+diff --git a/src/AudioStream.c b/src/AudioStream.c
+index 2fcc1f0..2b94128 100644
+--- a/src/AudioStream.c
++++ b/src/AudioStream.c
+@@ -196,6 +196,7 @@ static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
+                                (unsigned char*)(rtp + 1), dataLength,
+                                decryptedOpusData, &dataLength)) {
+             Limelog("Failed to decrypt audio packet (sequence number: %u)\n", rtp->sequenceNumber);
++            rtpAudioQueue.stats.packetCountDecryptFailed++;
+             LC_ASSERT_VT(false);
+             return;
+         }
+diff --git a/src/Limelight.h b/src/Limelight.h
+index e622bea..31339f7 100644
+--- a/src/Limelight.h
++++ b/src/Limelight.h
+@@ -883,6 +883,7 @@ typedef struct _RTP_AUDIO_STATS {
+     uint32_t packetCountOOS;           // out-of-sequence packets
+     uint32_t packetCountInvalid;       // corrupted packets, etc
+     uint32_t packetCountFecInvalid;    // invalid FEC packet
++    uint32_t packetCountDecryptFailed; // arrived but could not be decrypted, so was discarded
+ } RTP_AUDIO_STATS, *PRTP_AUDIO_STATS;
+ 
+ const RTP_AUDIO_STATS* LiGetRTPAudioStats(void);
+@@ -899,6 +900,7 @@ typedef struct _RTP_VIDEO_STATS {
+     uint32_t packetCountOOS;           // out-of-sequence packets
+     uint32_t packetCountInvalid;       // corrupted packets, etc
+     uint32_t packetCountFecInvalid;    // invalid FEC packet
++    uint32_t packetCountDecryptFailed; // arrived but could not be decrypted, so was discarded
+ } RTP_VIDEO_STATS, *PRTP_VIDEO_STATS;
+ 
+ const RTP_VIDEO_STATS* LiGetRTPVideoStats(void);
+diff --git a/src/VideoStream.c b/src/VideoStream.c
+index 402b056..8979f9d 100644
+--- a/src/VideoStream.c
++++ b/src/VideoStream.c
+@@ -217,6 +217,7 @@ static void VideoReceiveThreadProc(void* context) {
+                                    ((unsigned char*)(encHeader + 1)), err - sizeof(ENC_VIDEO_HEADER), // The ciphertext is after the header
+                                    (unsigned char*)buffer, &err)) {
+                 Limelog("Failed to decrypt video packet!\n");
++                rtpQueue.stats.packetCountDecryptFailed++;
+                 continue;
+             }
+         }

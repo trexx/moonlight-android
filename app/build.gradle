@@ -139,6 +139,29 @@ java {
     }
 }
 
+// Upstream fixes we depend on that have not merged yet are carried as patches against the
+// native submodules rather than by forking them. They have to land before ndk-build compiles
+// those sources, so this hangs off preBuild. See scripts/apply-native-patches.py for the
+// mechanism, and patches/ for what is currently carried and why.
+//
+// Deliberately has no declared outputs, so it runs every build: the script is idempotent and
+// costs a `git apply --reverse --check`, and a submodule reset between builds has to be
+// noticed rather than skipped as up to date.
+tasks.register('applyNativePatches', Exec) {
+    description = 'Applies carried upstream patches to native submodules.'
+    group = 'build setup'
+
+    workingDir = rootProject.projectDir
+    commandLine 'python3', 'scripts/apply-native-patches.py'
+
+    inputs.files(rootProject.fileTree('patches') { include '**/*.patch' })
+            .withPropertyName('carriedPatches')
+}
+
+tasks.named('preBuild') {
+    dependsOn 'applyNativePatches'
+}
+
 dependencies {
     // BouncyCastle, not the platform crypto: pairing needs certificate generation and signing
     // primitives that Android's providers do not expose.
