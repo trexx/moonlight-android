@@ -72,7 +72,7 @@ jobs:
             ./app/build/outputs/apk/release/app-release-aligned.apk
 
       - name: Upload Signed APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: moonlight-android.apk
           path: ./app/build/outputs/apk/release/app-release-debugsigned.apk
@@ -99,7 +99,7 @@ jobs:
             ./app/build/outputs/apk/debug/app-debug-aligned.apk
 
       - name: Upload Debug APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: moonlight-android-debug.apk
           path: ./app/build/outputs/apk/debug/app-debug-signed.apk
