@@ -9,11 +9,10 @@
     <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA"/>
     <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA"/>
 
-    <!-- We don't need a MulticastLock on API level 34+ because we use NsdManager for mDNS -->
-    <uses-permission
-        android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"
-        android:maxSdkVersion="33" />
-
+    <!-- All optional, and they must stay that way: the app runs on devices that have none of
+         these, and the package installer refuses a package whose required features are absent.
+         Marking touchscreen required would lock out every TV box; marking leanback required
+         would lock out everything else. -->
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
@@ -167,9 +166,7 @@
                 android:value="true" />
         </activity>
 
-        <service
-            android:name=".discovery.DiscoveryService"
-            android:label="mDNS PC Auto-Discovery Service" />
+        <!-- Neither service is exported: both are bound only from within this app -->
         <service
             android:name=".computers.ComputerManagerService"
             android:label="Computer Management Service" />
