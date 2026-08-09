@@ -64,9 +64,9 @@
             android:entryValues="@array/audio_config_values"
             android:defaultValue="2" />
         <CheckBoxPreference
-            android:key="checkbox_enable_audiofx"
-            android:title="@string/title_checkbox_enable_audiofx"
-            android:summary="@string/summary_checkbox_enable_audiofx"
+            android:key="checkbox_enable_aaudio"
+            android:title="@string/title_checkbox_enable_aaudio"
+            android:summary="@string/summary_checkbox_enable_aaudio"
             android:defaultValue="false" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_gamepad_settings"
