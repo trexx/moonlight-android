@@ -63,14 +63,6 @@
             android:exported="true">
         </provider>
 
-        <!-- Samsung multi-window support -->
-        <uses-library
-            android:name="com.sec.android.app.multiwindow"
-            android:required="false" />
-        <meta-data
-            android:name="com.sec.android.support.multiwindow"
-            android:value="true" />
-
         <!-- Disable Game Mode downscaling since it can break our UI dialogs and doesn't benefit
              performance much for us since we don't use GL/Vulkan for rendering anyway -->
         <meta-data
@@ -82,24 +74,17 @@
             android:name="android.game_mode_config"
             android:resource="@xml/game_mode_config" />
 
-        <!-- Samsung DeX support requires explicit placement of android:resizeableActivity="true"
-             in each activity even though it is implied by targeting API 24+ -->
-
         <activity
             android:name=".PcView"
             android:exported="true"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
-
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
-                <category android:name="android.intent.category.MULTIWINDOW_LAUNCHER" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
                 <category android:name="tv.ouya.intent.category.APP" />
             </intent-filter>
@@ -109,53 +94,41 @@
             android:name=".ShortcutTrampoline"
             android:noHistory="true"
             android:exported="true"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
         <activity
             android:name=".AppView"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
         <activity
             android:name=".preferences.StreamSettings"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:label="Streaming Settings">
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
         <activity
             android:name=".preferences.AddComputerManually"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:windowSoftInputMode="stateVisible"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:label="Add Computer Manually">
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
         <activity
             android:name=".Game"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:noHistory="true"
-            android:supportsPictureInPicture="true"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="false"
             android:launchMode="singleTask"
             android:excludeFromRecents="true"
             android:theme="@style/StreamTheme"
             android:preferMinimalPostProcessing="true">
-
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
 
             <!-- Special metadata for NVIDIA Shield devices to prevent input buffering
                  and most importantly, opt out of mouse acceleration while streaming -->

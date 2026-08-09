@@ -37,9 +37,7 @@ import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
 import android.app.Activity;
-import android.app.PictureInPictureParams;
 import android.app.Service;
 import android.content.ComponentName;
 import android.content.Context;
@@ -49,8 +47,6 @@ import android.content.SharedPreferences;
 import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
-import android.graphics.Point;
-import android.graphics.Rect;
 import android.hardware.input.InputManager;
 import android.media.AudioManager;
 import android.net.ConnectivityManager;
@@ -59,7 +55,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
-import android.util.Rational;
 import android.view.Display;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
@@ -120,10 +115,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private boolean displayedFailureDialog = false;
     private boolean connecting = false;
     private boolean connected = false;
-    private boolean autoEnterPip = false;
     private boolean surfaceCreated = false;
     private boolean attemptedConnection = false;
-    private int suppressPipRefCount = 0;
     private String pcName;
     private String appName;
     private NvApp app;
@@ -141,7 +134,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private float lastAbsTouchUpX, lastAbsTouchUpY;
     private float lastAbsTouchDownX, lastAbsTouchDownY;
 
-    private boolean isHidingOverlays;
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private TextView performanceOverlayView;
@@ -583,91 +575,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             // Refresh layout of OSC for possible new screen size
             virtualController.refreshLayout();
         }
-
-        // Hide on-screen overlays in PiP mode
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            if (isInPictureInPictureMode()) {
-                isHidingOverlays = true;
-
-                if (virtualController != null) {
-                    virtualController.hide();
-                }
-
-                performanceOverlayView.setVisibility(View.GONE);
-                notificationOverlayView.setVisibility(View.GONE);
-
-                // Disable sensors while in PiP mode
-                controllerHandler.disableSensors();
-
-                // Update GameManager state to indicate we're in PiP (still gaming, but interruptible)
-                UiHelper.notifyStreamEnteringPiP(this);
-            }
-            else {
-                isHidingOverlays = false;
-
-                // Restore overlays to previous state when leaving PiP
-
-                if (virtualController != null) {
-                    virtualController.show();
-                }
-
-                if (prefConfig.enablePerfOverlay) {
-                    performanceOverlayView.setVisibility(View.VISIBLE);
-                }
-
-                notificationOverlayView.setVisibility(requestedNotificationOverlayVisibility);
-
-                // Enable sensors again after exiting PiP
-                controllerHandler.enableSensors();
-
-                // Update GameManager state to indicate we're out of PiP (gaming, non-interruptible)
-                UiHelper.notifyStreamExitingPiP(this);
-            }
-        }
-    }
-
-    @TargetApi(Build.VERSION_CODES.O)
-    private PictureInPictureParams getPictureInPictureParams(boolean autoEnter) {
-        PictureInPictureParams.Builder builder =
-                new PictureInPictureParams.Builder()
-                        .setAspectRatio(new Rational(prefConfig.width, prefConfig.height))
-                        .setSourceRectHint(new Rect(
-                                streamView.getLeft(), streamView.getTop(),
-                                streamView.getRight(), streamView.getBottom()));
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            builder.setAutoEnterEnabled(autoEnter);
-            builder.setSeamlessResizeEnabled(true);
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (appName != null) {
-                builder.setTitle(appName);
-                if (pcName != null) {
-                    builder.setSubtitle(pcName);
-                }
-            }
-            else if (pcName != null) {
-                builder.setTitle(pcName);
-            }
-        }
-
-        return builder.build();
-    }
-
-    private void updatePipAutoEnter() {
-        if (!prefConfig.enablePip) {
-            return;
-        }
-
-        boolean autoEnter = connected && suppressPipRefCount == 0;
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            setPictureInPictureParams(getPictureInPictureParams(autoEnter));
-        }
-        else {
-            autoEnterPip = autoEnter;
-        }
     }
 
     public void setMetaKeyCaptureState(boolean enabled) {
@@ -699,36 +606,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
-    @Override
-    public void onUserLeaveHint() {
-        super.onUserLeaveHint();
-
-        // PiP is only supported on Oreo and later, and we don't need to manually enter PiP on
-        // Android S and later. On Android R, we will use onPictureInPictureRequested() instead.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
-            if (autoEnterPip) {
-                try {
-                    // This has thrown all sorts of weird exceptions on Samsung devices
-                    // running Oreo. Just eat them and close gracefully on leave, rather
-                    // than crashing.
-                    enterPictureInPictureMode(getPictureInPictureParams(false));
-                } catch (Exception e) {
-                    e.printStackTrace();
-                }
-            }
-        }
-    }
-
-    @Override
-    @TargetApi(Build.VERSION_CODES.R)
-    public boolean onPictureInPictureRequested() {
-        // Enter PiP when requested unless we're on Android 12 which supports auto-enter.
-        if (autoEnterPip && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            enterPictureInPictureMode(getPictureInPictureParams(false));
-        }
-        return true;
-    }
-
+    /** {@inheritDoc} Re-establishes pointer capture and the system UI state on regaining focus. */
     @Override
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
@@ -1001,28 +879,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
-    @Override
-    @TargetApi(Build.VERSION_CODES.N)
-    public void onMultiWindowModeChanged(boolean isInMultiWindowMode) {
-        super.onMultiWindowModeChanged(isInMultiWindowMode);
-
-        // In multi-window, we don't want to use the full-screen layout
-        // flag. It will cause us to collide with the system UI.
-        // This function will also be called for PiP so we can cover
-        // that case here too.
-        if (isInMultiWindowMode) {
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-            decoderRenderer.notifyVideoBackground();
-        }
-        else {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-            decoderRenderer.notifyVideoForeground();
-        }
-
-        // Correct the system UI visibility flags
-        hideSystemUi(50);
-    }
-
+    /** {@inheritDoc} Unbinds services and releases the decoder and input plumbing. */
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -2207,7 +2064,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private void stopConnection() {
         if (connecting || connected) {
             connecting = connected = false;
-            updatePipAutoEnter();
 
             controllerHandler.stop();
 
@@ -2373,9 +2229,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     requestedNotificationOverlayVisibility = View.GONE;
                 }
 
-                if (!isHidingOverlays) {
-                    notificationOverlayView.setVisibility(requestedNotificationOverlayVisibility);
-                }
+                notificationOverlayView.setVisibility(requestedNotificationOverlayVisibility);
             }
         });
     }
@@ -2392,7 +2246,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
                 connected = true;
                 connecting = false;
-                updatePipAutoEnter();
 
                 // Hide the mouse cursor now after a short delay.
                 // Doing it before dismissing the spinner seems to be undone
