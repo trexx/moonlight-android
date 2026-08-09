@@ -37,7 +37,6 @@ class Bytes;
 namespace Log
 {
     std::string formatBytes(const Bytes &bytes);
-    std::string formatLog(std::string level, std::string message);
 
     inline void init()
     {

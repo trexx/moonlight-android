@@ -140,6 +140,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final NvConnection conn;
     private final Activity activityContext;
     private final double stickDeadzone;
+
+    // Residual deadzone applied when deadzone compensation is active, to reject stick drift
+    private static final double COMPENSATED_CENTER_DEADZONE = 0.01;
     private final InputDeviceContext defaultContext = new InputDeviceContext();
     private final GameGestures gestures;
     private final InputManager inputManager;
@@ -198,11 +201,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
         }
 
-        // 1% is the lowest possible deadzone we support
-        if (deadzonePercentage <= 0) {
-            deadzonePercentage = 1;
-        }
-
+        // A negative value is deadzone *compensation* rather than a deadzone, so it is
+        // passed through unclamped. See handleDeadZone().
         this.stickDeadzone = (double)deadzonePercentage / 100.0;
 
         // Initialize the default context for events with no device
@@ -1237,12 +1237,12 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     context.controllerNumber == controllerNumber &&
                     context.mouseEmulationActive == originalContext.mouseEmulationActive) {
                 inputMap |= context.inputMap;
-                leftTrigger |= maxByMagnitude(leftTrigger, context.leftTrigger);
-                rightTrigger |= maxByMagnitude(rightTrigger, context.rightTrigger);
-                leftStickX |= maxByMagnitude(leftStickX, context.leftStickX);
-                leftStickY |= maxByMagnitude(leftStickY, context.leftStickY);
-                rightStickX |= maxByMagnitude(rightStickX, context.rightStickX);
-                rightStickY |= maxByMagnitude(rightStickY, context.rightStickY);
+                leftTrigger = maxByMagnitude(leftTrigger, context.leftTrigger);
+                rightTrigger = maxByMagnitude(rightTrigger, context.rightTrigger);
+                leftStickX = maxByMagnitude(leftStickX, context.leftStickX);
+                leftStickY = maxByMagnitude(leftStickY, context.leftStickY);
+                rightStickX = maxByMagnitude(rightStickX, context.rightStickX);
+                rightStickY = maxByMagnitude(rightStickY, context.rightStickY);
             }
         }
         for (int i = 0; i < usbDeviceContexts.size(); i++) {
@@ -1251,22 +1251,22 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     context.controllerNumber == controllerNumber &&
                     context.mouseEmulationActive == originalContext.mouseEmulationActive) {
                 inputMap |= context.inputMap;
-                leftTrigger |= maxByMagnitude(leftTrigger, context.leftTrigger);
-                rightTrigger |= maxByMagnitude(rightTrigger, context.rightTrigger);
-                leftStickX |= maxByMagnitude(leftStickX, context.leftStickX);
-                leftStickY |= maxByMagnitude(leftStickY, context.leftStickY);
-                rightStickX |= maxByMagnitude(rightStickX, context.rightStickX);
-                rightStickY |= maxByMagnitude(rightStickY, context.rightStickY);
+                leftTrigger = maxByMagnitude(leftTrigger, context.leftTrigger);
+                rightTrigger = maxByMagnitude(rightTrigger, context.rightTrigger);
+                leftStickX = maxByMagnitude(leftStickX, context.leftStickX);
+                leftStickY = maxByMagnitude(leftStickY, context.leftStickY);
+                rightStickX = maxByMagnitude(rightStickX, context.rightStickX);
+                rightStickY = maxByMagnitude(rightStickY, context.rightStickY);
             }
         }
         if (defaultContext.controllerNumber == controllerNumber) {
             inputMap |= defaultContext.inputMap;
-            leftTrigger |= maxByMagnitude(leftTrigger, defaultContext.leftTrigger);
-            rightTrigger |= maxByMagnitude(rightTrigger, defaultContext.rightTrigger);
-            leftStickX |= maxByMagnitude(leftStickX, defaultContext.leftStickX);
-            leftStickY |= maxByMagnitude(leftStickY, defaultContext.leftStickY);
-            rightStickX |= maxByMagnitude(rightStickX, defaultContext.rightStickX);
-            rightStickY |= maxByMagnitude(rightStickY, defaultContext.rightStickY);
+            leftTrigger = maxByMagnitude(leftTrigger, defaultContext.leftTrigger);
+            rightTrigger = maxByMagnitude(rightTrigger, defaultContext.rightTrigger);
+            leftStickX = maxByMagnitude(leftStickX, defaultContext.leftStickX);
+            leftStickY = maxByMagnitude(leftStickY, defaultContext.leftStickY);
+            rightStickX = maxByMagnitude(rightStickX, defaultContext.rightStickX);
+            rightStickY = maxByMagnitude(rightStickY, defaultContext.rightStickY);
         }
 
         if (originalContext.mouseEmulationActive) {
@@ -1370,11 +1370,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return KeyEvent.KEYCODE_BUTTON_MODE;
         }
 
-        // This mapping was adding in Android 10, then changed based on
-        // kernel changes (adding hid-nintendo) in Android 11. If we're
-        // on anything newer than Pie, just use the built-in mapping.
-        if ((context.vendorId == 0x057e && context.productId == 0x2009 && Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) || // Switch Pro controller
-                (context.vendorId == 0x0f0d && context.productId == 0x00c1)) { // HORIPAD for Switch
+        // The Switch Pro controller uses the built-in mapping on Android 11 and later.
+        if ((context.vendorId == 0x0f0d && context.productId == 0x00c1) || // HORIPAD for Switch
+                // The PowerA Pro reports no VID/PID at all, so match on its device name
+                (context.vendorId == 0 && context.productId == 0 && "Lic Pro Controller".equals(context.name))) {
             switch (event.getScanCode()) {
                 case 0x130:
                     return KeyEvent.KEYCODE_BUTTON_A;
@@ -1610,7 +1609,27 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
      * @param deadzoneRadius positive for a deadzone, negative for compensation
      */
     private void handleDeadZone(Vector2d stickVector, float deadzoneRadius) {
-        if (stickVector.getMagnitude() <= deadzoneRadius) {
+        double magnitude = stickVector.getMagnitude();
+
+        if (deadzoneRadius < 0) {
+            // Negative values mean deadzone compensation: the stick is worn and no longer
+            // reaches full deflection, so scale the magnitude up such that the reduced
+            // travel covers the full range. A small fixed deadzone still guards drift.
+            if (magnitude <= COMPENSATED_CENTER_DEADZONE) {
+                stickVector.initialize(0, 0);
+            }
+            else {
+                double scale = 1.0 / (1.0 + deadzoneRadius);
+                if (magnitude * scale > 1.0) {
+                    // Clamp to the unit circle so we never exceed full deflection
+                    scale = 1.0 / magnitude;
+                }
+                stickVector.scalarMultiply(scale);
+            }
+            return;
+        }
+
+        if (magnitude <= deadzoneRadius) {
             // Deadzone
             stickVector.initialize(0, 0);
         }
@@ -2879,6 +2898,22 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         sendControllerInputPacket(context);
     }
 
+    /** {@inheritDoc} Motion samples from a controller driven by our own USB drivers. */
+    @Override
+    public void reportControllerMotion(int controllerId, byte motionType, float motionX, float motionY, float motionZ) {
+        if (stopped) {
+            return;
+        }
+
+        GenericControllerContext context = usbDeviceContexts.get(controllerId);
+        if (context == null) {
+            return;
+        }
+
+        conn.sendControllerMotionEvent((byte) context.controllerNumber, motionType, motionX, motionY, motionZ);
+    }
+
+    /** {@inheritDoc} Releases the context and player number for a USB controller that went away. */
     @Override
     public void deviceRemoved(AbstractController controller) {
         UsbDeviceContext context = usbDeviceContexts.get(controller.getControllerId());

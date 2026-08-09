@@ -20,7 +20,6 @@
 #include "../utils/log.h"
 
 #include <chrono>
-#include <fstream>
 
 #define BITS_PER_LONG (sizeof(long) * 8)
 #define BIT(nr) (1UL << (nr))
