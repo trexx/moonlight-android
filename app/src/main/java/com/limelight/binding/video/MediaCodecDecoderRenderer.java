@@ -791,15 +791,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
 
-        if (USE_FRAME_RENDER_TIME) {
+        // Registered whenever this is a debug build, not only when the overlay is on. The listener
+        // has to be attached before the codec starts to be reliable across devices, so deciding
+        // later is not an option - and counting from stream start means turning the overlay on
+        // mid-stream shows real history rather than starting from zero. Release attaches no
+        // listener at all, so the per-frame callback is only ever delivered in a build meant for
+        // diagnosis. See CLAUDE.md on keeping per-frame instrumentation out of release.
+        if (BuildConfig.DEBUG || USE_FRAME_RENDER_TIME) {
             videoDecoder.setOnFrameRenderedListener(new MediaCodec.OnFrameRenderedListener() {
                 @Override
                 public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
-                    long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
-                    if (delta >= 0 && delta < 1000) {
-                        if (USE_FRAME_RENDER_TIME) {
+                    if (USE_FRAME_RENDER_TIME) {
+                        long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
+                        if (delta >= 0 && delta < 1000) {
                             activeWindowVideoStats.totalTimeMs += delta;
                         }
+                    }
+
+                    if (BuildConfig.DEBUG) {
+                        recordPresentedFrame(renderTimeNanos);
                     }
                 }
             }, null);
@@ -1386,7 +1396,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             // the overlay reported a flat 0.00 ms while the decoder was really
                             // taking several milliseconds a frame - and kept reporting 0.00
                             // through a decoder hang, which is when the number mattered most.
-                            long delta = takeDecodeStartDelta(presentationTimeUs);
+                            long delta = (BuildConfig.DEBUG && perfMetricsEnabled)
+                                    ? takeDecodeStartDelta(presentationTimeUs) : -1;
                             if (delta >= 0 && delta < 1000) {
                                 activeWindowVideoStats.decoderTimeMs += delta;
                                 if (!USE_FRAME_RENDER_TIME) {
@@ -1419,10 +1430,52 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         rendererThread.start();
     }
 
+    // Whether the performance overlay is on screen, refreshed on the stats tick below. Read from
+    // the frame paths, written from the decode thread, hence volatile.
+    private volatile boolean perfMetricsEnabled;
+
+    // Presentation gaps, measured from the codec's own render timestamps. Debug builds only.
+    //
+    // This is the counter that catches a frozen picture. "Rendering frame rate" counts frames
+    // released to the surface, so it reported a healthy 60.02 FPS at a completely frozen screen
+    // while the decoder discarded every frame it was handed. Render timestamps say what actually
+    // reached the display.
+    //
+    // Written from the codec's callback thread and read by the stats tick, so both are volatile.
+    // Counters rather than a log line per gap: logging here would mean up to sixty writes a second
+    // on a callback thread during precisely the stall being diagnosed.
+    private long lastPresentedFrameNanos;
+    private volatile int presentationGapCount;
+    private volatile long worstPresentationGapNanos;
+
+    /**
+     * Notes how long the display went without a new frame. Called once per presented frame on the
+     * codec's callback thread.
+     */
+    private void recordPresentedFrame(long renderTimeNanos) {
+        if (lastPresentedFrameNanos != 0) {
+            long gapNanos = renderTimeNanos - lastPresentedFrameNanos;
+
+            // Two frame intervals: one missed frame is noise at this granularity, and the
+            // interval has to come from the stream rate rather than a constant because
+            // refreshRate is whatever the stream negotiated.
+            if (refreshRate > 0 && gapNanos > (2 * 1000000000L / refreshRate)) {
+                presentationGapCount++;
+
+                if (gapNanos > worstPresentationGapNanos) {
+                    worstPresentationGapNanos = gapNanos;
+                }
+            }
+        }
+
+        lastPresentedFrameNanos = renderTimeNanos;
+    }
+
     // Submit times for frames the decoder still holds, so decode latency can be measured in one
-    // clock. Sized well past any sane decoder's depth and never allocated on the hot path: both
-    // operations are a bounded walk over a fixed array, which costs less than the map lookup the
-    // obvious implementation would need.
+    // clock. Debug builds only, and only while the overlay is up - see CLAUDE.md on keeping
+    // per-frame instrumentation out of release. Sized well past any sane decoder's depth and never
+    // allocated on the hot path: both operations are a bounded walk over a fixed array, which
+    // costs less than the map lookup the obvious implementation would need.
     private static final int DECODE_START_SLOTS = 16;
     private final long[] decodeStartPtsUs = new long[DECODE_START_SLOTS];
     private final long[] decodeStartUptimeMs = new long[DECODE_START_SLOTS];
@@ -1681,7 +1734,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         boolean codecRecovered;
 
         try {
-            recordDecodeStart(timestampUs);
+            if (BuildConfig.DEBUG && perfMetricsEnabled) {
+                recordDecodeStart(timestampUs);
+            }
 
             videoDecoder.queueInputBuffer(nextInputBufferIndex,
                     0, nextInputBuffer.position(),
@@ -1793,7 +1848,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Flip stats windows roughly every second
         if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
-            if (perfListener.isPerfOverlayVisible()) {
+            // Cache the overlay's visibility for the per-frame paths. They need it 60 times a
+            // second and this is the only place already asking, so they read a field rather than
+            // making an interface call. Visibility rather than the preference: the game menu's
+            // toggle flips it mid-stream without touching prefConfig.
+            perfMetricsEnabled = perfListener.isPerfOverlayVisible();
+
+            if (perfMetricsEnabled) {
                 // Snapshot here, format on the main thread. This runs on the decode thread, and
                 // building the text meant a dozen resource lookups, three JNI stats calls, a
                 // TrafficStats sample and a StringBuilder on the frame path once a second.
@@ -2141,7 +2202,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     (float)lastTwo.maxHostProcessingLatency / 10,
                     (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
         }
-        sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs));
+        // Debug only, because the measurements behind them are. Release builds must not show these
+        // rows at all rather than show them reading zero - that is exactly the failure the decode
+        // time metric had for its whole existence, and a blank row invites the same misreading.
+        if (BuildConfig.DEBUG) {
+            sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs)).append('\n');
+            sb.append(context.getString(R.string.perf_overlay_presentgaps,
+                    presentationGapCount, (float)worstPresentationGapNanos / 1000000));
+        }
 
         return sb.toString();
     }
