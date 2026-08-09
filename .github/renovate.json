@@ -1,0 +1,11 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "dependencyDashboard": true,
+  "extends": [
+    "helpers:pinGitHubActionDigests"
+  ],
+  "enabledManagers": [
+    "gradle",
+    "github-actions"
+  ]
+}
