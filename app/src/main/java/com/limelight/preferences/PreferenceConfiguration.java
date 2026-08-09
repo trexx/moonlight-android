@@ -28,6 +28,19 @@ public class PreferenceConfiguration {
         FORCE_H264,
     };
 
+    public enum MouseMode {
+        ABSOLUTE,          // touch maps directly to a screen position
+        ABSOLUTE_SWAPPED,  // as above, with primary/secondary buttons swapped
+        RELATIVE,          // classic trackpad
+        TRACKPAD,          // trackpad with momentum scrolling and multi-finger gestures
+    }
+
+    public enum ScaleMode {
+        FIT,      // letterbox, preserve aspect ratio
+        FILL,     // overscan and crop, preserve aspect ratio
+        STRETCH,  // distort to fill
+    }
+
     public enum AnalogStickForScrolling {
         NONE,
         RIGHT,
@@ -42,6 +55,7 @@ public class PreferenceConfiguration {
     static final String BITRATE_PREF_STRING = "seekbar_bitrate_kbps";
     private static final String BITRATE_PREF_OLD_STRING = "seekbar_bitrate";
     private static final String STRETCH_PREF_STRING = "checkbox_stretch_video";
+    private static final String SCALE_MODE_PREF_STRING = "list_video_scale_mode";
     private static final String SOPS_PREF_STRING = "checkbox_enable_sops";
     private static final String DISABLE_TOASTS_PREF_STRING = "checkbox_disable_warnings";
     private static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
@@ -62,6 +76,7 @@ public class PreferenceConfiguration {
     static final String UNLOCK_FPS_STRING = "checkbox_unlock_fps";
     private static final String FLIP_FACE_BUTTONS_PREF_STRING = "checkbox_flip_face_buttons";
     private static final String TOUCHSCREEN_TRACKPAD_PREF_STRING = "checkbox_touchscreen_trackpad";
+    private static final String MOUSE_MODE_PREF_STRING = "list_mouse_mode";
     private static final String LATENCY_TOAST_PREF_STRING = "checkbox_enable_post_stream_toast";
     private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
@@ -121,6 +136,7 @@ public class PreferenceConfiguration {
     public int deadzonePercentage;
     public boolean enforceDisplayMode;
     public boolean stretchVideo, enableSops, playHostAudio, disableWarnings;
+    public ScaleMode scaleMode;
     public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
     public boolean enableHdr;
     public boolean enablePerfOverlay;
@@ -131,6 +147,7 @@ public class PreferenceConfiguration {
     public boolean mouseNavButtons;
     public boolean unlockFps;
     public boolean touchscreenTrackpad;
+    public MouseMode mouseMode;
     public MoonBridge.AudioConfiguration audioConfiguration;
     public int framePacing;
     public boolean absoluteMouseMode;
@@ -567,7 +584,25 @@ public class PreferenceConfiguration {
         // Checkbox preferences
         config.disableWarnings = prefs.getBoolean(DISABLE_TOASTS_PREF_STRING, DEFAULT_DISABLE_TOASTS);
         config.enableSops = prefs.getBoolean(SOPS_PREF_STRING, DEFAULT_SOPS);
-        config.stretchVideo = prefs.getBoolean(STRETCH_PREF_STRING, DEFAULT_STRETCH);
+        // Migrate the old boolean stretch preference into the three-way scale mode the
+        // first time we run, so existing users keep the behaviour they had.
+        String scaleModeValue = prefs.getString(SCALE_MODE_PREF_STRING, null);
+        if (scaleModeValue == null) {
+            scaleModeValue = prefs.getBoolean(STRETCH_PREF_STRING, DEFAULT_STRETCH) ? "stretch" : "fit";
+            prefs.edit().putString(SCALE_MODE_PREF_STRING, scaleModeValue).apply();
+        }
+        switch (scaleModeValue) {
+            case "stretch":
+                config.scaleMode = ScaleMode.STRETCH;
+                break;
+            case "fill":
+                config.scaleMode = ScaleMode.FILL;
+                break;
+            default:
+                config.scaleMode = ScaleMode.FIT;
+                break;
+        }
+        config.stretchVideo = config.scaleMode == ScaleMode.STRETCH;
         config.playHostAudio = prefs.getBoolean(HOST_AUDIO_PREF_STRING, DEFAULT_HOST_AUDIO);
         config.smallIconMode = prefs.getBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context));
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
@@ -579,7 +614,30 @@ public class PreferenceConfiguration {
         config.mouseNavButtons = prefs.getBoolean(MOUSE_NAV_BUTTONS_STRING, DEFAULT_MOUSE_NAV_BUTTONS);
         config.unlockFps = prefs.getBoolean(UNLOCK_FPS_STRING, DEFAULT_UNLOCK_FPS);
         config.flipFaceButtons = prefs.getBoolean(FLIP_FACE_BUTTONS_PREF_STRING, DEFAULT_FLIP_FACE_BUTTONS);
-        config.touchscreenTrackpad = prefs.getBoolean(TOUCHSCREEN_TRACKPAD_PREF_STRING, DEFAULT_TOUCHSCREEN_TRACKPAD);
+        // Migrate the old boolean trackpad preference into the mouse mode list on first run
+        String mouseModeValue = prefs.getString(MOUSE_MODE_PREF_STRING, null);
+        if (mouseModeValue == null) {
+            mouseModeValue = prefs.getBoolean(TOUCHSCREEN_TRACKPAD_PREF_STRING, DEFAULT_TOUCHSCREEN_TRACKPAD) ?
+                    "relative" : "absolute";
+            prefs.edit().putString(MOUSE_MODE_PREF_STRING, mouseModeValue).apply();
+        }
+        switch (mouseModeValue) {
+            case "absolute_swapped":
+                config.mouseMode = MouseMode.ABSOLUTE_SWAPPED;
+                break;
+            case "relative":
+                config.mouseMode = MouseMode.RELATIVE;
+                break;
+            case "trackpad":
+                config.mouseMode = MouseMode.TRACKPAD;
+                break;
+            default:
+                config.mouseMode = MouseMode.ABSOLUTE;
+                break;
+        }
+        // Retained for the code paths that only care whether touch is indirect
+        config.touchscreenTrackpad = config.mouseMode == MouseMode.RELATIVE ||
+                config.mouseMode == MouseMode.TRACKPAD;
         config.enableLatencyToast = prefs.getBoolean(LATENCY_TOAST_PREF_STRING, DEFAULT_LATENCY_TOAST);
         config.absoluteMouseMode = prefs.getBoolean(ABSOLUTE_MOUSE_MODE_PREF_STRING, DEFAULT_ABSOLUTE_MOUSE_MODE);
         config.enableAAudio = prefs.getBoolean(ENABLE_AAUDIO_PREF_STRING, DEFAULT_ENABLE_AAUDIO);

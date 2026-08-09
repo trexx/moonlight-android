@@ -167,10 +167,18 @@
     <string name="title_seekbar_bitrate">Video bitrate</string>
     <string name="summary_seekbar_bitrate">Increase for better image quality. Decrease to improve performance on slower connections.</string>
     <string name="perf_overlay_bandwidth">Bandwidth down/up: %1$.2f/%2$.2f MB/s</string>
+    <string name="title_mouse_mode">Touchscreen mouse mode</string>
+    <string name="mouse_mode_relative">Trackpad</string>
+    <string name="mouse_mode_trackpad">Trackpad with gestures (momentum scrolling, two- and three-finger clicks)</string>
+    <string name="mouse_mode_absolute">Direct touch</string>
+    <string name="mouse_mode_absolute_swapped">Direct touch, left-handed (swapped buttons)</string>
+    <string name="title_video_scale_mode">Video scaling</string>
+    <string name="scale_mode_fit">Fit (show the whole image)</string>
+    <string name="scale_mode_fill">Fill (crop to remove black bars)</string>
+    <string name="scale_mode_stretch">Stretch (distort to fill)</string>
     <string name="title_checkbox_enforce_display_mode">Force display mode change</string>
     <string name="summary_checkbox_enforce_display_mode">Always switch the display mode to match the stream, instead of only requesting a frame rate. Enable this if your display stays at the wrong refresh rate while streaming.</string>
     <string name="suffix_seekbar_bitrate_mbps">Mbps</string>
-    <string name="title_checkbox_stretch_video">Stretch video to full-screen</string>
     <string name="resolution_prefix_native">Native</string>
     <string name="resolution_prefix_native_fullscreen">Native Full-Screen</string>
     <string name="resolution_prefix_native_landscape">(Landscape)</string>
@@ -204,8 +212,6 @@
     <string name="summary_checkbox_gamepad_motion_sensors">Enables supported hosts to request motion sensor data when emulating a gamepad with motion sensors. Disabling may slightly reduce power and network usage if motion sensors are not being used in game.</string>
 
     <string name="category_input_settings">Input Settings</string>
-    <string name="title_checkbox_touchscreen_trackpad">Use the touchscreen as a trackpad</string>
-    <string name="summary_checkbox_touchscreen_trackpad">If enabled, the touchscreen acts like a trackpad. If disabled, the touchscreen directly controls the mouse cursor.</string>
     <string name="title_checkbox_absolute_mouse_mode">Remote desktop mouse mode</string>
     <string name="summary_checkbox_absolute_mouse_mode">This can make mouse acceleration behave more naturally for remote desktop usage, but it is incompatible with many games.</string>
     <string name="title_checkbox_mouse_nav_buttons">Enable back and forward mouse buttons</string>
