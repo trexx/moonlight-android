@@ -15,6 +15,17 @@ import java.security.cert.*;
 import java.util.Arrays;
 import java.util.Locale;
 
+/**
+ * The pairing exchange that establishes mutual trust with a host.
+ *
+ * <p>Pairing is a multi-round challenge-response: the client and host each derive an AES key from
+ * a salted PIN, exchange encrypted challenges, and finish by exchanging signed certificates. The
+ * PIN the user types on the host is what proves the two ends are talking about the same session,
+ * so an attacker who intercepts the exchange without the PIN learns nothing usable.
+ *
+ * <p>Every round is a separate HTTP request and the host holds state between them, so the sequence
+ * in {@link #pair} cannot be reordered or retried piecemeal.
+ */
 public class PairingManager {
 
     private NvHTTP http;
@@ -33,6 +44,7 @@ public class PairingManager {
         ALREADY_IN_PROGRESS
     }
     
+    /** @param http the connection to pair over; its certificate pinning is updated on success */
     public PairingManager(NvHTTP http, LimelightCryptoProvider cryptoProvider) {
         this.http = http;
         this.cert = cryptoProvider.getClientCertificate();
@@ -92,6 +104,7 @@ public class PairingManager {
         return rand;
     }
     
+    /** @return the salted PIN whose hash becomes the shared AES key for this exchange */
     private static byte[] saltPin(byte[] salt, String pin) throws UnsupportedEncodingException {
         byte[] saltedPin = new byte[salt.length + pin.length()];
         System.arraycopy(salt, 0, saltedPin, 0, salt.length);
@@ -171,6 +184,7 @@ public class PairingManager {
         return c;
     }
     
+    /** @return a fresh random four-digit PIN for the user to type on the host */
     public static String generatePinString() {
         SecureRandom r = new SecureRandom();
         return String.format((Locale)null, "%d%d%d%d",
@@ -178,10 +192,20 @@ public class PairingManager {
                 r.nextInt(10), r.nextInt(10));
     }
 
+    /** @return the host's certificate learned during pairing, which is pinned for future connections */
     public X509Certificate getPairedCert() {
         return serverCert;
     }
     
+    /**
+     * Runs the whole pairing exchange.
+     *
+     * <p>Blocks for as long as the host waits for the user to enter the PIN, so it is never called
+     * on the UI thread.
+     *
+     * @return the resulting state, distinguishing success from a wrong PIN, an already-paired host
+     *         and a host that refused
+     */
     public PairState pair(String serverInfo, String pin) throws IOException, XmlPullParserException {
         PairingHashAlgorithm hashAlgo;
 

@@ -42,6 +42,14 @@ import android.util.Base64;
 import com.limelight.LimeLog;
 import com.limelight.nvstream.http.LimelightCryptoProvider;
 
+/**
+ * This client's certificate and private key, generated once and stored in the app's data
+ * directory.
+ *
+ * <p>They are the client's identity: hosts pair against this certificate, so losing or
+ * regenerating it unpairs the client from every host. That is why generation happens exactly once
+ * and the files are read back on every subsequent launch.
+ */
 public class AndroidCryptoProvider implements LimelightCryptoProvider {
 
     private final File certFile;
@@ -55,6 +63,7 @@ public class AndroidCryptoProvider implements LimelightCryptoProvider {
 
     private static final Provider bcProvider = new BouncyCastleProvider();
 
+    /** Resolves the certificate and key paths; nothing is generated until they are first read. */
     public AndroidCryptoProvider(Context c) {
         String dataPath = c.getFilesDir().getAbsolutePath();
 
@@ -188,6 +197,7 @@ public class AndroidCryptoProvider implements LimelightCryptoProvider {
         }
     }
 
+    /** {@inheritDoc} Generates the identity on first use, then returns the stored certificate. */
     public X509Certificate getClientCertificate() {
         // Use a lock here to ensure only one guy will be generating or loading
         // the certificate and key at a time
@@ -215,6 +225,7 @@ public class AndroidCryptoProvider implements LimelightCryptoProvider {
         }
     }
 
+    /** {@inheritDoc} */
     public PrivateKey getClientPrivateKey() {
         // Use a lock here to ensure only one guy will be generating or loading
         // the certificate and key at a time
@@ -242,6 +253,7 @@ public class AndroidCryptoProvider implements LimelightCryptoProvider {
         }
     }
 
+    /** {@inheritDoc} @return the certificate in PEM form, as the host's API expects it */
     public byte[] getPemEncodedClientCertificate() {
         synchronized (globalCryptoLock) {
             // Call our helper function to do the cert loading/generation for us
@@ -252,6 +264,7 @@ public class AndroidCryptoProvider implements LimelightCryptoProvider {
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     public String encodeBase64String(byte[] data) {
         return Base64.encodeToString(data, Base64.NO_WRAP);

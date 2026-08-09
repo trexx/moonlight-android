@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Opts out of Android's Game Mode interventions. The battery and performance modes work by
+  downscaling resolution and overriding frame rate, both of which would fight the stream's own
+  resolution and pacing - and neither helps a client that is decoding video rather than rendering
+  a game locally.
+-->
 <game-mode-config
     xmlns:android="http://schemas.android.com/apk/res/android"
     android:supportsBatteryGameMode="false"

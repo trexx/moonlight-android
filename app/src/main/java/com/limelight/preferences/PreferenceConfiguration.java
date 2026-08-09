@@ -9,6 +9,17 @@ import android.view.Display;
 
 import com.limelight.nvstream.jni.MoonBridge;
 
+/**
+ * Every user-facing setting, read once into a plain object.
+ *
+ * <p>{@link #readPreferences} is the only place preference keys are interpreted: everything else
+ * reads fields off this object. That matters because several settings are stored differently from
+ * how they are used — legacy boolean keys are migrated to enums, resolutions are parsed from
+ * strings, and defaults are computed from the device rather than fixed.
+ *
+ * <p>The keys themselves live in {@code res/xml/preferences.xml}, which is where the ranges and
+ * option lists are defined.
+ */
 public class PreferenceConfiguration {
     public enum FormatOption {
         AUTO,
@@ -126,6 +137,7 @@ public class PreferenceConfiguration {
     public boolean gamepadMotionSensors;
     public boolean gamepadTouchpadAsMouse;
 
+    /** @return true if this resolution matches the device's own panel, rather than a standard mode */
     public static boolean isNativeResolution(int width, int height) {
         // It's not a native resolution if it matches an existing resolution option
         if (width == 640 && height == 360) {
@@ -152,6 +164,10 @@ public class PreferenceConfiguration {
 
     // If we have a screen that has semi-square dimensions, we may want to change our behavior
     // to allow any orientation and vertical+horizontal resolutions.
+    /**
+     * @return true if the display is close enough to square that the usual 16:9 assumptions break,
+     *         which affects the resolution options offered
+     */
     public static boolean isSquarishScreen(int width, int height) {
         float longDim = Math.max(width, height);
         float shortDim = Math.min(width, height);
@@ -226,6 +242,7 @@ public class PreferenceConfiguration {
         }
     }
 
+    /** @return the default bitrate in Kbps for a resolution and frame rate, before user override */
     public static int getDefaultBitrate(String resString, String fpsString) {
         int width = getWidthFromResolutionString(resString);
         int height = getHeightFromResolutionString(resString);
@@ -289,6 +306,7 @@ public class PreferenceConfiguration {
         return (int)Math.round(resolutionFactor * frameRateFactor) * 1000;
     }
 
+    /** @return true if the grid should default to small icons, based on screen size */
     public static boolean getDefaultSmallMode(Context context) {
         PackageManager manager = context.getPackageManager();
         if (manager != null) {
@@ -309,6 +327,7 @@ public class PreferenceConfiguration {
         return context.getResources().getConfiguration().smallestScreenWidthDp < 500;
     }
 
+    /** @return the default bitrate for the settings currently stored for this device */
     public static int getDefaultBitrate(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         return getDefaultBitrate(
@@ -384,6 +403,10 @@ public class PreferenceConfiguration {
         }
     }
 
+    /**
+     * Restores the streaming settings to their defaults, leaving unrelated preferences alone.
+     * Offered as a recovery path when a setting has made streaming fail.
+     */
     public static void resetStreamingSettings(Context context) {
         // We consider resolution, FPS, bitrate, HDR, and video format as "streaming settings" here
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
@@ -408,6 +431,12 @@ public class PreferenceConfiguration {
                 Build.FINGERPRINT.contains("PPR1.180610.011/4079208_2235.1395");
     }
 
+    /**
+     * Reads and normalises every setting, migrating legacy keys and computing device-dependent
+     * defaults on the way.
+     *
+     * @return a snapshot; later preference changes are not reflected in it
+     */
     public static PreferenceConfiguration readPreferences(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         PreferenceConfiguration config = new PreferenceConfiguration();

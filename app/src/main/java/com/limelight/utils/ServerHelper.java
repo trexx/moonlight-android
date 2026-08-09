@@ -23,9 +23,17 @@ import java.io.IOException;
 import java.net.UnknownHostException;
 import java.security.cert.CertificateEncodingException;
 
+/**
+ * Host and app actions shared between {@code PcView} and {@code AppView}: building launch intents,
+ * starting streams, quitting the running app and running the network test.
+ */
 public class ServerHelper {
     public static final String CONNECTION_TEST_SERVER = "android.conntest.moonlight-stream.org";
 
+    /**
+     * @return the address the host was last reachable at
+     * @throws IOException if it has no known-good address, meaning it is offline
+     */
     public static ComputerDetails.AddressTuple getCurrentAddressFromComputer(ComputerDetails computer) throws IOException {
         if (computer.activeAddress == null) {
             throw new IOException("No active address for "+computer.name);
@@ -33,6 +41,7 @@ public class ServerHelper {
         return computer.activeAddress;
     }
 
+    /** @return an intent that opens this host's app list, for a launcher shortcut */
     public static Intent createPcShortcutIntent(Activity parent, ComputerDetails computer) {
         Intent i = new Intent(parent, ShortcutTrampoline.class);
         i.putExtra(AppView.NAME_EXTRA, computer.name);
@@ -41,6 +50,7 @@ public class ServerHelper {
         return i;
     }
 
+    /** @return an intent that streams this app directly, for a launcher shortcut */
     public static Intent createAppShortcutIntent(Activity parent, ComputerDetails computer, NvApp app) {
         Intent i = new Intent(parent, ShortcutTrampoline.class);
         i.putExtra(AppView.NAME_EXTRA, computer.name);
@@ -52,6 +62,7 @@ public class ServerHelper {
         return i;
     }
 
+    /** Builds the intent that starts {@code Game}, carrying everything the stream needs. */
     public static Intent createStartIntent(Activity parent, NvApp app, ComputerDetails computer,
                                            ComputerManagerService.ComputerManagerBinder managerBinder) {
         Intent intent = new Intent(parent, Game.class);
@@ -74,6 +85,7 @@ public class ServerHelper {
         return intent;
     }
 
+    /** Starts streaming an app, after checking the host is still reachable. */
     public static void doStart(Activity parent, NvApp app, ComputerDetails computer,
                                ComputerManagerService.ComputerManagerBinder managerBinder) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
@@ -83,6 +95,7 @@ public class ServerHelper {
         parent.startActivity(createStartIntent(parent, app, computer, managerBinder));
     }
 
+    /** Runs the connection test that reports which ports are blocked, off the UI thread. */
     public static void doNetworkTest(final Activity parent) {
         new Thread(new Runnable() {
             @Override
@@ -115,6 +128,7 @@ public class ServerHelper {
         }).start();
     }
 
+    /** Asks the host to quit the running app, off the UI thread. */
     public static void doQuit(final Activity parent,
                               final ComputerDetails computer,
                               final NvApp app,

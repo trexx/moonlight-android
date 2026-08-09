@@ -1,5 +1,6 @@
 package com.limelight.nvstream.input;
 
+/** Wire constants for mouse button events. X1 and X2 are the side (back/forward) buttons. */
 public class MouseButtonPacket {
     public static final byte PRESS_EVENT = 0x07;
     public static final byte RELEASE_EVENT = 0x08;

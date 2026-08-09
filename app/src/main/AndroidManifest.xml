@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- INTERNET and ACCESS_NETWORK_STATE reach hosts; ACCESS_WIFI_STATE backs the high
+         performance and low latency Wi-Fi locks taken during a stream. VIBRATE is needed to
+         drive a gamepad's rumble motors, since InputDevice vibrators go through the same
+         Vibrator API as the device's own. WAKE_LOCK keeps the screen on while streaming, and
+         the TV EPG permissions are for the Android TV channel. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -34,6 +39,16 @@
         android:name="android.hardware.type.pc"
         android:required="false"/>
 
+    <!--
+      gwpAsanMode samples native allocations for heap corruption, which is how memory bugs in the
+      native decode path get caught in the field.
+
+      enableOnBackInvokedCallback is off at the application level: the browsing activities opt in
+      individually, while Game and its dialogs keep the classic onBackPressed() path.
+
+      Every activity below declares configChanges for rotation and resize so Android does not
+      recreate it - for Game that would mean tearing down and rebuilding the stream.
+    -->
     <application
         android:label="@string/app_label"
         android:allowBackup="true"
@@ -50,6 +65,8 @@
         android:supportsRtl="false"
         android:theme="@style/AppTheme">
 
+        <!-- Exported so the Android TV launcher process can read cached box art for the channel.
+             It serves nothing else; see PosterContentProvider. -->
         <provider
             android:name=".PosterContentProvider"
             android:authorities="poster.${applicationId}"
@@ -62,7 +79,7 @@
         <meta-data
             android:name="com.android.graphics.intervention.wm.allowDownscale"
             android:value="false"/>
-        
+
         <!-- Game Mode configuration -->
         <meta-data
             android:name="android.game_mode_config"
@@ -113,6 +130,15 @@
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:label="Add Computer Manually">
         </activity>
+        <!-- The streaming activity. singleTask plus noHistory means a second launch (from a
+             shortcut, say) reuses the running stream rather than stacking another one, and
+             excludeFromRecents keeps a dead stream out of the recents list.
+             preferMinimalPostProcessing asks the display to use game mode, which cuts the TV's
+             own image processing latency.
+             stateAlwaysHidden keeps the soft keyboard down. StreamView always reports itself as
+             a text editor so typed text can reach the host, and without a state policy that
+             lets the framework restore the IME whenever the window takes focus. It only governs
+             the state on focus gain, so explicitly showing the keyboard still works. -->
         <activity
             android:name=".Game"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"

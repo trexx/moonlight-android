@@ -80,6 +80,31 @@ import java.security.cert.X509Certificate;
 import java.util.Locale;
 
 
+/**
+ * The streaming activity: everything that happens while a stream is running.
+ *
+ * <p>It owns the connection ({@link NvConnection}), the decoder
+ * ({@link MediaCodecDecoderRenderer}), and the input paths that feed them — touch, mouse,
+ * keyboard, controllers and the app's own USB controller drivers. The long implements list is the
+ * consequence: this class is the single place where Android's callbacks and moonlight-common-c's
+ * callbacks meet.
+ *
+ * <p>Beyond wiring, its own responsibilities are the ones that need the activity's context:
+ * <ul>
+ *   <li><b>Display setup.</b> Choosing a display mode and refresh rate that matches the stream,
+ *       handling cutouts and insets, and keeping the system UI hidden — see
+ *       {@link #prepareDisplayForRendering()}.</li>
+ *   <li><b>Input grab.</b> Capturing the pointer and the meta keys so they reach the host instead
+ *       of Android, and releasing them when the user needs to get out.</li>
+ *   <li><b>Lifecycle.</b> Pausing and tearing the connection down in the right order when the
+ *       activity goes away. It never survives being stopped: {@code onStop} always finishes.</li>
+ *   <li><b>Escape hatches.</b> The gestures and key combinations that open the game menu, toggle
+ *       the keyboard, or disconnect, since a fullscreen stream hides every normal affordance.</li>
+ * </ul>
+ *
+ * <p>Connection callbacks arrive on native threads and are posted to the UI thread before touching
+ * anything here.
+ */
 public class Game extends Activity implements SurfaceHolder.Callback,
         OnGenericMotionListener, OnTouchListener, NvConnectionListener,
         GameGestures, StreamView.InputCallbacks,
@@ -169,6 +194,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     public static final String EXTRA_APP_HDR = "HDR";
     public static final String EXTRA_SERVER_CERT = "ServerCert";
 
+    /**
+     * Builds the whole streaming session: reads preferences and intent extras, configures the
+     * display, creates the decoder and the input plumbing, and starts connecting.
+     *
+     * <p>Ordering matters here. The decoder is constructed before the stream configuration is
+     * built, because what it can decode determines what is negotiated with the host.
+     */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -364,6 +396,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 this,
                 prefConfig,
                 new CrashListener() {
+                    // commit() is required here, not apply(): the app is about to crash on
+                    // return, so a background write would be lost. Suppressed rather than
+                    // "fixed" - see the comment below.
+                    @SuppressLint("ApplySharedPref")
                     @Override
                     public void notifyCrash(Exception e) {
                         // The MediaCodec instance is going down due to a crash
@@ -509,6 +545,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         streamView.getHolder().addCallback(this);
     }
 
+    /**
+     * Locks the stream to landscape.
+     *
+     * <p>There used to be a branch here for squarish displays — foldables and some tablets —
+     * that allowed portrait or free rotation when the stream resolution called for it. It went
+     * with the rest of the phone-shaped handling; a streaming client on a TV is landscape.
+     */
     private void setPreferredOrientationForCurrentDisplay() {
         Display display = getWindowManager().getDefaultDisplay();
 
@@ -548,6 +591,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
+    /** {@inheritDoc} Re-evaluates orientation, insets and the system UI after a config change. */
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
@@ -556,6 +600,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         setPreferredOrientationForCurrentDisplay();
     }
 
+    /**
+     * Captures or releases the meta keys (Home, Recents, Back).
+     *
+     * <p>Capturing them lets combinations like Win+D reach the host instead of Android, which is
+     * the point; releasing them is what makes it possible to leave the stream at all.
+     */
     public void setMetaKeyCaptureState(boolean enabled) {
         // This uses custom APIs present on some Samsung devices to allow capture of
         // meta key events while streaming.
@@ -599,16 +649,23 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         inputCaptureProvider.onWindowFocusChanged(hasFocus);
     }
 
+    /** @return true if this refresh rate matches the stream frame rate closely enough to be exact */
     private boolean isRefreshRateEqualMatch(float refreshRate) {
         return refreshRate >= prefConfig.fps &&
                 refreshRate <= prefConfig.fps + 3;
     }
 
+    /** @return true if this refresh rate is an integer multiple of the stream rate, so frames pace evenly */
     private boolean isRefreshRateGoodMatch(float refreshRate) {
         return refreshRate >= prefConfig.fps &&
                 Math.round(refreshRate) % prefConfig.fps <= 3;
     }
 
+    /**
+     * @return true if display cutouts should be ignored for this stream resolution. Honouring the
+     *         inset would letterbox a stream that exactly matches the panel, which is worse than
+     *         losing a few pixels behind the cutout.
+     */
     private boolean shouldIgnoreInsetsForResolution(int width, int height) {
         // Never ignore insets for non-native resolutions
         if (!PreferenceConfiguration.isNativeResolution(width, height)) {
@@ -629,6 +686,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return false;
     }
 
+    /** @return true if the user allows dropping to a lower refresh rate that matches the stream better */
     private boolean mayReduceRefreshRate() {
         return prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS ||
                 prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
@@ -850,6 +908,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
     };
 
+    /**
+     * Hides the status and navigation bars after a delay.
+     *
+     * <p>Delayed rather than immediate because Android re-shows them in response to various
+     * events; going straight back to hidden can fight the system and flicker.
+     */
     private void hideSystemUi(int delay) {
         Handler h = getWindow().getDecorView().getHandler();
         if (h != null) {
@@ -887,6 +951,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         inputCaptureProvider.destroy();
     }
 
+    /** {@inheritDoc} Releases input grab so the user isn't left captured behind another app. */
     @Override
     protected void onPause() {
         if (isFinishing()) {
@@ -902,6 +967,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         super.onPause();
     }
 
+    /** {@inheritDoc} Always ends the stream and finishes: the activity does not survive being stopped. */
     @Override
     protected void onStop() {
         super.onStop();
@@ -970,6 +1036,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         finish();
     }
 
+    /**
+     * Grabs or releases local input as a whole: pointer capture, meta keys and the cursor.
+     *
+     * <p>Ungrabbed, input goes to Android instead of the host, which is how the user reaches the
+     * navigation bar and the game menu without disconnecting.
+     */
     private void setInputGrabState(boolean grab) {
         // Grab/ungrab the mouse cursor
         if (grab) {
@@ -999,6 +1071,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     };
 
     // Returns true if the key stroke was consumed
+    /**
+     * Intercepts the keyboard shortcuts that control the client rather than the host — toggling
+     * input grab, the performance overlay, and disconnecting.
+     *
+     * @return true if the key was consumed and must not be forwarded to the host
+     */
     private boolean handleSpecialKeys(int androidKeyCode, boolean down) {
         int modifierMask = 0;
         int nonModifierKeyCode = KeyEvent.KEYCODE_UNKNOWN;
@@ -1107,6 +1185,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // some IMEs will not generate real key events for pressing Shift. Instead
     // they will simply send key events with isShiftPressed() returning true,
     // and we will need to send the modifier flag ourselves.
+    /** @return the host modifier bitfield for this event's modifier state */
     private byte getModifierState(KeyEvent event) {
         // Start with the global modifier state to ensure we cover the case
         // detailed in https://github.com/moonlight-stream/moonlight-android/issues/840
@@ -1126,10 +1205,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return modifier;
     }
 
+    /** @return the host modifier bitfield from our own tracked state, for synthesised events */
     private byte getModifierState() {
         return (byte) modifierFlags;
     }
 
+    /** {@inheritDoc} Routed through {@link #handleKeyDown(KeyEvent)}. */
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         return handleKeyDown(event) || super.onKeyDown(keyCode, event);
@@ -1212,11 +1293,18 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return true;
     }
 
+    /** {@inheritDoc} Routed through {@link #handleKeyUp(KeyEvent)}. */
     @Override
     public boolean onKeyUp(int keyCode, KeyEvent event) {
         return handleKeyUp(event) || super.onKeyUp(keyCode, event);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @return true if the key was consumed, either by a client shortcut or by being forwarded to
+     *         the host
+     */
     @Override
     public boolean handleKeyUp(KeyEvent event) {
         // Pass-through virtual navigation keys
@@ -1276,11 +1364,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return true;
     }
 
+    /** {@inheritDoc} Handles the batched character events Android sends for keycode-less text. */
     @Override
     public boolean onKeyMultiple(int keyCode, int repeatCount, KeyEvent event) {
         return handleKeyMultiple(event) || super.onKeyMultiple(keyCode, repeatCount, event);
     }
 
+    /**
+     * Handles the batched character events Android still sends for text that has no keycode,
+     * forwarding them to the host as UTF-8 text.
+     */
     private boolean handleKeyMultiple(KeyEvent event) {
         // We can receive keys from a software keyboard that don't correspond to any existing
         // KEYCODE value. Android will give those to us as an ACTION_MULTIPLE KeyEvent.
@@ -1298,6 +1391,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return true;
     }
 
+    /** @return the context for this pointer index, or null if we track fewer fingers than that */
     private TouchContext getTouchContext(int actionIndex)
     {
         if (actionIndex < touchContextMap.length) {
@@ -1308,6 +1402,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
+    /** {@inheritDoc} Shows or hides the soft keyboard, reached by the three-finger tap gesture. */
     @Override
     public void toggleKeyboard() {
         LimeLog.info("Toggling keyboard overlay");
@@ -1936,12 +2031,17 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return false;
     }
 
+    /** {@inheritDoc} Joystick and mouse events delivered to the activity rather than a view. */
     @Override
     public boolean onGenericMotionEvent(MotionEvent event) {
         return handleMotionEvent(null, event) || super.onGenericMotionEvent(event);
 
     }
 
+    /**
+     * Sends a mouse position derived from a pointer event, using relative axes where pointer
+     * capture provides them and absolute coordinates otherwise.
+     */
     private void updateMousePosition(View touchedView, MotionEvent event) {
         // X and Y are already relative to the provided view object
         float eventX, eventY;
@@ -1995,11 +2095,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         conn.sendMousePosition((short)eventX, (short)eventY, (short)streamView.getWidth(), (short)streamView.getHeight());
     }
 
+    /** {@inheritDoc} Joystick and mouse events delivered to the stream view. */
     @Override
     public boolean onGenericMotion(View view, MotionEvent event) {
         return handleMotionEvent(view, event);
     }
 
+    /** {@inheritDoc} Touch events on the stream view, dispatched to the touch contexts. */
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouch(View view, MotionEvent event) {
@@ -2013,6 +2115,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return handleMotionEvent(view, event);
     }
 
+    /** {@inheritDoc} Updates the connection spinner with the stage now in progress. */
     @Override
     public void stageStarting(final String stage) {
         runOnUiThread(new Runnable() {
@@ -2025,10 +2128,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         });
     }
 
+    /** {@inheritDoc} */
     @Override
     public void stageComplete(String stage) {
     }
 
+    /**
+     * Tears the stream down in dependency order: stop feeding input, stop the decoder's
+     * presentation threads, then close the connection.
+     */
     private void stopConnection() {
         if (connecting || connected) {
             connecting = connected = false;
@@ -2051,6 +2159,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @return true to retry the stage. Only the app launch stage retries, and only when the
+     *         failure looks like the host still finishing with a previous session.
+     */
     @Override
     public void stageFailed(final String stage, final int portFlags, final int errorCode) {
         // Perform a connection test if the failure could be due to a blocked port
@@ -2091,6 +2205,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         });
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Distinguishes a graceful host-side end from a failure: only the latter gets an error
+     * dialog, so quitting a game doesn't look like a crash.
+     */
     @Override
     public void connectionTerminated(final int errorCode) {
         // Perform a connection test if the failure could be due to a blocked port
@@ -2174,6 +2294,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         });
     }
 
+    /** {@inheritDoc} Shows or clears the poor-connection warning overlay. */
     @Override
     public void connectionStatusUpdate(final int connectionStatus) {
         runOnUiThread(new Runnable() {
@@ -2202,6 +2323,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         });
     }
 
+    /** {@inheritDoc} The stream is live: dismiss the spinner and take input. */
     @Override
     public void connectionStarted() {
         runOnUiThread(new Runnable() {
@@ -2250,6 +2372,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
+    /** {@inheritDoc} Shows a dialog the user must dismiss, then ends the stream. */
     @Override
     public void displayMessage(final String message) {
         runOnUiThread(new Runnable() {
@@ -2260,6 +2383,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         });
     }
 
+    /** {@inheritDoc} Shows a toast without interrupting the stream. */
     @Override
     public void displayTransientMessage(final String message) {
         if (!prefConfig.disableWarnings) {
@@ -2272,6 +2396,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
+    /** {@inheritDoc} Forwarded to the controller handler, which routes it to the right pad. */
     @Override
     public void rumble(short controllerNumber, short lowFreqMotor, short highFreqMotor) {
         LimeLog.info(String.format((Locale)null, "Rumble on gamepad %d: %04x %04x", controllerNumber, lowFreqMotor, highFreqMotor));
@@ -2279,6 +2404,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         controllerHandler.handleRumble(controllerNumber, lowFreqMotor, highFreqMotor);
     }
 
+    /** {@inheritDoc} Forwarded to the controller handler. */
     @Override
     public void rumbleTriggers(short controllerNumber, short leftTrigger, short rightTrigger) {
         LimeLog.info(String.format((Locale)null, "Rumble on gamepad triggers %d: %04x %04x", controllerNumber, leftTrigger, rightTrigger));
@@ -2286,22 +2412,31 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         controllerHandler.handleRumbleTriggers(controllerNumber, leftTrigger, rightTrigger);
     }
 
+    /** {@inheritDoc} Forwarded to the decoder, which may restart the codec. */
     @Override
     public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
         LimeLog.info("Display HDR mode: " + (enabled ? "enabled" : "disabled"));
         decoderRenderer.setHdrMode(enabled, hdrMetadata);
     }
 
+    /** {@inheritDoc} Starts or stops motion reporting for one controller. */
     @Override
     public void setMotionEventState(short controllerNumber, byte motionType, short reportRateHz) {
         controllerHandler.handleSetMotionEventState(controllerNumber, motionType, reportRateHz);
     }
 
+    /** {@inheritDoc} Sets a controller's light bar colour. */
     @Override
     public void setControllerLED(short controllerNumber, byte r, byte g, byte b) {
         controllerHandler.handleSetControllerLED(controllerNumber, r, g, b);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The connection is only started here, on the first surface change, because the decoder
+     * needs a sized surface before it can be configured.
+     */
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
         if (!surfaceCreated) {
@@ -2320,6 +2455,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
+    /** {@inheritDoc} The surface exists but has no size yet; work waits for surfaceChanged. */
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
         float desiredFrameRate;
@@ -2356,6 +2492,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The decoder must stop before this returns: rendering into a destroyed surface is a
+     * native crash, not a caught exception.
+     */
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         if (!surfaceCreated) {
