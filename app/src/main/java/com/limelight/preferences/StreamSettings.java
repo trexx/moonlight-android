@@ -314,22 +314,27 @@ public class StreamSettings extends Activity {
                 category.removePreference(findPreference("checkbox_enable_pip"));
             }
 
-            // Fire TV apps are not allowed to use WebViews or browsers, so hide the Help category
-            /*if (getActivity().getPackageManager().hasSystemFeature("amazon.hardware.fire_tv")) {
-                PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_help");
-                screen.removePreference(category);
-            }*/
-            PreferenceCategory category_gamepad_settings =
-                    (PreferenceCategory) findPreference("category_gamepad_settings");
-            // Remove the vibration options if the device can't vibrate
-            if (!((Vibrator)getActivity().getSystemService(Context.VIBRATOR_SERVICE)).hasVibrator()) {
-                category_gamepad_settings.removePreference(findPreference("checkbox_vibrate_fallback"));
-                category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
-                // The entire OSC category may have already been removed by the touchscreen check above
-                PreferenceCategory category = (PreferenceCategory) findPreference("category_onscreen_controls");
-                if (category != null) {
-                    category.removePreference(findPreference("checkbox_vibrate_osc"));
+            // Hide non-supported resolution/FPS combinations
+            int maxSupportedResW = 0;
+
+            // Add a native resolution with any insets included for users that don't want content
+            // behind the notch of their display
+            boolean hasInsets = false;
+            DisplayCutout cutout = display.getCutout();
+
+            if (cutout != null) {
+                int widthInsets = cutout.getSafeInsetLeft() + cutout.getSafeInsetRight();
+                int heightInsets = cutout.getSafeInsetBottom() + cutout.getSafeInsetTop();
+
+                if (widthInsets != 0 || heightInsets != 0) {
+                    DisplayMetrics metrics = new DisplayMetrics();
+                    display.getRealMetrics(metrics);
+
+                    int width = Math.max(metrics.widthPixels - widthInsets, metrics.heightPixels - heightInsets);
+                    int height = Math.min(metrics.widthPixels - widthInsets, metrics.heightPixels - heightInsets);
+
+                    addNativeResolutionEntries(width, height, false);
+                    hasInsets = true;
                 }
             }
             else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||

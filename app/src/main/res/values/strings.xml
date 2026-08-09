@@ -8,8 +8,6 @@
     <string name="scut_invalid_app_id">Provided App is not valid</string>
 
     <!-- Help strings -->
-    <string name="help_loading_title">Help Viewer</string>
-    <string name="help_loading_msg">Loading help page…</string>
 
     <!-- PC view menu entries -->
     <string name="pcview_menu_header_online">Online</string>
@@ -101,7 +99,6 @@
     <string name="no">No</string>
     <string name="lost_connection">Lost connection to PC</string>
     <string name="title_details">Details</string>
-    <string name="help">Help</string>
     <string name="delete_pc_msg">Are you sure you want to delete this PC?</string>
     <string name="slow_connection_msg">Slow connection to PC\nReduce your bitrate</string>
     <string name="poor_connection_msg">Poor connection to PC</string>
@@ -255,13 +252,6 @@
     <string name="title_enable_post_stream_toast">Show latency message after streaming</string>
     <string name="summary_enable_post_stream_toast">Display a latency information message after the stream ends</string>
 
-    <string name="category_help">Help</string>
-    <string name="title_setup_guide">Setup guide</string>
-    <string name="summary_setup_guide">View instructions on how to set up your gaming PC for streaming</string>
-    <string name="title_troubleshooting">Troubleshooting guide</string>
-    <string name="summary_troubleshooting">View tips for diagnosing and fixing common streaming issues</string>
-    <string name="title_privacy_policy">Privacy policy</string>
-    <string name="summary_privacy_policy">View Moonlight\'s privacy policy</string>
 
     <!-- Toasts -->
     <string name="toast_controller_type_changed">Gamepad type may be changed due to motion sensor emulation</string>
