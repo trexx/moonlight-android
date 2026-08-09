@@ -4,11 +4,22 @@ import java.security.cert.X509Certificate;
 import java.util.Objects;
 
 
+/**
+ * Everything known about one host: its addresses, identity, pairing state and what it is running.
+ *
+ * <p>A host can be reachable at several addresses at once — local, remote, IPv6, and a manually
+ * entered one — which is why the addresses are a set of {@link AddressTuple}s rather than a single
+ * value. The polling service tries them in parallel and records which one worked.
+ *
+ * <p>Mutable and updated in place by the polling service via {@link #update}, so the grid and the
+ * database observe the same instance.
+ */
 public class ComputerDetails {
     public enum State {
         ONLINE, OFFLINE, UNKNOWN
     }
 
+    /** One address and port a host may be reachable at. */
     public static class AddressTuple {
         public String address;
         public int port;
@@ -61,53 +72,34 @@ public class ComputerDetails {
     public String uuid;
     public String name;
     public AddressTuple localAddress;
-    public AddressTuple remoteAddress;
     public AddressTuple manualAddress;
     public AddressTuple ipv6Address;
-    public String macAddress;
     public X509Certificate serverCert;
 
     // Transient attributes
     public State state;
     public AddressTuple activeAddress;
     public int httpsPort;
-    public int externalPort;
     public PairingManager.PairState pairState;
     public int runningGameId;
     public String rawAppList;
-    public boolean nvidiaServer;
 
+    /** Creates an empty host, to be filled in by a poll. */
     public ComputerDetails() {
         // Use defaults
         state = State.UNKNOWN;
     }
 
+    /** Copy constructor, used to snapshot a host without holding the live instance. */
     public ComputerDetails(ComputerDetails details) {
         // Copy details from the other computer
         update(details);
     }
 
-    public int guessExternalPort() {
-        if (externalPort != 0) {
-            return externalPort;
-        }
-        else if (remoteAddress != null) {
-            return remoteAddress.port;
-        }
-        else if (activeAddress != null) {
-            return activeAddress.port;
-        }
-        else if (ipv6Address != null) {
-            return ipv6Address.port;
-        }
-        else if (localAddress != null) {
-            return localAddress.port;
-        }
-        else {
-            return NvHTTP.DEFAULT_HTTP_PORT;
-        }
-    }
-
+    /**
+     * Merges a freshly polled snapshot into this instance, preserving fields the poll didn't
+     * populate — a poll that reached the host over one address must not erase the others.
+     */
     public void update(ComputerDetails details) {
         this.state = details.state;
         this.name = details.name;
@@ -119,35 +111,22 @@ public class ComputerDetails {
         if (details.localAddress != null && !details.localAddress.address.startsWith("127.")) {
             this.localAddress = details.localAddress;
         }
-        if (details.remoteAddress != null) {
-            this.remoteAddress = details.remoteAddress;
-        }
-        else if (this.remoteAddress != null && details.externalPort != 0) {
-            // If we have a remote address already (perhaps via STUN) but our updated details
-            // don't have a new one (because GFE doesn't send one), propagate the external
-            // port to the current remote address. We may have tried to guess it previously.
-            this.remoteAddress.port = details.externalPort;
-        }
         if (details.manualAddress != null) {
             this.manualAddress = details.manualAddress;
         }
         if (details.ipv6Address != null) {
             this.ipv6Address = details.ipv6Address;
         }
-        if (details.macAddress != null && !details.macAddress.equals("00:00:00:00:00:00")) {
-            this.macAddress = details.macAddress;
-        }
         if (details.serverCert != null) {
             this.serverCert = details.serverCert;
         }
-        this.externalPort = details.externalPort;
         this.httpsPort = details.httpsPort;
         this.pairState = details.pairState;
         this.runningGameId = details.runningGameId;
-        this.nvidiaServer = details.nvidiaServer;
         this.rawAppList = details.rawAppList;
     }
 
+    /** @return a diagnostic summary of the host's addresses and state */
     @Override
     public String toString() {
         StringBuilder str = new StringBuilder();
@@ -156,10 +135,8 @@ public class ComputerDetails {
         str.append("Active Address: ").append(activeAddress).append("\n");
         str.append("UUID: ").append(uuid).append("\n");
         str.append("Local Address: ").append(localAddress).append("\n");
-        str.append("Remote Address: ").append(remoteAddress).append("\n");
         str.append("IPv6 Address: ").append(ipv6Address).append("\n");
         str.append("Manual Address: ").append(manualAddress).append("\n");
-        str.append("MAC Address: ").append(macAddress).append("\n");
         str.append("Pair State: ").append(pairState).append("\n");
         str.append("Running Game ID: ").append(runningGameId).append("\n");
         str.append("HTTPS Port: ").append(httpsPort).append("\n");

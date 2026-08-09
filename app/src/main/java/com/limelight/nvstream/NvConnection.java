@@ -18,8 +18,6 @@ import java.nio.ByteBuffer;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
-import java.util.Timer;
-import java.util.TimerTask;
 import java.util.concurrent.Semaphore;
 
 import javax.crypto.KeyGenerator;
@@ -59,6 +57,11 @@ public class NvConnection {
     private String uniqueId;
     private ConnectionContext context;
     private static Semaphore connectionAllowed = new Semaphore(1);
+
+    // Retry budget for the app launch stage. See the loop in start().
+    private static final int LAUNCH_ATTEMPTS = 5;
+    private static final int LAUNCH_RETRY_DELAY_MS = 2000;
+
     private final boolean isMonkey;
     private final Context appContext;
 
@@ -232,10 +235,7 @@ public class NvConnection {
             return false;
         }
 
-        ComputerDetails details = h.getComputerDetails(serverInfo);
-        context.isNvidiaServerSoftware = details.nvidiaServer;
-
-        // May be missing for older servers
+        // May be missing on some hosts
         context.serverGfeVersion = h.getGfeVersion(serverInfo);
                 
         if (h.getPairState(serverInfo) != PairingManager.PairState.PAIRED) {
@@ -257,22 +257,9 @@ public class NvConnection {
         
         // Check for a supported stream resolution
         if ((context.streamConfig.getWidth() > 4096 || context.streamConfig.getHeight() > 4096) &&
-                (h.getServerCodecModeSupport(serverInfo) & 0x200) == 0 && context.isNvidiaServerSoftware) {
-            context.connListener.displayMessage("Your host PC does not support streaming at resolutions above 4K.");
-            return false;
-        }
-        else if ((context.streamConfig.getWidth() > 4096 || context.streamConfig.getHeight() > 4096) &&
                 (context.streamConfig.getSupportedVideoFormats() & ~MoonBridge.VIDEO_FORMAT_MASK_H264) == 0) {
             context.connListener.displayMessage("Your streaming device must support HEVC or AV1 to stream at resolutions above 4K.");
             return false;
-        }
-        else if (context.streamConfig.getHeight() >= 2160 && !h.supports4K(serverInfo)) {
-            // Client wants 4K but the server can't do it
-            context.connListener.displayTransientMessage("You must update GeForce Experience to stream in 4K. The stream will be 1080p.");
-            
-            // Lower resolution to 1080p
-            context.negotiatedWidth = 1920;
-            context.negotiatedHeight = 1080;
         }
         else {
             // Take what the client wanted
@@ -303,7 +290,7 @@ public class NvConnection {
             LimeLog.info("Using deprecated app lookup method - Please specify an app ID in your StreamConfiguration instead");
             app = h.getAppByName(context.streamConfig.getApp().getAppName());
             if (app == null) {
-                context.connListener.displayMessage("The app " + context.streamConfig.getApp().getAppName() + " is not in GFE app list");
+                context.connListener.displayMessage("The app " + context.streamConfig.getApp().getAppName() + " is not in the host's app list");
                 return false;
             }
         }
@@ -399,22 +386,42 @@ public class NvConnection {
 
                 context.connListener.stageStarting(appName);
 
-                try {
-                    if (!startApp()) {
-                        context.connListener.stageFailed(appName, 0, 0);
+                // A host that has just woken up can accept our connection while Sunshine is
+                // still initialising, which fails the launch in a way that succeeds moments
+                // later. Retry a few times before surfacing the failure to the user.
+                int launchAttempt = 0;
+                while (true) {
+                    boolean retry;
+
+                    try {
+                        if (startApp()) {
+                            context.connListener.stageComplete(appName);
+                            break;
+                        }
+                        retry = context.connListener.stageFailed(appName, 0, 0);
+                    } catch (HostHttpResponseException e) {
+                        e.printStackTrace();
+                        retry = context.connListener.stageFailed(appName, 0, e.getErrorCode());
+                        if (!retry) {
+                            context.connListener.displayMessage(e.getMessage());
+                        }
+                    } catch (XmlPullParserException | IOException e) {
+                        e.printStackTrace();
+                        retry = context.connListener.stageFailed(appName, MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989, 0);
+                        if (!retry) {
+                            context.connListener.displayMessage(e.getMessage());
+                        }
+                    }
+
+                    if (!retry || ++launchAttempt >= LAUNCH_ATTEMPTS) {
                         return;
                     }
-                    context.connListener.stageComplete(appName);
-                } catch (HostHttpResponseException e) {
-                    e.printStackTrace();
-                    context.connListener.displayMessage(e.getMessage());
-                    context.connListener.stageFailed(appName, 0, e.getErrorCode());
-                    return;
-                } catch (XmlPullParserException | IOException e) {
-                    e.printStackTrace();
-                    context.connListener.displayMessage(e.getMessage());
-                    context.connListener.stageFailed(appName, MoonBridge.ML_PORT_FLAG_TCP_47984 | MoonBridge.ML_PORT_FLAG_TCP_47989, 0);
-                    return;
+
+                    try {
+                        Thread.sleep(LAUNCH_RETRY_DELAY_MS);
+                    } catch (InterruptedException e) {
+                        return;
+                    }
                 }
 
                 ByteBuffer ib = ByteBuffer.allocate(16);
@@ -446,7 +453,8 @@ public class NvConnection {
                             context.riKey.getEncoded(), ib.array(),
                             context.videoCapabilities,
                             context.streamConfig.getColorSpace(),
-                            context.streamConfig.getColorRange());
+                            context.streamConfig.getColorRange(),
+                            context.streamConfig.getEncryptionFlags());
                     if (ret != 0) {
                         // LiStartConnection() failed, so the caller is not expected
                         // to stop the connection themselves. We need to release their

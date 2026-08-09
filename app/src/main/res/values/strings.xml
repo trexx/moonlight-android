@@ -71,7 +71,6 @@
     <!-- Start application messages -->
     <string name="conn_establishing_title">Establishing Connection</string>
     <string name="conn_establishing_msg">Starting connection</string>
-    <string name="conn_metered">Warning: Your active network connection is metered!</string>
     <string name="conn_client_latency">Average frame decoding latency:</string>
     <string name="conn_client_latency_hw">hardware decoder latency:</string>
     <string name="conn_hardware_latency">Average hardware decoding latency:</string>
@@ -166,6 +165,7 @@
     <string name="summary_fps_list">Increase for a smoother video stream. Decrease for better performance on lower end devices.</string>
     <string name="title_seekbar_bitrate">Video bitrate</string>
     <string name="summary_seekbar_bitrate">Increase for better image quality. Decrease to improve performance on slower connections.</string>
+    <string name="conn_starting_retry">Waiting for the host to be ready…</string>
     <string name="perf_overlay_bandwidth">Bandwidth down/up: %1$.2f/%2$.2f MB/s</string>
     <string name="title_mouse_mode">Touchscreen mouse mode</string>
     <string name="mouse_mode_relative">Trackpad</string>
@@ -235,6 +235,11 @@
     <string name="summary_checkbox_reduce_refresh_rate">Lower display refresh rates can save power at the expense of some additional video latency</string>
     <string name="title_checkbox_disable_warnings">Disable warning messages</string>
     <string name="summary_checkbox_disable_warnings">Disable on-screen connection warning messages while streaming</string>
+    <string name="title_encryption">Stream encryption</string>
+    <!-- Deliberately says the client will not "ask" rather than promising an unencrypted
+         stream: a host that requires encryption enables it regardless of this setting. -->
+    <string name="summary_encryption">Which streams this client asks to have encrypted. A host that requires encryption will use it anyway. Encrypting video costs CPU time.</string>
+    <string name="summary_encryption_no_aes_warning">\n\nThis device has no hardware AES acceleration, so encrypting video here may reduce performance.</string>
     <string name="title_video_format">Change codec settings</string>
     <string name="summary_video_format">Newer codecs can lower video bandwidth requirements if your device supports them. Codec selections may be ignored if not supported by the host software or GPU.</string>
     <string name="title_enable_hdr">Enable HDR (Experimental)</string>
@@ -269,6 +274,9 @@
     <string name="audioconf_51surround">5.1 Surround Sound</string>
     <string name="audioconf_71surround">7.1 Surround Sound</string>
 
+    <string name="encryption_none">None</string>
+    <string name="encryption_audio">Audio only</string>
+    <string name="encryption_all">Audio and video</string>
     <string name="videoformat_auto">Automatic (Recommended)</string>
     <string name="videoformat_av1always">Prefer AV1 (Experimental)</string>
     <string name="videoformat_hevcalways">Prefer HEVC</string>

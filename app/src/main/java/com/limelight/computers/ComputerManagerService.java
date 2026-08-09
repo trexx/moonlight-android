@@ -106,10 +106,9 @@ public class ComputerManagerService extends Service {
                 return false;
             }
 
-            // If we already have an entry for this computer in the DB, we must
-            // combine the existing data with this new data (which may be partially available
-            // due to detecting the PC via mDNS) without the saved external address. If we
-            // write to the DB without doing this first, we can overwrite our existing data.
+            // If we already have an entry for this computer in the DB, we must combine the
+            // existing data with this new data. If we write to the DB without doing this
+            // first, we can overwrite our existing data.
             if (existingComputer != null) {
                 existingComputer.update(details);
                 dbManager.updateComputer(existingComputer);

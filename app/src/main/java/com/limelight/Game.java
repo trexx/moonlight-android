@@ -49,7 +49,6 @@ import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.hardware.input.InputManager;
 import android.media.AudioManager;
-import android.net.ConnectivityManager;
 import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -431,7 +430,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     }
                 },
                 tombstonePrefs.getInt("CrashCount", 0),
-                connMgr.isActiveNetworkMetered(),
                 willStreamHdr,
                 glPrefs.glRenderer,
                 this);
@@ -514,6 +512,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 .setAttachedGamepadMask(gamepadMask)
                 .setClientRefreshRateX100((int)(displayRefreshRate * 100))
                 .setAudioConfiguration(prefConfig.audioConfiguration)
+                .setEncryptionFlags(prefConfig.encryptionFlags)
                 .setColorSpace(decoderRenderer.getPreferredColorSpace())
                 .setColorRange(decoderRenderer.getPreferredColorRange())
                 .setPersistGamepadsAfterDisconnect(!prefConfig.multiController)
@@ -1868,10 +1867,26 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      *         failure looks like the host still finishing with a previous session.
      */
     @Override
-    public void stageFailed(final String stage, final int portFlags, final int errorCode) {
+    public boolean stageFailed(final String stage, final int portFlags, final int errorCode) {
         // Perform a connection test if the failure could be due to a blocked port
         // This does network I/O, so don't do it on the main thread.
         final int portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER, 443, portFlags);
+
+        // A failure with no error code, on a connection where we cannot demonstrate a
+        // blocked port, is usually a host that is reachable but not ready to launch yet.
+        // Tell the caller to retry instead of tearing the session down.
+        if (errorCode == 0 &&
+                (portTestResult == MoonBridge.ML_TEST_RESULT_INCONCLUSIVE || portTestResult == 0)) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (spinner != null) {
+                        spinner.setMessage(getResources().getString(R.string.conn_starting_retry));
+                    }
+                }
+            });
+            return true;
+        }
 
         runOnUiThread(new Runnable() {
             @Override
@@ -1905,6 +1920,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 }
             }
         });
+
+        return false;
     }
 
     /**

@@ -1,3 +1,13 @@
+// Thin JNI wrappers over moonlight-common-c's client API.
+//
+// Everything here is a direct forward from a MoonBridge native method to the matching Li* function,
+// with no logic of its own - the input path calls these per event, so anything more would be
+// overhead on the hot path.
+//
+// The exception is guessControllerType(), which maps a USB VID/PID onto a controller type using
+// SDL's controller database (vendored as controller_list.h). That lets the host show the right
+// button glyphs for a pad we are driving ourselves.
+
 #include <Limelight.h>
 
 #include <jni.h>
@@ -134,38 +144,55 @@ Java_com_limelight_nvstream_jni_MoonBridge_getStageName(JNIEnv *env, jclass claz
     return (*env)->NewStringUTF(env, LiGetStageName(stage));
 }
 
-JNIEXPORT jstring JNICALL
-Java_com_limelight_nvstream_jni_MoonBridge_findExternalAddressIP4(JNIEnv *env, jclass clazz, jstring stunHostName, jint stunPort) {
-    int err;
-    struct in_addr wanAddr;
-    const char* stunHostNameStr = (*env)->GetStringUTFChars(env, stunHostName, NULL);
-
-    err = LiFindExternalAddressIP4(stunHostNameStr, stunPort, &wanAddr.s_addr);
-    (*env)->ReleaseStringUTFChars(env, stunHostName, stunHostNameStr);
-
-    if (err == 0) {
-        char addrStr[INET_ADDRSTRLEN];
-
-        inet_ntop(AF_INET, &wanAddr, addrStr, sizeof(addrStr));
-
-        __android_log_print(ANDROID_LOG_INFO, "moonlight-common-c", "Resolved WAN address to %s", addrStr);
-
-        return (*env)->NewStringUTF(env, addrStr);
-    }
-    else {
-        __android_log_print(ANDROID_LOG_ERROR, "moonlight-common-c", "STUN failed to get WAN address: %d", err);
-        return NULL;
-    }
-}
 
 JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_getPendingAudioDuration(JNIEnv *env, jclass clazz) {
     return LiGetPendingAudioDuration();
 }
 
-JNIEXPORT jint JNICALL
-Java_com_limelight_nvstream_jni_MoonBridge_getPendingVideoFrames(JNIEnv *env, jclass clazz) {
-    return LiGetPendingVideoFrames();
+
+// The counters are uint32_t, so they are widened into a jlong array to avoid
+// presenting values above 2^31 as negative during long sessions.
+JNIEXPORT jlongArray JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getRTPAudioStats(JNIEnv *env, jclass clazz) {
+    const RTP_AUDIO_STATS* stats = LiGetRTPAudioStats();
+    jlong values[] = {
+            (jlong)stats->packetCountAudio,
+            (jlong)stats->packetCountFec,
+            (jlong)stats->packetCountFecRecovered,
+            (jlong)stats->packetCountFecFailed,
+            (jlong)stats->packetCountOOS,
+            (jlong)stats->packetCountInvalid,
+            (jlong)stats->packetCountFecInvalid,
+            (jlong)stats->packetCountDecryptFailed,
+    };
+
+    jlongArray array = (*env)->NewLongArray(env, sizeof(values) / sizeof(values[0]));
+    if (array != NULL) {
+        (*env)->SetLongArrayRegion(env, array, 0, sizeof(values) / sizeof(values[0]), values);
+    }
+    return array;
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_getRTPVideoStats(JNIEnv *env, jclass clazz) {
+    const RTP_VIDEO_STATS* stats = LiGetRTPVideoStats();
+    jlong values[] = {
+            (jlong)stats->packetCountVideo,
+            (jlong)stats->packetCountFec,
+            (jlong)stats->packetCountFecRecovered,
+            (jlong)stats->packetCountFecFailed,
+            (jlong)stats->packetCountOOS,
+            (jlong)stats->packetCountInvalid,
+            (jlong)stats->packetCountFecInvalid,
+            (jlong)stats->packetCountDecryptFailed,
+    };
+
+    jlongArray array = (*env)->NewLongArray(env, sizeof(values) / sizeof(values[0]));
+    if (array != NULL) {
+        (*env)->SetLongArrayRegion(env, array, 0, sizeof(values) / sizeof(values[0]), values);
+    }
+    return array;
 }
 
 JNIEXPORT jint JNICALL
@@ -217,6 +244,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_getLaunchUrlQueryParameters(JNIEnv *e
     return (*env)->NewStringUTF(env, LiGetLaunchUrlQueryParameters());
 }
 
+// Maps a USB VID/PID to a LI_CTYPE_* value via SDL's controller database, so the host knows which
+// button glyphs to display. Returns LI_CTYPE_UNKNOWN for devices the database doesn't list.
 JNIEXPORT jbyte JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_guessControllerType(JNIEnv *env, jclass clazz, jint vendorId, jint productId) {
     unsigned int unDeviceID = MAKE_CONTROLLER_ID(vendorId, productId);
@@ -225,11 +254,15 @@ Java_com_limelight_nvstream_jni_MoonBridge_guessControllerType(JNIEnv *env, jcla
             switch (arrControllers[i].m_eControllerType) {
                 case k_eControllerType_XBox360Controller:
                 case k_eControllerType_XBoxOneController:
+                // SDL split the Elite controllers out of XBoxOneController
+                case k_eControllerType_XBoxEliteController:
                     return LI_CTYPE_XBOX;
 
                 case k_eControllerType_PS3Controller:
                 case k_eControllerType_PS4Controller:
                 case k_eControllerType_PS5Controller:
+                // SDL split the DualSense Edge out of PS5Controller
+                case k_eControllerType_PS5EdgeController:
                     return LI_CTYPE_PS;
 
                 case k_eControllerType_WiiController:
@@ -238,7 +271,13 @@ Java_com_limelight_nvstream_jni_MoonBridge_guessControllerType(JNIEnv *env, jcla
                 case k_eControllerType_SwitchJoyConRight:
                 case k_eControllerType_SwitchJoyConPair:
                 case k_eControllerType_SwitchInputOnlyController:
+                case k_eControllerType_Switch2ProController:
+                case k_eControllerType_Switch2InputOnlyController:
                     return LI_CTYPE_NINTENDO;
+
+                // Deliberately unmapped: 8BitDoController and XInputPS4Controller cover
+                // devices with varying button layouts, and the Steam/Valve types have no
+                // equivalent, so guessing a type would be worse than reporting unknown.
 
                 default:
                     return LI_CTYPE_UNKNOWN;

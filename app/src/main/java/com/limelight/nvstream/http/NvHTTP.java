@@ -1,11 +1,11 @@
 package com.limelight.nvstream.http;
 
-import android.os.Build;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.InterruptedIOException;
 import java.io.Reader;
 import java.io.StringReader;
 import java.net.Inet4Address;
@@ -35,8 +35,6 @@ import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLHandshakeException;
 import javax.net.ssl.SSLPeerUnverifiedException;
 import javax.net.ssl.SSLSession;
-import javax.net.ssl.SSLSocket;
-import javax.net.ssl.SSLSocketFactory;
 import javax.net.ssl.TrustManager;
 import javax.net.ssl.TrustManagerFactory;
 import javax.net.ssl.X509KeyManager;
@@ -60,6 +58,19 @@ import okhttp3.Response;
 import okhttp3.ResponseBody;
 
 
+/**
+ * HTTPS client for the host's control API: server info, app lists, launching, resuming and
+ * quitting.
+ *
+ * <p>Two channels exist. Plain HTTP serves only the unauthenticated server info used before
+ * pairing; everything else goes over HTTPS authenticated with this client's certificate, pinned to
+ * the host's own certificate learned at pairing time. Pinning rather than trusting the system
+ * store is the point — hosts use self-signed certificates, and the pairing exchange is what
+ * establishes trust.
+ *
+ * <p>Responses are XML with the error status inside the body, so every call goes through
+ * {@code verifyResponseStatus} rather than relying on HTTP status codes.
+ */
 public class NvHTTP {
     private String uniqueId;
     private PairingManager pm;
@@ -189,6 +200,11 @@ public class NvHTTP {
                 .build();
     }
 
+    /**
+     * @param likelyOnline the host is expected to respond, which selects longer timeouts. Polling a
+     *                     host that is probably offline uses short ones instead, so the grid isn't
+     *                     held up waiting on machines that are switched off.
+     */
     public HttpUrl getHttpsUrl(boolean likelyOnline) throws IOException {
         if (httpsPort == 0) {
             // Fetch the HTTPS port if we don't have it already
@@ -199,6 +215,11 @@ public class NvHTTP {
         return new HttpUrl.Builder().scheme("https").host(baseUrlHttp.host()).port(httpsPort).build();
     }
     
+    /**
+     * @param serverCert     the host's certificate learned at pairing, pinned for this connection,
+     *                       or null for a host we have not paired with yet
+     * @param cryptoProvider supplies this client's own certificate and key
+     */
     public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
         // Use the same UID for all Moonlight clients so we can quit games
         // started by other Moonlight clients.
@@ -236,6 +257,12 @@ public class NvHTTP {
         this.pm = new PairingManager(this, cryptoProvider);
     }
 
+    /**
+     * Pulls one tag's text out of an XML response.
+     *
+     * @param throwIfMissing fail rather than return null when the tag is absent, for fields whose
+     *                       absence means the response is unusable
+     */
     static String getXmlString(Reader r, String tagname, boolean throwIfMissing) throws XmlPullParserException, IOException {
         XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
         factory.setNamespaceAware(true);
@@ -280,6 +307,7 @@ public class NvHTTP {
         return getXmlString(new StringReader(str), tagname, throwIfMissing);
     }
     
+    /** @throws HostHttpResponseException if the response body carries a host-side error status */
     private static void verifyResponseStatus(XmlPullParser xpp) throws HostHttpResponseException {
         // We use Long.parseLong() because in rare cases GFE can send back a status code of
         // 0xFFFFFFFF, which will cause Integer.parseInt() to throw a NumberFormatException due
@@ -298,6 +326,13 @@ public class NvHTTP {
         }
     }
     
+    /**
+     * Fetches the host's server info, the response every other operation depends on: version,
+     * pairing state, current app, and supported display modes.
+     *
+     * <p>Tried over HTTPS first and falls back to HTTP, since an unpaired host will reject the
+     * client certificate but still answer the unauthenticated query.
+     */
     public String getServerInfo(boolean likelyOnline) throws IOException, XmlPullParserException {
         String resp;
 
@@ -357,6 +392,7 @@ public class NvHTTP {
         return new ComputerDetails.AddressTuple(address, port);
     }
 
+    /** Parses a server info response into a {@link ComputerDetails}. */
     public ComputerDetails getComputerDetails(String serverInfo) throws IOException, XmlPullParserException {
         ComputerDetails details = new ComputerDetails();
 
@@ -370,20 +406,11 @@ public class NvHTTP {
 
         details.httpsPort = getHttpsPort(serverInfo);
 
-        details.macAddress = getXmlString(serverInfo, "mac", false);
-
         // FIXME: Do we want to use the current port?
         details.localAddress = makeTuple(getXmlString(serverInfo, "LocalIP", false), baseUrlHttp.port());
 
-        // This is missing on on recent GFE versions, but it's present on Sunshine
-        details.externalPort = getExternalPort(serverInfo);
-        details.remoteAddress = makeTuple(getXmlString(serverInfo, "ExternalIP", false), details.externalPort);
-
         details.pairState = getPairState(serverInfo);
         details.runningGameId = getCurrentGame(serverInfo);
-
-        // The MJOLNIR codename was used by GFE but never by any third-party server
-        details.nvidiaServer = getXmlString(serverInfo, "state", true).contains("MJOLNIR");
 
         // We could reach it so it's online
         details.state = ComputerDetails.State.ONLINE;
@@ -391,12 +418,17 @@ public class NvHTTP {
         return details;
     }
     
+    /** Fetches and parses the host's details in one call. */
     public ComputerDetails getComputerDetails(boolean likelyOnline) throws IOException, XmlPullParserException {
         return getComputerDetails(getServerInfo(likelyOnline));
     }
 
     // This hack is Android-specific but we do it on all platforms
     // because it doesn't really matter
+    /**
+     * Installs a trust manager that accepts the host's pinned self-signed certificate, which
+     * Android's default one will not.
+     */
     private OkHttpClient performAndroidTlsHack(OkHttpClient client) {
         // Doing this each time we create a socket is required
         // to avoid the SSLv3 fallback that causes connection failures
@@ -429,7 +461,24 @@ public class NvHTTP {
     private ResponseBody openHttpConnection(OkHttpClient client, HttpUrl baseUrl, String path, String query) throws IOException {
         HttpUrl completeUrl = getCompleteUrl(baseUrl, path, query);
         Request request = new Request.Builder().url(completeUrl).get().build();
-        Response response = performAndroidTlsHack(client).newCall(request).execute();
+
+        Response response;
+        try {
+            response = performAndroidTlsHack(client).newCall(request).execute();
+        } catch (Exception e) {
+            // OkHttp lets a bare InterruptedException escape its throws IOException contract, which
+            // no caller here is able to catch. See HttpInterrupts for the mechanism. Catching
+            // Exception is the only way to intercept it: javac rejects catch (InterruptedException)
+            // where nothing in the try block declares throwing one.
+            InterruptedIOException interrupted = HttpInterrupts.translate(e);
+            if (interrupted != null) {
+                throw interrupted;
+            }
+
+            // Precise rethrow: as far as javac is concerned this block throws only IOException and
+            // unchecked exceptions, so this stays within our throws clause.
+            throw e;
+        }
 
         ResponseBody body = response.body();
         
@@ -475,41 +524,25 @@ public class NvHTTP {
         }
     }
 
+    /** @return the host software's version string */
     public String getServerVersion(String serverInfo) throws XmlPullParserException, IOException {
         // appversion is present in all supported GFE versions
         return getXmlString(serverInfo, "appversion", true);
     }
 
+    /** @return whether this client is paired with the host, which costs a server info round trip */
     public PairingManager.PairState getPairState() throws IOException, XmlPullParserException {
         return getPairState(getServerInfo(true));
     }
 
+    /** @return whether this client is paired, from an already-fetched server info response */
     public PairingManager.PairState getPairState(String serverInfo) throws IOException, XmlPullParserException {
         // appversion is present in all supported GFE versions
         return NvHTTP.getXmlString(serverInfo, "PairStatus", true).equals("1") ?
                 PairState.PAIRED : PairState.NOT_PAIRED;
     }
     
-    public long getMaxLumaPixelsH264(String serverInfo) throws XmlPullParserException, IOException {
-        // MaxLumaPixelsH264 wasn't present on old GFE versions
-        String str = getXmlString(serverInfo, "MaxLumaPixelsH264", false);
-        if (str != null) {
-            return Long.parseLong(str);
-        } else {
-            return 0;
-        }
-    }
     
-    public long getMaxLumaPixelsHEVC(String serverInfo) throws XmlPullParserException, IOException {
-        // MaxLumaPixelsHEVC wasn't present on old GFE versions
-        String str = getXmlString(serverInfo, "MaxLumaPixelsHEVC", false);
-        if (str != null) {
-            return Long.parseLong(str);
-        } else {
-            return 0;
-        }
-    }
-
     // Possible meaning of bits
     // Bit 0: H.264 Baseline
     // Bit 1: H.264 High
@@ -518,6 +551,7 @@ public class NvHTTP {
     // Bit 9: HEVC Main10
     // Bit 10: HEVC Main10 4:4:4
     // Bit 11: ???
+    /** @return bitmask of the codecs the host can encode, which constrains format negotiation */
     public long getServerCodecModeSupport(String serverInfo) throws XmlPullParserException, IOException {
         // ServerCodecModeSupport wasn't present on old GFE versions
         String str = getXmlString(serverInfo, "ServerCodecModeSupport", false);
@@ -528,26 +562,13 @@ public class NvHTTP {
         }
     }
     
-    public String getGpuType(String serverInfo) throws XmlPullParserException, IOException {
-        // ServerCodecModeSupport wasn't present on old GFE versions
-        return getXmlString(serverInfo, "gputype", false);
-    }
-
+    /** @return the GeForce Experience version, or empty on hosts that are not GFE */
     public String getGfeVersion(String serverInfo) throws XmlPullParserException, IOException {
         // ServerCodecModeSupport wasn't present on old GFE versions
         return getXmlString(serverInfo, "GfeVersion", false);
     }
     
-    public boolean supports4K(String serverInfo) throws XmlPullParserException, IOException {
-        // Only allow 4K on GFE 3.x. GfeVersion wasn't present on very old versions of GFE.
-        String gfeVersionStr = getXmlString(serverInfo, "GfeVersion", false);
-        if (gfeVersionStr == null || gfeVersionStr.startsWith("2.")) {
-            return false;
-        }
-
-        return true;
-    }
-
+    /** @return the app ID currently running on the host, or 0 if it is idle */
     public int getCurrentGame(String serverInfo) throws IOException, XmlPullParserException {
         // GFE 2.8 started keeping currentgame set to the last game played. As a result, it no longer
         // has the semantics that its name would indicate. To contain the effects of this change as much
@@ -560,6 +581,7 @@ public class NvHTTP {
         }
     }
 
+    /** @return the HTTPS port the host advertises, which need not be the default */
     public int getHttpsPort(String serverInfo) {
         try {
             return Integer.parseInt(getXmlString(serverInfo, "HttpsPort", true));
@@ -572,19 +594,6 @@ public class NvHTTP {
         }
     }
 
-    public int getExternalPort(String serverInfo) {
-        // This is an extension which is not present in GFE. It is present for Sunshine to be able
-        // to support dynamic HTTP WAN ports without requiring the user to manually enter the port.
-        try {
-            return Integer.parseInt(getXmlString(serverInfo, "ExternalPort", true));
-        } catch (XmlPullParserException e) {
-            // Expected on non-Sunshine servers
-            return baseUrlHttp.port();
-        } catch (IOException e) {
-            e.printStackTrace();
-            return baseUrlHttp.port();
-        }
-    }
 
     /**
      * Get an app by ID
@@ -621,10 +630,12 @@ public class NvHTTP {
         return null;
     }
 
+    /** @return the pairing manager bound to this connection */
     public PairingManager getPairingManager() {
         return pm;
     }
     
+    /** @return the apps parsed from an app list response */
     public static LinkedList<NvApp> getAppListByReader(Reader r) throws XmlPullParserException, IOException {
         XmlPullParserFactory factory = XmlPullParserFactory.newInstance();
         factory.setNamespaceAware(true);
@@ -687,10 +698,12 @@ public class NvHTTP {
         return appList;
     }
     
+    /** @return the raw app list XML, kept so it can be cached to disk verbatim */
     public String getAppListRaw() throws IOException {
         return openHttpConnectionToString(httpClientLongConnectTimeout, getHttpsUrl(true), "applist");
     }
     
+    /** @return the host's app list. Slow enough that callers cache it and refresh in the background. */
     public LinkedList<NvApp> getAppList() throws HostHttpResponseException, IOException, XmlPullParserException {
         if (verbose) {
             // Use the raw function so the app list is printed
@@ -713,19 +726,23 @@ public class NvHTTP {
                 "pair", "devicename=roth&updateState=1&phrase=pairchallenge");
     }
 
+    /** Asks the host to forget this client. */
     public void unpair() throws IOException {
         openHttpConnectionToString(httpClientLongConnectTimeout, baseUrlHttp, "unpair");
     }
     
+    /** @return a stream of the app's box art; the caller owns and must close it */
     public InputStream getBoxArt(NvApp app) throws IOException {
         ResponseBody resp = openHttpConnection(httpClientLongConnectTimeout, getHttpsUrl(true), "appasset", "appid=" + app.getAppId() + "&AssetType=2&AssetIdx=0");
         return resp.byteStream();
     }
     
+    /** @return the host's major version, which gates protocol features */
     public int getServerMajorVersion(String serverInfo) throws XmlPullParserException, IOException {
         return getServerAppVersionQuad(serverInfo)[0];
     }
     
+    /** @return the host's four-part version, for comparisons finer than the major version */
     public int[] getServerAppVersionQuad(String serverInfo) throws XmlPullParserException, IOException {
         String serverVersion = getServerVersion(serverInfo);
         if (serverVersion == null) {
@@ -753,28 +770,15 @@ public class NvHTTP {
         return new String(hexChars);
     }
     
+    /**
+     * Launches or resumes an app.
+     *
+     * @param verb "launch" for a new session or "resume" for one already running
+     * @return true if the host started it
+     */
     public boolean launchApp(ConnectionContext context, String verb, int appId, boolean enableHdr) throws IOException, XmlPullParserException {
-        // Using an FPS value over 60 causes SOPS to default to 720p60,
-        // so force it to 0 to ensure the correct resolution is set. We
-        // used to use 60 here but that locked the frame rate to 60 FPS
-        // on GFE 3.20.3.
-        int fps = context.isNvidiaServerSoftware && context.streamConfig.getLaunchRefreshRate() > 60 ?
-                0 : context.streamConfig.getLaunchRefreshRate();
-
+        int fps = context.streamConfig.getLaunchRefreshRate();
         boolean enableSops = context.streamConfig.getSops();
-        if (context.isNvidiaServerSoftware) {
-            // Using an unsupported resolution (not 720p, 1080p, or 4K) causes
-            // GFE to force SOPS to 720p60. This is fine for < 720p resolutions like
-            // 360p or 480p, but it is not ideal for 1440p and other resolutions.
-            // When we detect an unsupported resolution, disable SOPS unless it's under 720p.
-            // FIXME: Detect support resolutions using the serverinfo response, not a hardcoded list
-            if (context.negotiatedWidth * context.negotiatedHeight > 1280 * 720 &&
-                    context.negotiatedWidth * context.negotiatedHeight != 1920 * 1080 &&
-                    context.negotiatedWidth * context.negotiatedHeight != 3840 * 2160) {
-                LimeLog.info("Disabling SOPS due to non-standard resolution: "+context.negotiatedWidth+"x"+context.negotiatedHeight);
-                enableSops = false;
-            }
-        }
 
         String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), verb,
             "appid=" + appId +
@@ -800,6 +804,7 @@ public class NvHTTP {
         }
     }
     
+    /** Asks the host to quit whatever is running. @return true if it did */
     public boolean quitApp() throws IOException, XmlPullParserException {
         String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), "cancel");
         if (getXmlString(xmlStr, "cancel", true).equals("0")) {

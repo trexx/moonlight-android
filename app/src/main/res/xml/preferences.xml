@@ -199,6 +199,16 @@
             android:title="@string/title_checkbox_disable_warnings"
             android:summary="@string/summary_checkbox_disable_warnings"
             android:defaultValue="false" />
+        <!-- Maps to ENCFLG_* via PreferenceConfiguration.getEncryptionFlagsValue(). The client
+             opts in; SdpGenerator enables encryption if either side asks, so "none" is a
+             request rather than a guarantee. -->
+        <ListPreference
+            android:key="list_encryption"
+            android:title="@string/title_encryption"
+            android:entries="@array/encryption_names"
+            android:entryValues="@array/encryption_values"
+            android:summary="@string/summary_encryption"
+            android:defaultValue="audio" />
         <ListPreference
             android:key="video_format"
             android:title="@string/title_video_format"
