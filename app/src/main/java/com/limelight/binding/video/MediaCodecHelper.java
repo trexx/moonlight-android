@@ -58,6 +58,7 @@ public class MediaCodecHelper {
     private static final List<String> kirinDecoderPrefixes;
     private static final List<String> exynosDecoderPrefixes;
     private static final List<String> amlogicDecoderPrefixes;
+    private static final List<String> amlogicCodec2DecoderPrefixes;
     private static final List<String> knownVendorLowLatencyOptions;
 
     public static final boolean SHOULD_BYPASS_SOFTWARE_BLOCK =
@@ -66,6 +67,10 @@ public class MediaCodecHelper {
     private static boolean isLowEndSnapdragon = false;
     private static boolean isAdreno620 = false;
     private static boolean isAmlogicRfiSafe = false;
+    // Whether this Amlogic device wants the low latency options at all. Fire OS needs them - the
+    // Fire TV 3's decoder produces no output frames without vdec-lowlatency - while the newer
+    // Codec2 parts are broken by them. See isBrokenAmlogicHevcLowLatency().
+    private static boolean isAmlogicLowLatencySafe = false;
     private static boolean initialized = false;
 
     static {
@@ -256,6 +261,12 @@ public class MediaCodecHelper {
 
         amlogicDecoderPrefixes.add("omx.amlogic");
         amlogicDecoderPrefixes.add("c2.amlogic"); // Unconfirmed
+
+        // The Codec2 subset, which behaves differently to the older OMX decoders on the same
+        // silicon. See isBrokenAmlogicHevcLowLatency().
+        amlogicCodec2DecoderPrefixes = new LinkedList<>();
+
+        amlogicCodec2DecoderPrefixes.add("c2.amlogic");
     }
 
     private static boolean isPowerVR(String glRenderer) {
@@ -359,6 +370,10 @@ public class MediaCodecHelper {
             // record that here. Other Amlogic devices are excluded in
             // decoderSupportsRefFrameInvalidationHevc() below.
             isAmlogicRfiSafe = true;
+
+            // Fire OS is also the only Amlogic platform where the low latency options are known
+            // to help rather than hurt: the Fire TV 3 needs vdec-lowlatency to emit frames at all.
+            isAmlogicLowLatencySafe = true;
         }
 
         ActivityManager activityManager =
@@ -508,6 +523,27 @@ public class MediaCodecHelper {
     }
 
     /**
+     * @return true if this is one of the Amlogic Codec2 HEVC decoders that the low latency options
+     *         break rather than help.
+     *
+     * <p>These decoders advertise low latency support and accept the options without complaint,
+     * then fault partway through a stream: the V4L2 accelerator raises an error event and the
+     * component silently discards every subsequent input buffer, so the picture freezes while the
+     * app keeps submitting frames and sees no error. It shows up first as stuttering and ends as a
+     * dead stream. Confirmed on the Homatics Box R 4K Plus (S905X4, Android 14) and reported
+     * across the S905X4/S905X5M boxes in moonlight-stream/moonlight-android#1504, where the same
+     * hardware worked on Android 11 under the old OMX decoders and broke on the Codec2 ones.
+     *
+     * <p>Deliberately scoped to {@code c2.amlogic}: {@code omx.amlogic} is the path Fire OS needs
+     * these options on, and there is no evidence against it elsewhere.
+     */
+    private static boolean isBrokenAmlogicHevcLowLatency(MediaCodecInfo decoderInfo, MediaFormat videoFormat) {
+        return !isAmlogicLowLatencySafe &&
+                "video/hevc".equals(videoFormat.getString(MediaFormat.KEY_MIME)) &&
+                isDecoderInList(amlogicCodec2DecoderPrefixes, decoderInfo.getName());
+    }
+
+    /**
      * Applies low latency decoder options to a format, one escalation step at a time.
      *
      * <p>There is no way to ask whether a vendor option is accepted other than to configure the
@@ -520,6 +556,20 @@ public class MediaCodecHelper {
      *         are exhausted and a configuration failure now is a real failure.
      */
     public static boolean setDecoderLowLatencyOptions(MediaFormat videoFormat, MediaCodecInfo decoderInfo, int tryNumber) {
+        if (isBrokenAmlogicHevcLowLatency(decoderInfo, videoFormat)) {
+            // Every low latency option is off the table here, so there is only one thing left to
+            // try. KEY_PRIORITY is a scheduling hint rather than a buffering one, so it does not
+            // provoke the fault, and it is worth keeping for a realtime stream.
+            if (tryNumber == 0) {
+                LimeLog.info("Skipping low latency options on Amlogic HEVC decoder "
+                        + decoderInfo.getName() + "; using realtime priority alone");
+                videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
+                return true;
+            }
+
+            return false;
+        }
+
         // Options here should be tried in the order of most to least risky. The decoder will use
         // the first MediaFormat that doesn't fail in configure().
 
