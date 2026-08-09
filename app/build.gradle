@@ -125,6 +125,8 @@ android {
         }
     }
 
+    // ndk-build rather than CMake: the vendored moonlight-common-c, libusb and mbedtls trees all
+    // ship Android.mk files, and converting them would mean maintaining a fork of each.
     externalNativeBuild {
         ndkBuild {
             path = file("src/main/jni/Android.mk")
