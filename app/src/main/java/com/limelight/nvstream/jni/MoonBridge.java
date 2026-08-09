@@ -25,15 +25,21 @@ public class MoonBridge {
     public static final AudioConfiguration AUDIO_CONFIGURATION_71_SURROUND = new AudioConfiguration(8, 0x63F);
 
     public static final int VIDEO_FORMAT_H264 = 0x0001;
+    public static final int VIDEO_FORMAT_H264_HIGH8_444 = 0x0004;
     public static final int VIDEO_FORMAT_H265 = 0x0100;
     public static final int VIDEO_FORMAT_H265_MAIN10 = 0x0200;
+    public static final int VIDEO_FORMAT_H265_REXT8_444 = 0x0400;
+    public static final int VIDEO_FORMAT_H265_REXT10_444 = 0x0800;
     public static final int VIDEO_FORMAT_AV1_MAIN8 = 0x1000;
     public static final int VIDEO_FORMAT_AV1_MAIN10 = 0x2000;
+    public static final int VIDEO_FORMAT_AV1_HIGH8_444 = 0x4000;
+    public static final int VIDEO_FORMAT_AV1_HIGH10_444 = 0x8000;
 
     public static final int VIDEO_FORMAT_MASK_H264 = 0x000F;
     public static final int VIDEO_FORMAT_MASK_H265 = 0x0F00;
     public static final int VIDEO_FORMAT_MASK_AV1 = 0xF000;
-    public static final int VIDEO_FORMAT_MASK_10BIT = 0x2200;
+    public static final int VIDEO_FORMAT_MASK_10BIT = 0xAA00;
+    public static final int VIDEO_FORMAT_MASK_YUV444 = 0xCC04;
 
     public static final int BUFFER_TYPE_PICDATA = 0;
     public static final int BUFFER_TYPE_SPS = 1;
@@ -247,10 +253,10 @@ public class MoonBridge {
 
     public static int bridgeDrSubmitDecodeUnit(byte[] decodeUnitData, int decodeUnitLength, int decodeUnitType,
                                                int frameNumber, int frameType, char frameHostProcessingLatency,
-                                               long receiveTimeMs, long enqueueTimeMs) {
+                                               long receiveTimeUs, long enqueueTimeUs) {
         if (videoRenderer != null) {
             return videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
-                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeMs, enqueueTimeMs);
+                    decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs);
         }
         else {
             return DR_OK;
@@ -444,7 +450,24 @@ public class MoonBridge {
 
     public static native int getPendingAudioDuration();
 
-    public static native int getPendingVideoFrames();
+
+    // Indices into the arrays returned by getRTPAudioStats()/getRTPVideoStats().
+    public static final int RTP_STAT_PACKETS       = 0; // audio or video packets, per stream
+    public static final int RTP_STAT_FEC           = 1;
+    public static final int RTP_STAT_FEC_RECOVERED = 2;
+    public static final int RTP_STAT_FEC_FAILED    = 3;
+    public static final int RTP_STAT_OOS           = 4;
+    public static final int RTP_STAT_INVALID       = 5;
+    public static final int RTP_STAT_FEC_INVALID   = 6;
+    // Packets that arrived but could not be decrypted. Read against RTP_STAT_PACKETS, which
+    // counts every packet before decryption runs and so is the denominator.
+    public static final int RTP_STAT_DECRYPT_FAILED = 7;
+
+    // Counters are cumulative for the lifetime of the stream. Safe to call at any
+    // time - moonlight-common-c returns a zeroed struct when no stream is active.
+    public static native long[] getRTPAudioStats();
+
+    public static native long[] getRTPVideoStats();
 
     public static native int testClientConnectivity(String testServerHostName, int referencePort, int testFlags);
 

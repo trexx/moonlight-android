@@ -53,6 +53,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
+import android.hardware.display.DisplayManager;
 import android.view.Display;
 import android.view.InputDevice;
 import android.view.KeyCharacterMap;
@@ -544,42 +545,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      * with the rest of the phone-shaped handling; a streaming client on a TV is landscape.
      */
     private void setPreferredOrientationForCurrentDisplay() {
-        Display display = getWindowManager().getDefaultDisplay();
-
-        // For semi-square displays, we use more complex logic to determine which orientation to use (if any)
-        if (PreferenceConfiguration.isSquarishScreen(display)) {
-            int desiredOrientation = Configuration.ORIENTATION_UNDEFINED;
-
-            // OSC doesn't properly support portrait displays, so don't use it in portrait mode by default
-            if (prefConfig.onscreenController) {
-                desiredOrientation = Configuration.ORIENTATION_LANDSCAPE;
-            }
-
-            // For native resolution, we will lock the orientation to the one that matches the specified resolution
-            if (PreferenceConfiguration.isNativeResolution(prefConfig.width, prefConfig.height)) {
-                if (prefConfig.width > prefConfig.height) {
-                    desiredOrientation = Configuration.ORIENTATION_LANDSCAPE;
-                }
-                else {
-                    desiredOrientation = Configuration.ORIENTATION_PORTRAIT;
-                }
-            }
-
-            if (desiredOrientation == Configuration.ORIENTATION_LANDSCAPE) {
-                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
-            }
-            else if (desiredOrientation == Configuration.ORIENTATION_PORTRAIT) {
-                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT);
-            }
-            else {
-                // If we don't have a reason to lock to portrait or landscape, allow any orientation
-                setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_FULL_USER);
-            }
-        }
-        else {
-            // For regular displays, we always request landscape
-            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
-        }
+        setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE);
     }
 
     /** {@inheritDoc} Re-evaluates orientation, insets and the system UI after a config change. */
@@ -682,168 +648,147 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED && prefConfig.reduceRefreshRate);
     }
 
+    /**
+     * Returns the display this activity is attached to.
+     *
+     * Replaces the deprecated getWindowManager().getDefaultDisplay(). Activity.getDisplay()
+     * can return null when the activity isn't attached to a display, which the old API never
+     * did, so fall back to the default display to preserve the previous non-null contract.
+     */
+    private Display getActivityDisplay() {
+        Display display = getDisplay();
+        if (display == null) {
+            display = getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
+        }
+        return display;
+    }
+
+    /**
+     * Chooses the display mode for this stream and applies the window configuration that goes with
+     * it: resolution, refresh rate, HDR, cutout handling and system UI visibility.
+     *
+     * <p>Mode selection prefers an exact refresh rate match, then an integer multiple, and only
+     * changes resolution when that gains something — switching modes is visible to the user, so it
+     * has to be worth it.
+     *
+     * @return the refresh rate the display was configured for
+     */
     private float prepareDisplayForRendering() {
-        Display display = getWindowManager().getDefaultDisplay();
+        Display display = getActivityDisplay();
         WindowManager.LayoutParams windowLayoutParams = getWindow().getAttributes();
         float displayRefreshRate;
 
         // On M, we can explicitly set the optimal display mode
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Display.Mode bestMode = display.getMode();
-            boolean isNativeResolutionStream = PreferenceConfiguration.isNativeResolution(prefConfig.width, prefConfig.height);
-            boolean refreshRateIsGood = isRefreshRateGoodMatch(bestMode.getRefreshRate());
-            boolean refreshRateIsEqual = isRefreshRateEqualMatch(bestMode.getRefreshRate());
+        Display.Mode bestMode = display.getMode();
+        boolean isNativeResolutionStream = PreferenceConfiguration.isNativeResolution(prefConfig.width, prefConfig.height);
+        boolean refreshRateIsGood = isRefreshRateGoodMatch(bestMode.getRefreshRate());
+        boolean refreshRateIsEqual = isRefreshRateEqualMatch(bestMode.getRefreshRate());
 
-            LimeLog.info("Current display mode: "+bestMode.getPhysicalWidth()+"x"+
-                    bestMode.getPhysicalHeight()+"x"+bestMode.getRefreshRate());
+        LimeLog.info("Current display mode: "+bestMode.getPhysicalWidth()+"x"+
+                bestMode.getPhysicalHeight()+"x"+bestMode.getRefreshRate());
 
-            for (Display.Mode candidate : display.getSupportedModes()) {
-                boolean refreshRateReduced = candidate.getRefreshRate() < bestMode.getRefreshRate();
-                boolean resolutionReduced = candidate.getPhysicalWidth() < bestMode.getPhysicalWidth() ||
-                        candidate.getPhysicalHeight() < bestMode.getPhysicalHeight();
-                boolean resolutionFitsStream = candidate.getPhysicalWidth() >= prefConfig.width &&
-                        candidate.getPhysicalHeight() >= prefConfig.height;
+        for (Display.Mode candidate : display.getSupportedModes()) {
+            boolean refreshRateReduced = candidate.getRefreshRate() < bestMode.getRefreshRate();
+            boolean resolutionReduced = candidate.getPhysicalWidth() < bestMode.getPhysicalWidth() ||
+                    candidate.getPhysicalHeight() < bestMode.getPhysicalHeight();
+            boolean resolutionFitsStream = candidate.getPhysicalWidth() >= prefConfig.width &&
+                    candidate.getPhysicalHeight() >= prefConfig.height;
 
-                LimeLog.info("Examining display mode: "+candidate.getPhysicalWidth()+"x"+
-                        candidate.getPhysicalHeight()+"x"+candidate.getRefreshRate());
+            LimeLog.info("Examining display mode: "+candidate.getPhysicalWidth()+"x"+
+                    candidate.getPhysicalHeight()+"x"+candidate.getRefreshRate());
 
-                if (candidate.getPhysicalWidth() > 4096 && prefConfig.width <= 4096) {
-                    // Avoid resolutions options above 4K to be safe
+            if (candidate.getPhysicalWidth() > 4096 && prefConfig.width <= 4096) {
+                // Avoid resolutions options above 4K to be safe
+                continue;
+            }
+
+            // On non-4K streams, we force the resolution to never change unless it's above
+            // 60 FPS, which may require a resolution reduction due to HDMI bandwidth limitations,
+            // or it's a native resolution stream.
+            if (prefConfig.width < 3840 && prefConfig.fps <= 60 && !isNativeResolutionStream) {
+                if (display.getMode().getPhysicalWidth() != candidate.getPhysicalWidth() ||
+                        display.getMode().getPhysicalHeight() != candidate.getPhysicalHeight()) {
+                    continue;
+                }
+            }
+
+            // Make sure the resolution doesn't regress unless if it's over 60 FPS
+            // where we may need to reduce resolution to achieve the desired refresh rate.
+            if (resolutionReduced && !(prefConfig.fps > 60 && resolutionFitsStream)) {
+                continue;
+            }
+
+            if (mayReduceRefreshRate() && refreshRateIsEqual && !isRefreshRateEqualMatch(candidate.getRefreshRate())) {
+                // If we had an equal refresh rate and this one is not, skip it. In min latency
+                // mode, we want to always prefer the highest frame rate even though it may cause
+                // microstuttering.
+                continue;
+            }
+            else if (refreshRateIsGood) {
+                // We've already got a good match, so if this one isn't also good, it's not
+                // worth considering at all.
+                if (!isRefreshRateGoodMatch(candidate.getRefreshRate())) {
                     continue;
                 }
 
-                // On non-4K streams, we force the resolution to never change unless it's above
-                // 60 FPS, which may require a resolution reduction due to HDMI bandwidth limitations,
-                // or it's a native resolution stream.
-                if (prefConfig.width < 3840 && prefConfig.fps <= 60 && !isNativeResolutionStream) {
-                    if (display.getMode().getPhysicalWidth() != candidate.getPhysicalWidth() ||
-                            display.getMode().getPhysicalHeight() != candidate.getPhysicalHeight()) {
+                if (mayReduceRefreshRate()) {
+                    // User asked for the lowest possible refresh rate, so don't raise it if we
+                    // have a good match already
+                    if (candidate.getRefreshRate() > bestMode.getRefreshRate()) {
                         continue;
                     }
                 }
-
-                // Make sure the resolution doesn't regress unless if it's over 60 FPS
-                // where we may need to reduce resolution to achieve the desired refresh rate.
-                if (resolutionReduced && !(prefConfig.fps > 60 && resolutionFitsStream)) {
-                    continue;
-                }
-
-                if (mayReduceRefreshRate() && refreshRateIsEqual && !isRefreshRateEqualMatch(candidate.getRefreshRate())) {
-                    // If we had an equal refresh rate and this one is not, skip it. In min latency
-                    // mode, we want to always prefer the highest frame rate even though it may cause
-                    // microstuttering.
-                    continue;
-                }
-                else if (refreshRateIsGood) {
-                    // We've already got a good match, so if this one isn't also good, it's not
-                    // worth considering at all.
-                    if (!isRefreshRateGoodMatch(candidate.getRefreshRate())) {
-                        continue;
-                    }
-
-                    if (mayReduceRefreshRate()) {
-                        // User asked for the lowest possible refresh rate, so don't raise it if we
-                        // have a good match already
-                        if (candidate.getRefreshRate() > bestMode.getRefreshRate()) {
-                            continue;
-                        }
-                    }
-                    else {
-                        // User asked for the highest possible refresh rate, so don't reduce it if we
-                        // have a good match already
-                        if (refreshRateReduced) {
-                            continue;
-                        }
-                    }
-                }
-                else if (!isRefreshRateGoodMatch(candidate.getRefreshRate())) {
-                    // We didn't have a good match and this match isn't good either, so just don't
-                    // reduce the refresh rate.
+                else {
+                    // User asked for the highest possible refresh rate, so don't reduce it if we
+                    // have a good match already
                     if (refreshRateReduced) {
                         continue;
                     }
-                } else {
-                    // We didn't have a good match and this match is good. Prefer this refresh rate
-                    // even if it reduces the refresh rate. Lowering the refresh rate can be beneficial
-                    // when streaming a 60 FPS stream on a 90 Hz device. We want to select 60 Hz to
-                    // match the frame rate even if the active display mode is 90 Hz.
                 }
-
-                bestMode = candidate;
-                refreshRateIsGood = isRefreshRateGoodMatch(candidate.getRefreshRate());
-                refreshRateIsEqual = isRefreshRateEqualMatch(candidate.getRefreshRate());
+            }
+            else if (!isRefreshRateGoodMatch(candidate.getRefreshRate())) {
+                // We didn't have a good match and this match isn't good either, so just don't
+                // reduce the refresh rate.
+                if (refreshRateReduced) {
+                    continue;
+                }
+            } else {
+                // We didn't have a good match and this match is good. Prefer this refresh rate
+                // even if it reduces the refresh rate. Lowering the refresh rate can be beneficial
+                // when streaming a 60 FPS stream on a 90 Hz device. We want to select 60 Hz to
+                // match the frame rate even if the active display mode is 90 Hz.
             }
 
-            LimeLog.info("Best display mode: "+bestMode.getPhysicalWidth()+"x"+
-                    bestMode.getPhysicalHeight()+"x"+bestMode.getRefreshRate());
+            bestMode = candidate;
+            refreshRateIsGood = isRefreshRateGoodMatch(candidate.getRefreshRate());
+            refreshRateIsEqual = isRefreshRateEqualMatch(candidate.getRefreshRate());
+        }
 
-            // Only apply new window layout parameters if we've actually changed the display mode
-            if (display.getMode().getModeId() != bestMode.getModeId()) {
-                // If we only changed refresh rate and we're on an OS that supports Surface.setFrameRate()
-                // use that instead of using preferredDisplayModeId to avoid the possibility of triggering
-                // bugs that can cause the system to switch from 4K60 to 4K24 on Chromecast 4K.
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-                        display.getMode().getPhysicalWidth() != bestMode.getPhysicalWidth() ||
-                        display.getMode().getPhysicalHeight() != bestMode.getPhysicalHeight()) {
-                    // Apply the display mode change
-                    windowLayoutParams.preferredDisplayModeId = bestMode.getModeId();
-                    getWindow().setAttributes(windowLayoutParams);
-                }
-                else {
-                    LimeLog.info("Using setFrameRate() instead of preferredDisplayModeId due to matching resolution");
-                }
+        LimeLog.info("Best display mode: "+bestMode.getPhysicalWidth()+"x"+
+                bestMode.getPhysicalHeight()+"x"+bestMode.getRefreshRate());
+
+        // Only apply new window layout parameters if we've actually changed the display mode
+        if (display.getMode().getModeId() != bestMode.getModeId()) {
+            // If we only changed refresh rate and we're on an OS that supports Surface.setFrameRate()
+            // use that instead of using preferredDisplayModeId to avoid the possibility of triggering
+            // bugs that can cause the system to switch from 4K60 to 4K24 on Chromecast 4K.
+            if (prefConfig.enforceDisplayMode ||
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+                    display.getMode().getPhysicalWidth() != bestMode.getPhysicalWidth() ||
+                    display.getMode().getPhysicalHeight() != bestMode.getPhysicalHeight()) {
+                // Apply the display mode change
+                windowLayoutParams.preferredDisplayModeId = bestMode.getModeId();
+                getWindow().setAttributes(windowLayoutParams);
             }
             else {
-                LimeLog.info("Current display mode is already the best display mode");
+                LimeLog.info("Using setFrameRate() instead of preferredDisplayModeId due to matching resolution");
             }
-
-            displayRefreshRate = bestMode.getRefreshRate();
         }
-        // On L, we can at least tell the OS that we want a refresh rate
         else {
-            float bestRefreshRate = display.getRefreshRate();
-            for (float candidate : display.getSupportedRefreshRates()) {
-                LimeLog.info("Examining refresh rate: "+candidate);
-
-                if (candidate > bestRefreshRate) {
-                    // Ensure the frame rate stays around 60 Hz for <= 60 FPS streams
-                    if (prefConfig.fps <= 60) {
-                        if (candidate >= 63) {
-                            continue;
-                        }
-                    }
-
-                    bestRefreshRate = candidate;
-                }
-            }
-
-            LimeLog.info("Selected refresh rate: "+bestRefreshRate);
-            windowLayoutParams.preferredRefreshRate = bestRefreshRate;
-            displayRefreshRate = bestRefreshRate;
-
-            // Apply the refresh rate change
-            getWindow().setAttributes(windowLayoutParams);
+            LimeLog.info("Current display mode is already the best display mode");
         }
 
-        // Until Marshmallow, we can't ask for a 4K display mode, so we'll
-        // need to hint the OS to provide one.
-        boolean aspectRatioMatch = false;
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            // We'll calculate whether we need to scale by aspect ratio. If not, we'll use
-            // setFixedSize so we can handle 4K properly. The only known devices that have
-            // >= 4K screens have exactly 4K screens, so we'll be able to hit this good path
-            // on these devices. On Marshmallow, we can start changing to 4K manually but no
-            // 4K devices run 6.0 at the moment.
-            Point screenSize = new Point(0, 0);
-            display.getSize(screenSize);
-
-            double screenAspectRatio = ((double)screenSize.y) / screenSize.x;
-            double streamAspectRatio = ((double)prefConfig.height) / prefConfig.width;
-            if (Math.abs(screenAspectRatio - streamAspectRatio) < 0.001) {
-                LimeLog.info("Stream has compatible aspect ratio with output display");
-                aspectRatioMatch = true;
-            }
-        }
+        displayRefreshRate = bestMode.getRefreshRate();
 
         if (prefConfig.stretchVideo || aspectRatioMatch) {
             // Set the surface to the size of the video
@@ -867,7 +812,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         else {
             // Use the lower of the current refresh rate and the selected refresh rate.
             // The preferred refresh rate may not actually be applied (ex: Battery Saver mode).
-            return Math.min(getWindowManager().getDefaultDisplay().getRefreshRate(), displayRefreshRate);
+            return Math.min(getActivityDisplay().getRefreshRate(), displayRefreshRate);
         }
     }
 
