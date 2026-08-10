@@ -294,18 +294,35 @@ adb logcat -d | grep -a -A40 "Stream summary:"
 ### 6.1 Smoke, per device × codec
 
 - [ ] **H.264** streams cleanly for 3 minutes.
-- [ ] **HEVC** streams cleanly for 3 minutes.
+- [x] **HEVC** streams cleanly for 3 minutes.
+      *Verified on the NVIDIA Shield TV (mdarcy, Android 11) against Sunshine on Windows,
+      2026-08-10. 4K60 HDR — `Format: 200` (H265_MAIN10), `OMX.Nvidia.h265.decode`, low-latency on,
+      80 Mbps, 415 s, 16172 decode units. `Frames in-out: 16172, 16162`, `Frame losses: 0 in 0 loss
+      events`, RTP `136220` packets with 0 failed/OOS/invalid/decrypt-failed,
+      `Picture data invariant failures: 0`, `Picture data aborts: 0`, no native bailouts.*
 - [ ] **AV1** streams cleanly for 3 minutes. Distinct risk class: AV1 has no separate parameter set
       NALUs, so *all* of its bytes take the new path and the sequence header rides inside the
       picture data. Confirm `CSD stats: 0, 0, 0` — a non-zero value there means the fused branch is
       prepending on AV1 and the offset risk applies to it too.
-- [ ] `Frames in-out: N, M` — the gap stays small and constant. A **growing** gap means frames enter
+      *Not testable on the Shield: the summary reports `AV1 Decoder: (none)`. Needs the Homatics,
+      and if that has no AV1 decoder either then this risk class cannot be covered on the supported
+      hardware at all — record that rather than leaving the box open.*
+- [x] `Frames in-out: N, M` — the gap stays small and constant. A **growing** gap means frames enter
       the codec and never come out, which is the signature of a wrongly-offset write.
-- [ ] `Picture data invariant failures: 0` on every run.
-- [ ] These two native errors never appear — either is a hard fail:
+      *Shield/HEVC: gap of 10, flat across 16172 frames.*
+- [x] `Picture data invariant failures: 0` on every run. *Shield/HEVC: 0.*
+- [x] These two native errors never appear — either is a hard fail:
       ```bash
       adb logcat -d | grep -a -E "Codec input buffer is not direct|exceeds input buffer capacity"
       ```
+      *Shield/HEVC: neither appeared.*
+
+> **The 2026-08-10 Shield run passed everything above and still tested nothing that matters.**
+> `Fused CSD frames: 0` and `CSD stats: 1, 1, 1` — one VPS, one SPS, one PPS, so **exactly one IDR
+> in 415 seconds**. That IDR took the `CSD_SUBMITTED` branch and wrote at position 0, meaning the
+> non-zero-offset arithmetic ran zero times out of 16172 decode units. Without those counters the
+> run reads as a full pass. This is the case 6.2 exists for, and on a clean link it is the *normal*
+> outcome, not an unlucky one.
 
 ### 6.2 Forced IDRs — the offset case
 
@@ -352,6 +369,25 @@ software — fewer at a time, so they suit 6.1 rather than the ≥30 this sectio
 If RFI is soaking up the losses (`Invalidate reference frame request sent` instead of `IDR frame
 request sent`), switch to a codec where `refFrameInvalidationActive` is false, or the run will not
 produce the IDRs this test depends on.
+
+**On the Shield that escape hatch does not exist.** Measured 2026-08-10: RFI is active for *both*
+codecs there —
+
+```
+Decoder OMX.Nvidia.h264.decode will use reference frame invalidation for AVC
+Enabling HEVC RFI based on low latency option support
+Decoder OMX.Nvidia.h265.decode will use reference frame invalidation for HEVC
+```
+
+so packet loss is recovered by invalidating reference frames rather than by a full IDR, and adding
+loss will not reliably produce the IDRs this section needs. The summary confirms it end to end:
+`RFI active: true`, `Fused IDR frames: true`, and one IDR across a 415 s stream.
+
+That leaves two routes to the fused path on this device, and **6.3's HDR toggle is the better one**
+— it forces a codec restart, which resets `submittedCsd`, so the *second* IDR after each restart
+takes the fused branch. Twenty toggles is twenty chances at the offset case, where an hour of
+packet loss may be none. The other route is the host-side triggers listed above (Alt-Tab,
+fullscreen, resolution change), which produce a genuine IDR without going through loss recovery.
 
 ### 6.3 Codec recovery — the memory-safety window
 
@@ -409,8 +445,11 @@ adb logcat -d | grep -iE "checkjni|JNI ERROR|JNI WARNING"
 adb shell setprop debug.checkjni 0
 ```
 
-- [ ] `Late-enabling -Xcheck:jni` appears — **without this line CheckJNI was not on** and the run
+- [x] `Late-enabling -Xcheck:jni` appears — **without this line CheckJNI was not on** and the run
       proves nothing.
+      *Confirmed on the Shield 2026-08-10: `limelight.debu: Late-enabling -Xcheck:jni`. Note the
+      tag is the truncated process name, not the package — grep for `Late-enabling`, not for
+      `limelight`.*
 - [ ] No JNI errors naming `bridgeDrStartPicData`, `bridgeDrSubmitPicData`, `bridgeDrAbortPicData`,
       `GetDirectBufferAddress` or `java/nio/Buffer.position`. Compare any complaint against a
       `HEAD~1` build before treating it as new — the `DetachCurrentThread`-with-pending-exception
