@@ -34,8 +34,8 @@ because the alternative has cost something here.
 ## Build and test
 
 ```bash
-./gradlew testDebugUnitTest        # ~30 s, no NDK, no device
-./gradlew jacocoTestReport         # coverage -> app/build/reports/jacoco/
+./gradlew testDebugUnitTest        # ~30 s, no NDK, no device  (see Testing: unit-testing branch only)
+./gradlew jacocoTestReport         # coverage -> app/build/reports/jacoco/  (unit-testing branch only)
 ./gradlew compileDebugJavaWithJavac # fastest check for Java-only changes
 ./gradlew assembleRelease lintRelease # what CI gates on; runs ndk-build for both ABIs, slow
 ```
@@ -105,6 +105,14 @@ it — compare overlay-on with overlay-on.
 ---
 
 ## Testing
+
+> **The test suite lives on the `unit-testing` branch and has not merged.** It is not on `master`
+> and not on the feature branches, so `testDebugUnitTest` finds no sources and `jacocoTestReport`
+> does not exist as a task from here — both commands above silently do nothing. The extractions
+> below (`GlRendererParser`, `StickCalibration`) and `VideoStats.getFps(long)` are likewise on that
+> branch only; on `master` `getFps()` takes no argument and the two split classes do not exist.
+> Everything in this section describes the shape testing takes *there*, and is the target to
+> restore to, not a description of the tree you are in.
 
 Unit tests are JVM tests under `app/src/test/java`. They run on any machine, need no device and
 no NDK, and are the only automated verification this project has.
