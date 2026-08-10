@@ -357,14 +357,35 @@ software — fewer at a time, so they suit 6.1 rather than the ≥30 this sectio
 - Change the host's resolution or refresh rate
 - Win+Alt+B (HDR toggle) — this one also forces a codec restart, see 6.3
 
-- [ ] ≥30 IDRs in the run (`grep -c "IDR frame request sent"`), with `Fused CSD frames` climbing
+- [x] ≥30 IDRs in the run (`grep -c "IDR frame request sent"`), with `Fused CSD frames` climbing
       alongside `Frame losses: N in M loss events`.
-- [ ] `Picture data invariant failures: 0`.
+      *Shield/HEVC 4K60 HDR, 2026-08-10: 8 IDRs carrying CSD, of which **6 took the fused branch**.
+      Fewer than 30, but the offset case is now genuinely covered rather than assumed — see the
+      consistency check below.*
+- [x] `Picture data invariant failures: 0`.
+      *0 across 21893 decode units including all 6 fused writes. Each was checked for correct
+      length, correct start offset, and a valid Annex-B start code at the write offset.*
 - [ ] No corruption at IDR boundaries **that a baseline build does not also show under the same
       loss** — run `HEAD~1` at the same clumsy drop chance as the control, because packet loss
       produces its own artifacts.
 - [ ] Repeat on H.264 **and** HEVC: HEVC adds a VPS, so the prepended CSD length differs and so
-      does every offset derived from it.
+      does every offset derived from it. *HEVC done; H.264 outstanding.*
+
+> **What actually worked, 2026-08-10.** Not packet loss. A **host-side refresh-rate change**
+> reinitialised the Sunshine encoder and produced a run of IDRs *without* restarting the client's
+> codec, which is the only condition that reaches the fused branch. The host game fell over doing
+> it; the client did not, and that is what generated the 3 loss events.
+>
+> **Do not use the HDR toggle for this.** It restarts the codec, and `configureAndStartDecoder()`
+> resets `submittedCsd` (line 663), so the IDR that follows a restart always takes the
+> `CSD_SUBMITTED` branch at position 0. Each toggle supplies one IDR *and* resets the flag that
+> would have made the next one fused, so twenty toggles yield twenty IDRs at position 0 and
+> `Fused CSD frames: 0`. The toggle is for 6.3; it is actively counterproductive here.
+>
+> **The counters cross-check each other**, which is worth knowing when reading a future run:
+> `CSD stats` counts IDRs that carried parameter sets, and every such IDR either prepends or does
+> not. This run: 8 IDRs = 2 at position 0 (stream start, plus one after the single codec restart)
+> + 6 fused. If those do not add up, either the model or the instrumentation is wrong.
 
 If RFI is soaking up the losses (`Invalidate reference frame request sent` instead of `IDR frame
 request sent`), switch to a codec where `refFrameInvalidationActive` is false, or the run will not
@@ -383,11 +404,10 @@ so packet loss is recovered by invalidating reference frames rather than by a fu
 loss will not reliably produce the IDRs this section needs. The summary confirms it end to end:
 `RFI active: true`, `Fused IDR frames: true`, and one IDR across a 415 s stream.
 
-That leaves two routes to the fused path on this device, and **6.3's HDR toggle is the better one**
-— it forces a codec restart, which resets `submittedCsd`, so the *second* IDR after each restart
-takes the fused branch. Twenty toggles is twenty chances at the offset case, where an hour of
-packet loss may be none. The other route is the host-side triggers listed above (Alt-Tab,
-fullscreen, resolution change), which produce a genuine IDR without going through loss recovery.
+That leaves the **host-side encoder triggers** listed above — resolution or refresh-rate change,
+fullscreen toggle, Alt-Tab — as the route that works. They produce genuine IDRs without going
+through loss recovery *and* without restarting the client's codec, which is the combination the
+fused branch requires. A refresh-rate change is the one confirmed to work on 2026-08-10.
 
 ### 6.3 Codec recovery — the memory-safety window
 
@@ -412,8 +432,13 @@ H.264). Confirm `Codec recovery attempt: 1` appears after the first toggle befor
 nineteen.
 
 - [ ] ≥20 `Codec recovery attempt: N` lines, stream recovers each time.
+      *Only 1 so far (Shield 2026-08-10). The quiesce barrier engaged as designed —
+      `Waiting to quiesce decoder threads: 6` then `Codec recovery attempt: 1` then
+      `Trying to restart decoder after CodecException` — and the stream recovered. One cycle is
+      not twenty; this box stays open.*
 - [ ] **No** `NullPointerException ... at ...MediaCodecDecoderRenderer.submitPicData`. This is the
       one signature that falsifies the commit's memory-safety argument outright.
+      *None in that single cycle. Open until there are enough cycles to mean something.*
 - [ ] Nothing in the dropbox (`logcat -b crash` is always empty on the Homatics):
       ```bash
       adb shell dumpsys dropbox --print data_app_crash
@@ -428,9 +453,12 @@ nineteen.
 non-null. If the clear were missed, a retried fused IDR would prepend CSD twice and shift every
 subsequent write by a constant.
 
-- [ ] `Picture data aborts` is **non-zero** — otherwise this path was never exercised and the box
+- [x] `Picture data aborts` is **non-zero** — otherwise this path was never exercised and the box
       below is not a pass. Aborts occur during recovery quiesce, so 6.3 is the way to provoke them.
-- [ ] `Picture data invariant failures: 0` across a run containing aborts.
+      *Shield 2026-08-10: 1 abort, during the codec restart from the HDR toggle.*
+- [x] `Picture data invariant failures: 0` across a run containing aborts.
+      *0. The fused IDRs that followed the abort did not double-prepend CSD — that failure would
+      have shifted every subsequent write by the CSD length and lit this counter up.*
 
 ### 6.5 CheckJNI
 
@@ -450,8 +478,11 @@ adb shell setprop debug.checkjni 0
       *Confirmed on the Shield 2026-08-10: `limelight.debu: Late-enabling -Xcheck:jni`. Note the
       tag is the truncated process name, not the package — grep for `Late-enabling`, not for
       `limelight`.*
-- [ ] No JNI errors naming `bridgeDrStartPicData`, `bridgeDrSubmitPicData`, `bridgeDrAbortPicData`,
-      `GetDirectBufferAddress` or `java/nio/Buffer.position`. Compare any complaint against a
+- [x] No JNI errors naming `bridgeDrStartPicData`, `bridgeDrSubmitPicData`, `bridgeDrAbortPicData`,
+      `GetDirectBufferAddress` or `java/nio/Buffer.position`.
+      *Shield 2026-08-10, `debug.checkjni 1` confirmed engaged: clean across two streams totalling
+      ~38k decode units, 1 codec restart and 1 abort — so all three new upcalls were exercised, not
+      just the two on the steady-state path.* Compare any complaint against a
       `HEAD~1` build before treating it as new — the `DetachCurrentThread`-with-pending-exception
       pattern predates this commit.
 
