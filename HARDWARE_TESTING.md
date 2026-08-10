@@ -1076,6 +1076,196 @@ YouTube pays two permanently and Kodi three.
 
 ---
 
+## 15. Copy-free picture data submission
+
+`f8a8ae8a` (#9) stopped routing picture data through a Java `byte[]`. Native now takes the address of
+the codec's own input buffer and `memcpy`s the decode unit's buffer list straight into it
+(`bridgeDrStartPicData` → `memcpy` → `bridgeDrSubmitPicData`). Parameter sets still take the old
+path. The commit shipped explicitly **not validated on hardware**; this section is that validation.
+
+Two things make this different from the other sections here:
+
+- **A clean run proves nothing unless you can show it reached the risky case.** Native writes at
+  the buffer's *position*, which is non-zero only when codec-specific data has been prepended for a
+  fused IDR frame. IDRs are rare on a healthy stream, so a ten-minute session can easily never test
+  the offset arithmetic at all and look identical to one that did. Debug builds therefore report
+  `Fused CSD frames`, `Picture data aborts` and `Picture data invariant failures` — **read them, and
+  treat a run with `Fused CSD frames: 0` as not having tested anything.**
+- **The failure is corrupt video, not a crash**, which on a lossy link is easy to mistake for
+  ordinary packet loss. Hence the invariant counter rather than judging by eye.
+
+Debug builds log the whole stream summary at teardown (`Stream summary:` via `LimeLog.warning`),
+which is where all of the counters below come from. Release builds do not — the summary is
+otherwise only reachable by crashing.
+
+```bash
+adb shell setprop persist.log.tag '""'    # Homatics only; restore to S afterwards
+adb logcat -d | grep -a -A40 "Stream summary:"
+```
+
+### 15.1 Smoke, per device × codec
+
+- [ ] **H.264** streams cleanly for 3 minutes.
+- [ ] **HEVC** streams cleanly for 3 minutes.
+- [ ] **AV1** streams cleanly for 3 minutes. Distinct risk class: AV1 has no separate parameter set
+      NALUs, so *all* of its bytes take the new path and the sequence header rides inside the
+      picture data. Confirm `CSD stats: 0, 0, 0` — a non-zero value there means the fused branch is
+      prepending on AV1 and the offset risk applies to it too.
+- [ ] `Frames in-out: N, M` — the gap stays small and constant. A **growing** gap means frames enter
+      the codec and never come out, which is the signature of a wrongly-offset write.
+- [ ] `Picture data invariant failures: 0` on every run.
+- [ ] These two native errors never appear — either is a hard fail:
+      ```bash
+      adb logcat -d | grep -a -E "Codec input buffer is not direct|exceeds input buffer capacity"
+      ```
+
+### 15.2 Forced IDRs — the offset case
+
+`fusedIdrFrame` is `FEATURE_AdaptivePlayback`, which both target decoders report, so every IDR
+*after the first since the last codec configure* prepends CSD and hands native a non-zero position.
+Note the "since the last configure": `configureAndStartDecoder()` resets `submittedCsd`, so each
+codec recovery restarts that sequence and you need two IDRs after one before the fused path fires.
+
+Force IDRs with packet loss. It has to be applied on the **host**, not the device — these boxes have
+no `tc` and are not rooted. The host is Windows, so there is no `netem`; use
+[clumsy](https://jagt.github.io/clumsy/) (WinDivert-based, needs Administrator):
+
+```
+Filter:  outbound and udp and (udp.SrcPort == 47998 or udp.DstPort == 47998)
+Drop:    checked, Chance 3%
+```
+
+47998 is the video stream's UDP port (`RtspConnection.c:1278`); scoping the filter to it keeps the
+loss off RTSP and control, so the session degrades the way real packet loss does instead of
+collapsing. 3% forces several IDRs a minute while staying watchable — 1% is a slow drip, 5%
+saturates.
+
+**Confirm the shaper is actually doing something** before trusting a clean result: `Frame losses: N
+in M loss events` must be climbing in the summary. A filter that matches nothing looks exactly like
+a passing test.
+
+If installing a kernel-mode driver on the host is not acceptable, these produce IDRs with no extra
+software — fewer at a time, so they suit 15.1 rather than the ≥30 this section wants:
+
+- Alt-Tab away from the game and back
+- Toggle the game between fullscreen and windowed
+- Change the host's resolution or refresh rate
+- Win+Alt+B (HDR toggle) — this one also forces a codec restart, see 15.3
+
+- [ ] ≥30 IDRs in the run (`grep -c "IDR frame request sent"`), with `Fused CSD frames` climbing
+      alongside `Frame losses: N in M loss events`.
+- [ ] `Picture data invariant failures: 0`.
+- [ ] No corruption at IDR boundaries **that a baseline build does not also show under the same
+      loss** — run `HEAD~1` at the same clumsy drop chance as the control, because packet loss
+      produces its own artifacts.
+- [ ] Repeat on H.264 **and** HEVC: HEVC adds a VPS, so the prepended CSD length differs and so
+      does every offset derived from it.
+
+If RFI is soaking up the losses (`Invalidate reference frame request sent` instead of `IDR frame
+request sent`), switch to a codec where `refFrameInvalidationActive` is false, or the run will not
+produce the IDRs this test depends on.
+
+### 15.3 Codec recovery — the memory-safety window
+
+Between `bridgeDrStartPicData` returning and `bridgeDrSubmitPicData`, native holds a raw pointer
+into a codec input buffer. The commit argues recovery cannot free it underneath, because the
+quiesce barrier is only reached from `fetchNextInputBuffer()` and `queueNextInputBuffer()`, one on
+each side of the window. **That is an argument, not a test.**
+
+There is a free detector for it: `doCodecRecoveryIfRequired()` sets `nextInputBuffer = null`, and
+`submitPicData()` dereferences it without a guard, deliberately. So the failure is a
+`NullPointerException` naming `submitPicData` rather than silent memory corruption.
+
+The repeatable provocation is `setHdrMode()`, which promotes to a full codec restart on every HDR
+metadata change and resets the attempt counter, so it never exhausts its retries. Toggle HDR on the
+Windows host with **Win+Alt+B** (or Settings → System → Display → Use HDR) ~20 times during a
+stream.
+
+Preconditions, all of which silently produce zero recoveries if missed — check the log line, not
+the intent: HDR must be enabled in Moonlight's stream settings, the host display must be
+HDR-capable, and the client must have negotiated an HDR-capable codec (HEVC Main10 or AV1, not
+H.264). Confirm `Codec recovery attempt: 1` appears after the first toggle before doing the other
+nineteen.
+
+- [ ] ≥20 `Codec recovery attempt: N` lines, stream recovers each time.
+- [ ] **No** `NullPointerException ... at ...MediaCodecDecoderRenderer.submitPicData`. This is the
+      one signature that falsifies the commit's memory-safety argument outright.
+- [ ] Nothing in the dropbox (`logcat -b crash` is always empty on the Homatics):
+      ```bash
+      adb shell dumpsys dropbox --print data_app_crash
+      ```
+- [ ] Run HDR toggling **and** 3% loss together for 10 minutes. The interaction is where a stale
+      offset hides: recovery resets `submittedCsd`, so the next IDR writes at 0 and the one after
+      writes at the CSD length.
+
+### 15.4 Abort and buffer reuse
+
+`abortPicData()` clears the retained buffer; `fetchNextInputBuffer()` short-circuits while it is
+non-null. If the clear were missed, a retried fused IDR would prepend CSD twice and shift every
+subsequent write by a constant.
+
+- [ ] `Picture data aborts` is **non-zero** — otherwise this path was never exercised and the box
+      below is not a pass. Aborts occur during recovery quiesce, so 15.3 is the way to provoke them.
+- [ ] `Picture data invariant failures: 0` across a run containing aborts.
+
+### 15.5 CheckJNI
+
+The commit adds a new JNI protocol: an object reference held across a call, `GetDirectBufferAddress`
+/`GetDirectBufferCapacity`, a `DeleteLocalRef` and three new upcalls. CheckJNI validates all of it.
+
+```bash
+adb shell setprop debug.checkjni 1
+adb shell am force-stop com.limelight.debug
+# relaunch, stream 10 minutes with forced IDRs and one recovery
+adb logcat -d | grep -iE "checkjni|JNI ERROR|JNI WARNING"
+adb shell setprop debug.checkjni 0
+```
+
+- [ ] `Late-enabling -Xcheck:jni` appears — **without this line CheckJNI was not on** and the run
+      proves nothing.
+- [ ] No JNI errors naming `bridgeDrStartPicData`, `bridgeDrSubmitPicData`, `bridgeDrAbortPicData`,
+      `GetDirectBufferAddress` or `java/nio/Buffer.position`. Compare any complaint against a
+      `HEAD~1` build before treating it as new — the `DetachCurrentThread`-with-pending-exception
+      pattern predates this commit.
+
+### 15.6 Performance — what is and is not measurable
+
+The change removes one `memcpy` of an average 20–40 KB frame: roughly **10–25 µs per frame, ~0.1% of
+one core at 60 fps**.
+
+**This is not observable as latency and must not be reported as such.** `getAverageEndToEndLatency()`
+is integer milliseconds; the change is a rounding error within it. `getAverageDecoderLatency()`
+returns 0 unless the build is debug *and* the overlay is visible.
+
+Measure the CPU cost on the submitting thread instead. That thread is **`VideoRecv`**, not
+`VideoDec` — moonlight-common-c only creates `VideoDec` when `CAPABILITY_DIRECT_SUBMIT` is absent,
+and both target decoders have it, so `VideoDec` does not exist here at all.
+
+```bash
+PID=$(adb shell pidof com.limelight.debug | tr -d '\r')
+adb shell "grep -H . /proc/$PID/task/*/comm" | grep -i VideoRecv
+adb shell "cat /proc/$PID/task/<TID>/schedstat"   # field 1 = sum_exec_runtime, ns
+```
+
+- [ ] `simpleperf` shows the `SetByteArrayRegion` frame beneath `BridgeDrSubmitDecodeUnit` present
+      in a `HEAD~1` profile and **absent** at `HEAD`. A frame disappearing is unambiguous in a way a
+      sub-percent timing delta is not; this is the primary evidence.
+- [ ] Paired `schedstat` runs (5 per build, alternating, fixed 300 s, fixed scene, overlay state
+      identical) report a mean and a spread. **If the spread swallows the difference, say exactly
+      that** — per CLAUDE.md, a metric that can be wrong is worse than no metric.
+
+### 15.7 Known gaps
+
+- **ASan would not catch an overrun of the destination.** MediaCodec input buffers are allocated by
+  the codec service and mapped in; they carry no ASan redzone, so a write past the end lands in
+  adjacent mapped pages silently. ASan does still cover over-reads of the source `LENTRY` buffers,
+  which are `malloc`'d by the depacketizer. Worth knowing before spending a day on it — 15.3's NPE
+  detector and 15.5 cover the actual hazard better.
+- **HWASan is unavailable on both devices.** It needs arm64 plus Android 14 or a HWASan system
+  image: the Shield is arm64 but API 30 on a stock image, the Homatics is Android 14 but 32-bit.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
