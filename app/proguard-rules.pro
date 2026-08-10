@@ -1,4 +1,5 @@
-# Don't obfuscate code
+# Don't obfuscate code. Stack traces from user crash reports have to be readable without a
+# mapping file, since builds are made from source by anyone running this fork.
 -dontobfuscate
 
 # Strip informational logging from release builds.
@@ -16,9 +17,12 @@
 }
 
 # Our code
+# The USB drivers are reached from native code (the xow driver calls back into
+# XboxWirelessDongle and XboxWirelessController by name), so R8 cannot see those references.
 -keep class com.limelight.binding.input.driver.* {*;}
 
 # Moonlight common
+# MoonBridge's methods are resolved by name from JNI; shrinking them breaks every callback.
 -keep class com.limelight.nvstream.jni.* {*;}
 
 # Okio
@@ -28,6 +32,8 @@
 -dontwarn okio.**
 
 # BouncyCastle
+# JCA providers are instantiated reflectively by algorithm name, so nothing here is reachable
+# through a call graph R8 can follow.
 -keep class org.bouncycastle.jcajce.provider.asymmetric.* {*;}
 -keep class org.bouncycastle.jcajce.provider.asymmetric.util.* {*;}
 -keep class org.bouncycastle.jcajce.provider.asymmetric.rsa.* {*;}

@@ -15,6 +15,7 @@ import com.limelight.nvstream.http.ComputerDetails;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.Locale;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -78,6 +79,7 @@ public class AppListModel {
         return loader;
     }
 
+    /** Cancels pending box art loads, e.g. when leaving the screen. */
     public void cancelQueuedOperations() {
         if (loader != null) {
             loader.cancelForegroundLoads();
@@ -98,7 +100,7 @@ public class AppListModel {
         Collections.sort(list, new Comparator<AppView.AppObject>() {
             @Override
             public int compare(AppView.AppObject lhs, AppView.AppObject rhs) {
-                return lhs.app.getAppName().toLowerCase().compareTo(rhs.app.getAppName().toLowerCase());
+                return lhs.app.getAppName().toLowerCase(Locale.getDefault()).compareTo(rhs.app.getAppName().toLowerCase(Locale.getDefault()));
             }
         });
     }
@@ -146,6 +148,7 @@ public class AppListModel {
         }
     }
 
+    /** Removes an app from the grid. */
     public void removeApp(AppView.AppObject app) {
         visibleApps.remove(app);
         allApps.remove(app);

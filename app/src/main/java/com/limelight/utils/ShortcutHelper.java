@@ -14,12 +14,23 @@ import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 
+/**
+ * Manages launcher shortcuts for hosts and apps.
+ *
+ * <p>Shortcuts outlive the things they point at, so they are disabled with an explanatory reason
+ * rather than deleted when a host is removed or an app disappears — a disabled shortcut tells the
+ * user why it stopped working, while a vanished one just looks like a bug.
+ *
+ * <p>Dynamic shortcuts are also ranked by use, so the launcher surfaces the hosts and games the
+ * user actually plays.
+ */
 public class ShortcutHelper {
 
     private final ShortcutManager sm;
     private final Activity context;
     private final TvChannelHelper tvChannelHelper;
 
+    /** @param context used both to publish shortcuts and to resolve their icons */
     public ShortcutHelper(Activity context) {
         this.context = context;
         this.sm = context.getSystemService(ShortcutManager.class);
@@ -68,17 +79,25 @@ public class ShortcutHelper {
         return false;
     }
 
+    /** Records a host shortcut as used, raising its launcher ranking. */
     public void reportComputerShortcutUsed(ComputerDetails computer) {
         if (getInfoForId(computer.uuid) != null) {
             sm.reportShortcutUsed(computer.uuid);
         }
     }
 
+    /** Records a game launch, raising both the game's and its host's ranking. */
     public void reportGameLaunched(ComputerDetails computer, NvApp app) {
         tvChannelHelper.createTvChannel(computer);
         tvChannelHelper.addGameToChannel(computer, app);
     }
 
+    /**
+     * Creates or refreshes the shortcut to a host's app list.
+     *
+     * @param forceAdd    add it even if the shortcut list is already full
+     * @param newlyPaired the host was just paired, which is worth a shortcut on its own
+     */
     public void createAppViewShortcut(ComputerDetails computer, boolean forceAdd, boolean newlyPaired) {
         ShortcutInfo sinfo = new ShortcutInfo.Builder(context, computer.uuid)
                 .setIntent(ServerHelper.createPcShortcutIntent(context, computer))
@@ -122,6 +141,7 @@ public class ShortcutHelper {
         }
     }
 
+    /** Creates a host's app list shortcut once that host has actually been reachable. */
     public void createAppViewShortcutForOnlineHost(ComputerDetails details) {
         createAppViewShortcut(details, false, false);
     }
@@ -130,6 +150,11 @@ public class ShortcutHelper {
         return computer.uuid + app.getAppId();
     }
 
+    /**
+     * Asks the launcher to pin a shortcut to one game.
+     *
+     * @return true if the request was made; the user still has to accept it
+     */
     public boolean createPinnedGameShortcut(ComputerDetails computer, NvApp app, Bitmap iconBits) {
         if (sm.isRequestPinShortcutSupported()) {
             Icon appIcon;
@@ -152,6 +177,7 @@ public class ShortcutHelper {
         }
     }
 
+    /** Disables a host's shortcuts with a reason the launcher shows if the user taps them. */
     public void disableComputerShortcut(ComputerDetails computer, CharSequence reason) {
         tvChannelHelper.deleteChannel(computer);
 
@@ -171,6 +197,7 @@ public class ShortcutHelper {
         sm.disableShortcuts(appShortcutIds, reason);
     }
 
+    /** Disables one game's shortcut with a user-visible reason. */
     public void disableAppShortcut(ComputerDetails computer, NvApp app, CharSequence reason) {
         tvChannelHelper.deleteProgram(computer, app);
 
@@ -180,6 +207,7 @@ public class ShortcutHelper {
         }
     }
 
+    /** Re-enables a game's shortcut after it becomes available again. */
     public void enableAppShortcut(ComputerDetails computer, NvApp app) {
         String id = getShortcutIdForGame(computer, app);
         if (getInfoForId(id) != null) {

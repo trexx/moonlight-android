@@ -1,3 +1,12 @@
+-- Wireshark dissector for NVIDIA's GRID control protocol, the TCP channel GameStream uses to
+-- negotiate a session before the video and audio streams start.
+--
+-- A debugging aid, not part of the app. Drop it in Wireshark's plugins directory to read captures
+-- of the control channel. The protocol is undocumented and this dissector was written by
+-- observation, so field names reflect what the bytes appear to do rather than NVIDIA's own naming.
+--
+-- Note this predates Sunshine, and describes GeForce Experience's behaviour.
+
 local pf_type = ProtoField.uint16("gridctl.type", "Packet Type", base.HEX)
 local pf_paylen = ProtoField.uint32("gridctl.paylen", "Payload Length", base.DEC)
 local pf_payload = ProtoField.bytes("gridctl.payload", "Payload bytes")

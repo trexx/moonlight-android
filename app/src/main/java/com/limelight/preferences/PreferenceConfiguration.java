@@ -5,10 +5,21 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import androidx.preference.PreferenceManager;
-import android.view.Display;
 
+import com.limelight.nvstream.StreamConfiguration;
 import com.limelight.nvstream.jni.MoonBridge;
 
+/**
+ * Every user-facing setting, read once into a plain object.
+ *
+ * <p>{@link #readPreferences} is the only place preference keys are interpreted: everything else
+ * reads fields off this object. That matters because several settings are stored differently from
+ * how they are used — legacy boolean keys are migrated to enums, resolutions are parsed from
+ * strings, and defaults are computed from the device rather than fixed.
+ *
+ * <p>The keys themselves live in {@code res/xml/preferences.xml}, which is where the ranges and
+ * option lists are defined.
+ */
 public class PreferenceConfiguration {
     public enum FormatOption {
         AUTO,
@@ -49,39 +60,33 @@ public class PreferenceConfiguration {
     private static final String DISABLE_TOASTS_PREF_STRING = "checkbox_disable_warnings";
     private static final String HOST_AUDIO_PREF_STRING = "checkbox_host_audio";
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
-    private static final String METERED_BITRATE_PREF_STRING = "seekbar_metered_bitrate_kbps";
     private static final String ENFORCE_DISPLAY_MODE_PREF_STRING = "checkbox_enforce_display_mode";
     private static final String RESUME_WITHOUT_CONFIRM_PREF_STRING = "checkbox_resume_without_confirm";
-    private static final String ENABLE_COMMIT_TEXT_PREF_STRING = "checkbox_enable_commit_text";
     private static final String SMALL_ICONS_PREF_STRING = "checkbox_small_icon_mode";
     private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
     static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
     private static final String USB_DRIVER_PREF_SRING = "checkbox_usb_driver";
     private static final String VIDEO_FORMAT_PREF_STRING = "video_format";
+    static final String ENCRYPTION_PREF_STRING = "list_encryption";
     private static final String LEGACY_DISABLE_FRAME_DROP_PREF_STRING = "checkbox_disable_frame_drop";
     private static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
-    private static final String ENABLE_PIP_PREF_STRING = "checkbox_enable_pip";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
     private static final String MOUSE_EMULATION_STRING = "checkbox_mouse_emulation";
     private static final String ANALOG_SCROLLING_PREF_STRING = "analog_scrolling";
     private static final String MOUSE_NAV_BUTTONS_STRING = "checkbox_mouse_nav_buttons";
     static final String UNLOCK_FPS_STRING = "checkbox_unlock_fps";
-    private static final String VIBRATE_FALLBACK_PREF_STRING = "checkbox_vibrate_fallback";
-    private static final String VIBRATE_FALLBACK_STRENGTH_PREF_STRING = "seekbar_vibrate_fallback_strength";
     private static final String FLIP_FACE_BUTTONS_PREF_STRING = "checkbox_flip_face_buttons";
     private static final String TOUCHSCREEN_TRACKPAD_PREF_STRING = "checkbox_touchscreen_trackpad";
     private static final String MOUSE_MODE_PREF_STRING = "list_mouse_mode";
     private static final String LATENCY_TOAST_PREF_STRING = "checkbox_enable_post_stream_toast";
     private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
-    private static final String ENABLE_AUDIO_FX_PREF_STRING = "checkbox_enable_audiofx";
     private static final String ENABLE_AAUDIO_PREF_STRING = "checkbox_enable_aaudio";
     private static final String REDUCE_REFRESH_RATE_PREF_STRING = "checkbox_reduce_refresh_rate";
     private static final String FULL_RANGE_PREF_STRING = "checkbox_full_range";
     private static final String GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING = "checkbox_gamepad_touchpad_as_mouse";
     private static final String GAMEPAD_MOTION_SENSORS_PREF_STRING = "checkbox_gamepad_motion_sensors";
-    private static final String GAMEPAD_MOTION_FALLBACK_PREF_STRING = "checkbox_gamepad_motion_fallback";
 
     static final String DEFAULT_RESOLUTION = "1280x720";
     static final String DEFAULT_FPS = "60";
@@ -92,34 +97,29 @@ public class PreferenceConfiguration {
     private static final int DEFAULT_DEADZONE = 7;
     private static final boolean DEFAULT_ENFORCE_DISPLAY_MODE = false;
     private static final boolean DEFAULT_RESUME_WITHOUT_CONFIRM = false;
-    private static final boolean DEFAULT_ENABLE_COMMIT_TEXT = false;
     private static final boolean DEFAULT_MULTI_CONTROLLER = true;
     private static final boolean DEFAULT_USB_DRIVER = true;
     private static final String DEFAULT_VIDEO_FORMAT = "auto";
+    static final String DEFAULT_ENCRYPTION = "audio";
 
     private static final boolean DEFAULT_ENABLE_HDR = false;
-    private static final boolean DEFAULT_ENABLE_PIP = false;
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
     private static final boolean DEFAULT_BIND_ALL_USB = false;
     private static final boolean DEFAULT_MOUSE_EMULATION = true;
     private static final String DEFAULT_ANALOG_STICK_FOR_SCROLLING = "right";
     private static final boolean DEFAULT_MOUSE_NAV_BUTTONS = false;
     private static final boolean DEFAULT_UNLOCK_FPS = false;
-    private static final boolean DEFAULT_VIBRATE_FALLBACK = false;
-    private static final int DEFAULT_VIBRATE_FALLBACK_STRENGTH = 100;
     private static final boolean DEFAULT_FLIP_FACE_BUTTONS = false;
     private static final boolean DEFAULT_TOUCHSCREEN_TRACKPAD = true;
     private static final String DEFAULT_AUDIO_CONFIG = "2"; // Stereo
     private static final boolean DEFAULT_LATENCY_TOAST = false;
     private static final String DEFAULT_FRAME_PACING = "latency";
     private static final boolean DEFAULT_ABSOLUTE_MOUSE_MODE = false;
-    private static final boolean DEFAULT_ENABLE_AUDIO_FX = false;
     private static final boolean DEFAULT_ENABLE_AAUDIO = false;
     private static final boolean DEFAULT_REDUCE_REFRESH_RATE = false;
     private static final boolean DEFAULT_FULL_RANGE = false;
     private static final boolean DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE = false;
     private static final boolean DEFAULT_GAMEPAD_MOTION_SENSORS = true;
-    private static final boolean DEFAULT_GAMEPAD_MOTION_FALLBACK = false;
 
     public static final int FRAME_PACING_MIN_LATENCY = 0;
     public static final int FRAME_PACING_BALANCED = 1;
@@ -137,16 +137,14 @@ public class PreferenceConfiguration {
     public int width, height, fps;
     public int bitrate;
     public FormatOption videoFormat;
+    public int encryptionFlags;
     public int deadzonePercentage;
-    public int meteredBitrate;
     public boolean enforceDisplayMode;
     public boolean resumeWithoutConfirm;
-    public boolean enableCommitText;
     public boolean stretchVideo, enableSops, playHostAudio, disableWarnings;
     public ScaleMode scaleMode;
     public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
     public boolean enableHdr;
-    public boolean enablePip;
     public boolean enablePerfOverlay;
     public boolean enableLatencyToast;
     public boolean bindAllUsb;
@@ -154,21 +152,18 @@ public class PreferenceConfiguration {
     public AnalogStickForScrolling analogStickForScrolling;
     public boolean mouseNavButtons;
     public boolean unlockFps;
-    public boolean vibrateFallbackToDevice;
-    public int vibrateFallbackToDeviceStrength;
     public boolean touchscreenTrackpad;
     public MouseMode mouseMode;
     public MoonBridge.AudioConfiguration audioConfiguration;
     public int framePacing;
     public boolean absoluteMouseMode;
-    public boolean enableAudioFx;
     public boolean enableAAudio;
     public boolean reduceRefreshRate;
     public boolean fullRange;
     public boolean gamepadMotionSensors;
     public boolean gamepadTouchpadAsMouse;
-    public boolean gamepadMotionSensorsFallbackToDevice;
 
+    /** @return true if this resolution matches the device's own panel, rather than a standard mode */
     public static boolean isNativeResolution(int width, int height) {
         // It's not a native resolution if it matches an existing resolution option
         if (width == 640 && height == 360) {
@@ -195,21 +190,16 @@ public class PreferenceConfiguration {
 
     // If we have a screen that has semi-square dimensions, we may want to change our behavior
     // to allow any orientation and vertical+horizontal resolutions.
+    /**
+     * @return true if the display is close enough to square that the usual 16:9 assumptions break,
+     *         which affects the resolution options offered
+     */
     public static boolean isSquarishScreen(int width, int height) {
         float longDim = Math.max(width, height);
         float shortDim = Math.min(width, height);
 
         // We just put the arbitrary cutoff for a square-ish screen at 1.3
         return longDim / shortDim < 1.3f;
-    }
-
-    public static boolean isSquarishScreen(Display display) {
-        int width, height;
-
-        width = display.getMode().getPhysicalWidth();
-        height = display.getMode().getPhysicalHeight();
-
-        return isSquarishScreen(width, height);
     }
 
     private static String convertFromLegacyResolutionString(String resString) {
@@ -263,6 +253,7 @@ public class PreferenceConfiguration {
         }
     }
 
+    /** @return the default bitrate in Kbps for a resolution and frame rate, before user override */
     public static int getDefaultBitrate(String resString, String fpsString) {
         int width = getWidthFromResolutionString(resString);
         int height = getHeightFromResolutionString(resString);
@@ -326,6 +317,7 @@ public class PreferenceConfiguration {
         return (int)Math.round(resolutionFactor * frameRateFactor) * 1000;
     }
 
+    /** @return true if the grid should default to small icons, based on screen size */
     public static boolean getDefaultSmallMode(Context context) {
         PackageManager manager = context.getPackageManager();
         if (manager != null) {
@@ -344,11 +336,35 @@ public class PreferenceConfiguration {
         return context.getResources().getConfiguration().smallestScreenWidthDp < 500;
     }
 
+    /** @return the default bitrate for the settings currently stored for this device */
     public static int getDefaultBitrate(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         return getDefaultBitrate(
                 prefs.getString(RESOLUTION_PREF_STRING, DEFAULT_RESOLUTION),
                 prefs.getString(FPS_PREF_STRING, DEFAULT_FPS));
+    }
+
+    /**
+     * Maps the stored preference value to an {@code ENCFLG_*} mask.
+     *
+     * <p>Split out and static so it can be unit tested: {@link PreferenceConfiguration} itself
+     * needs a {@link Context} and cannot load on a JVM.
+     *
+     * @param value the stored string, or null if the preference has never been written
+     * @return the mask to request, defaulting to audio-only for anything unrecognised
+     */
+    static int getEncryptionFlagsValue(String value) {
+        if (value == null) {
+            value = DEFAULT_ENCRYPTION;
+        }
+
+        return switch (value) {
+            case "none" -> StreamConfiguration.ENCFLG_NONE;
+            case "all" -> StreamConfiguration.ENCFLG_ALL;
+            // "audio", plus anything unrecognised: match the upstream baseline rather than
+            // silently dropping encryption because a value was mistyped.
+            default -> StreamConfiguration.ENCFLG_AUDIO;
+        };
     }
 
     private static FormatOption getVideoFormatValue(Context context) {
@@ -419,6 +435,10 @@ public class PreferenceConfiguration {
         }
     }
 
+    /**
+     * Restores the streaming settings to their defaults, leaving unrelated preferences alone.
+     * Offered as a recovery path when a setting has made streaming fail.
+     */
     public static void resetStreamingSettings(Context context) {
         // We consider resolution, FPS, bitrate, HDR, and video format as "streaming settings" here
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
@@ -435,6 +455,7 @@ public class PreferenceConfiguration {
                 .apply();
     }
 
+    /** @return true on SHIELD firmware versions whose HDR output is broken, where HDR is suppressed */
     public static boolean isShieldAtvFirmwareWithBrokenHdr() {
         // This particular Shield TV firmware crashes when using HDR
         // https://www.nvidia.com/en-us/geforce/forums/notifications/comment/155192/
@@ -442,6 +463,12 @@ public class PreferenceConfiguration {
                 Build.FINGERPRINT.contains("PPR1.180610.011/4079208_2235.1395");
     }
 
+    /**
+     * Reads and normalises every setting, migrating legacy keys and computing device-dependent
+     * defaults on the way.
+     *
+     * @return a snapshot; later preference changes are not reflected in it
+     */
     public static PreferenceConfiguration readPreferences(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
         PreferenceConfiguration config = new PreferenceConfiguration();
@@ -559,19 +586,15 @@ public class PreferenceConfiguration {
         }
 
         config.videoFormat = getVideoFormatValue(context);
+        config.encryptionFlags = getEncryptionFlagsValue(
+                prefs.getString(ENCRYPTION_PREF_STRING, DEFAULT_ENCRYPTION));
         config.framePacing = getFramePacingValue(context);
 
         config.analogStickForScrolling = getAnalogStickForScrollingValue(context);
 
         config.deadzonePercentage = prefs.getInt(DEADZONE_PREF_STRING, DEFAULT_DEADZONE);
-        config.meteredBitrate = prefs.getInt(METERED_BITRATE_PREF_STRING, 0);
-        if (config.meteredBitrate == 0) {
-            // Default to a quarter of the normal bitrate on metered connections
-            config.meteredBitrate = Math.max(500, config.bitrate / 4);
-        }
         config.enforceDisplayMode = prefs.getBoolean(ENFORCE_DISPLAY_MODE_PREF_STRING, DEFAULT_ENFORCE_DISPLAY_MODE);
         config.resumeWithoutConfirm = prefs.getBoolean(RESUME_WITHOUT_CONFIRM_PREF_STRING, DEFAULT_RESUME_WITHOUT_CONFIRM);
-        config.enableCommitText = prefs.getBoolean(ENABLE_COMMIT_TEXT_PREF_STRING, DEFAULT_ENABLE_COMMIT_TEXT);
 
 
 
@@ -602,14 +625,11 @@ public class PreferenceConfiguration {
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
         config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
-        config.enablePip = prefs.getBoolean(ENABLE_PIP_PREF_STRING, DEFAULT_ENABLE_PIP);
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
         config.mouseNavButtons = prefs.getBoolean(MOUSE_NAV_BUTTONS_STRING, DEFAULT_MOUSE_NAV_BUTTONS);
         config.unlockFps = prefs.getBoolean(UNLOCK_FPS_STRING, DEFAULT_UNLOCK_FPS);
-        config.vibrateFallbackToDevice = prefs.getBoolean(VIBRATE_FALLBACK_PREF_STRING, DEFAULT_VIBRATE_FALLBACK);
-        config.vibrateFallbackToDeviceStrength = prefs.getInt(VIBRATE_FALLBACK_STRENGTH_PREF_STRING, DEFAULT_VIBRATE_FALLBACK_STRENGTH);
         config.flipFaceButtons = prefs.getBoolean(FLIP_FACE_BUTTONS_PREF_STRING, DEFAULT_FLIP_FACE_BUTTONS);
         // Migrate the old boolean trackpad preference into the mouse mode list on first run
         String mouseModeValue = prefs.getString(MOUSE_MODE_PREF_STRING, null);
@@ -637,13 +657,11 @@ public class PreferenceConfiguration {
                 config.mouseMode == MouseMode.TRACKPAD;
         config.enableLatencyToast = prefs.getBoolean(LATENCY_TOAST_PREF_STRING, DEFAULT_LATENCY_TOAST);
         config.absoluteMouseMode = prefs.getBoolean(ABSOLUTE_MOUSE_MODE_PREF_STRING, DEFAULT_ABSOLUTE_MOUSE_MODE);
-        config.enableAudioFx = prefs.getBoolean(ENABLE_AUDIO_FX_PREF_STRING, DEFAULT_ENABLE_AUDIO_FX);
         config.enableAAudio = prefs.getBoolean(ENABLE_AAUDIO_PREF_STRING, DEFAULT_ENABLE_AAUDIO);
         config.reduceRefreshRate = prefs.getBoolean(REDUCE_REFRESH_RATE_PREF_STRING, DEFAULT_REDUCE_REFRESH_RATE);
         config.fullRange = prefs.getBoolean(FULL_RANGE_PREF_STRING, DEFAULT_FULL_RANGE);
         config.gamepadTouchpadAsMouse = prefs.getBoolean(GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING, DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE);
         config.gamepadMotionSensors = prefs.getBoolean(GAMEPAD_MOTION_SENSORS_PREF_STRING, DEFAULT_GAMEPAD_MOTION_SENSORS);
-        config.gamepadMotionSensorsFallbackToDevice = prefs.getBoolean(GAMEPAD_MOTION_FALLBACK_PREF_STRING, DEFAULT_GAMEPAD_MOTION_FALLBACK);
 
         return config;
     }

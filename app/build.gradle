@@ -3,6 +3,8 @@ plugins {
 }
 
 android {
+    // Pinned so every build produces identical native binaries; the NDK is not source
+    // compatible across major versions.
     ndkVersion = "29.0.14206865"
 
     compileSdk = 37
@@ -13,6 +15,9 @@ android {
         applicationId = "com.limelight"
 
         minSdk = 30
+        // Deliberately behind compileSdk. API 35 force-enables edge-to-edge and changes
+        // insets handling, which collides with Game's immersive-mode code for no benefit to
+        // a fullscreen streaming client. Lint's OldTargetApi is suppressed in lint.xml.
         targetSdk = 34
 
         versionName = "12.1"
@@ -34,17 +39,22 @@ android {
     }
 
     buildFeatures {
+        // BuildConfig.DEBUG gates verbose diagnostics; resValues supplies the per-build-type app
+        // label. Both are off by default in AGP 8+, so they have to be asked for.
         buildConfig = true
         resValues = true
     }
 
     compileOptions {
+        // Explicit so the build does not depend on the platform default encoding
         encoding = "UTF-8"
         sourceCompatibility = JavaVersion.VERSION_25
         targetCompatibility = JavaVersion.VERSION_25
     }
 
     lint {
+        // Non-English locales were removed from this fork, so every string is 'missing' a
+        // translation by definition.
         disable += 'MissingTranslation'
         lintConfig = file('lint.xml')
     }
@@ -72,10 +82,12 @@ android {
 
     buildTypes {
         debug {
+            // Suffixed so a debug build installs alongside a release one
             applicationIdSuffix = ".debug"
             resValue "string", "app_label", "Moonlight (Debug)"
 
             minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
         release {
@@ -113,10 +125,13 @@ android {
             resValue "string", "app_label", "Moonlight"
 
             minifyEnabled = true
+            shrinkResources = true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
 
+    // ndk-build rather than CMake: the vendored moonlight-common-c, libusb and mbedtls trees all
+    // ship Android.mk files, and converting them would mean maintaining a fork of each.
     externalNativeBuild {
         ndkBuild {
             path = file("src/main/jni/Android.mk")
@@ -131,11 +146,38 @@ java {
     }
 }
 
+// Upstream fixes we depend on that have not merged yet are carried as patches against the
+// native submodules rather than by forking them. They have to land before ndk-build compiles
+// those sources, so this hangs off preBuild. See scripts/apply-native-patches.py for the
+// mechanism, and patches/ for what is currently carried and why.
+//
+// Deliberately has no declared outputs, so it runs every build: the script is idempotent and
+// costs a `git apply --reverse --check`, and a submodule reset between builds has to be
+// noticed rather than skipped as up to date.
+tasks.register('applyNativePatches', Exec) {
+    description = 'Applies carried upstream patches to native submodules.'
+    group = 'build setup'
+
+    workingDir = rootProject.projectDir
+    commandLine 'python3', 'scripts/apply-native-patches.py'
+
+    inputs.files(rootProject.fileTree('patches') { include '**/*.patch' })
+            .withPropertyName('carriedPatches')
+}
+
+tasks.named('preBuild') {
+    dependsOn 'applyNativePatches'
+}
+
 dependencies {
-    implementation 'org.bouncycastle:bcprov-jdk18on:1.85'
+    // BouncyCastle, not the platform crypto: pairing needs certificate generation and signing
+    // primitives that Android's providers do not expose.
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.85.2'
     implementation 'org.bouncycastle:bcpkix-jdk18on:1.85'
+    // jcodec is used only to parse and rewrite H.264 SPS for the decoder bitstream fixups
     implementation 'org.jcodec:jcodec:0.2.5'
     implementation 'com.squareup.okhttp3:okhttp:5.4.0'
+    // Battery and connection state for SHIELD controllers, which Android does not report
     implementation 'com.github.cgutman:ShieldControllerExtensions:1.0.1'
 
     // Android TV UI. Leanback pulls in appcompat, fragment and recyclerview transitively.

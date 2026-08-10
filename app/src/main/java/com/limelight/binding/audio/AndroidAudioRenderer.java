@@ -1,29 +1,36 @@
 package com.limelight.binding.audio;
 
-import android.content.Context;
-import android.content.Intent;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
-import android.media.audiofx.AudioEffect;
 
 import com.limelight.LimeLog;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
 
+/**
+ * Default audio output, backed by {@link AudioTrack}.
+ *
+ * <p>Used for every stream unless the user has opted into the native AAudio path and it is
+ * viable; see {@link LowLatencyAudioRenderer}, which picks between the two.
+ *
+ * <p>Setup is a search rather than a single attempt: buffers smaller than
+ * {@link AudioTrack#getMinBufferSize} and {@code PERFORMANCE_MODE_LOW_LATENCY} both cut latency
+ * but are rejected on some devices, so the four combinations are tried from lowest to highest
+ * latency and the first one that plays wins.
+ *
+ * @see AudioRenderer for the lifecycle and threading contract
+ */
 public class AndroidAudioRenderer implements AudioRenderer {
-
-    private final Context context;
-    private final boolean enableAudioFx;
 
     private AudioTrack track;
 
-    public AndroidAudioRenderer(Context context, boolean enableAudioFx) {
-        this.context = context;
-        this.enableAudioFx = enableAudioFx;
-    }
-
+    /**
+     * @param lowLatency request {@code PERFORMANCE_MODE_LOW_LATENCY}, which the platform may
+     *                   silently decline
+     * @throws RuntimeException if the platform rejects this combination of parameters
+     */
     private AudioTrack createAudioTrack(int channelConfig, int sampleRate, int bufferSize, boolean lowLatency) {
         AudioAttributes.Builder attributesBuilder = new AudioAttributes.Builder()
                 .setUsage(AudioAttributes.USAGE_GAME);
@@ -46,6 +53,12 @@ public class AndroidAudioRenderer implements AudioRenderer {
         return trackBuilder.build();
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Tries the four buffer and performance mode combinations from lowest to highest latency,
+     * keeping the first that the platform accepts.
+     */
     @Override
     public int setup(MoonBridge.AudioConfiguration audioConfiguration, int sampleRate, int samplesPerFrame) {
         int channelConfig;
@@ -75,6 +88,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
         LimeLog.info("Audio channel config: "+String.format("0x%X", channelConfig));
 
+        // 2 bytes per sample, since the format is fixed at 16-bit PCM
         bytesPerFrame = audioConfiguration.channelCount * samplesPerFrame * 2;
 
         // We're not supposed to request less than the minimum
@@ -129,14 +143,10 @@ public class AndroidAudioRenderer implements AudioRenderer {
                     throw new IllegalStateException();
             }
 
+            // The fast mixer only runs at the device's native rate, so asking for low latency
+            // at any other rate silently gets a resampler and none of the benefit
             // Skip low latency options if hardware sample rate doesn't match the content
             if (AudioTrack.getNativeOutputSampleRate(AudioManager.STREAM_MUSIC) != sampleRate && lowLatency) {
-                continue;
-            }
-
-            // Skip low latency options when using audio effects, since low latency mode
-            // precludes the use of the audio effect pipeline (as of Android 13).
-            if (enableAudioFx && lowLatency) {
                 continue;
             }
 
@@ -167,6 +177,14 @@ public class AndroidAudioRenderer implements AudioRenderer {
         return 0;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>{@link AudioTrack#write(short[], int, int)} blocks once the track's buffer is full, so
+     * the pending-duration check above it is what keeps a slow or stalled output from turning
+     * into unbounded latency.
+     */
+
     @Override
     public void playDecodedAudio(short[] audioData) {
         // Only queue up to 40 ms of pending audio data in addition to what AudioTrack is buffering for us.
@@ -183,27 +201,20 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
     @Override
     public void start() {
-        if (enableAudioFx) {
-            // Open an audio effect control session to allow equalizers to apply audio effects
-            Intent i = new Intent(AudioEffect.ACTION_OPEN_AUDIO_EFFECT_CONTROL_SESSION);
-            i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, track.getAudioSessionId());
-            i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.getPackageName());
-            i.putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_GAME);
-            context.sendBroadcast(i);
-        }
+        // Playback is already running: setup() calls AudioTrack.play() on the track it settles on.
     }
 
     @Override
     public void stop() {
-        if (enableAudioFx) {
-            // Close our audio effect control session when we're stopping
-            Intent i = new Intent(AudioEffect.ACTION_CLOSE_AUDIO_EFFECT_CONTROL_SESSION);
-            i.putExtra(AudioEffect.EXTRA_AUDIO_SESSION, track.getAudioSessionId());
-            i.putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.getPackageName());
-            context.sendBroadcast(i);
-        }
+        // Nothing to unwind here; cleanup() releases the track.
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Pauses and flushes before releasing so that buffered audio is discarded rather than
+     * played out after the stream has ended.
+     */
     @Override
     public void cleanup() {
         // Immediately drop all pending data

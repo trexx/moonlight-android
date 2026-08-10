@@ -37,6 +37,20 @@ import com.limelight.nvstream.http.PairingManager;
 import com.limelight.nvstream.input.MouseButtonPacket;
 import com.limelight.nvstream.jni.MoonBridge;
 
+/**
+ * A streaming session: the handshake with the host, and the input channel once it is running.
+ *
+ * <p>Startup is the involved part. It resolves the host address, works out whether this is a local
+ * or remote connection (which changes bitrate and packet size), launches or resumes the app over
+ * HTTPS, and only then hands off to moonlight-common-c, which owns the actual streams.
+ *
+ * <p>Afterwards this is mostly a thin, thread-safe façade over the native input API: the
+ * {@code send*} methods below are called from the UI thread as input arrives and simply forward to
+ * {@link MoonBridge}.
+ *
+ * <p>Only one connection may exist at a time, enforced by a static semaphore — the native library
+ * holds global state, so a second overlapping connection would corrupt the first.
+ */
 public class NvConnection {
     // Context parameters
     private LimelightCryptoProvider cryptoProvider;
@@ -70,6 +84,7 @@ public class NvConnection {
         this.isMonkey = ActivityManager.isUserAMonkey();
     }
     
+    /** @return a fresh AES key for the remote input stream, generated per session */
     private static SecretKey generateRiAesKey() {
         try {
             KeyGenerator keyGen = KeyGenerator.getInstance("AES");
@@ -84,10 +99,12 @@ public class NvConnection {
         }
     }
     
+    /** @return the key ID sent to the host alongside the remote input key */
     private static int generateRiKeyId() {
         return new SecureRandom().nextInt();
     }
 
+    /** Ends the stream and releases the connection slot. Safe to call more than once. */
     public void stop() {
         // Interrupt any pending connection. This is thread-safe.
         MoonBridge.interruptConnection();
@@ -103,6 +120,7 @@ public class NvConnection {
         connectionAllowed.release();
     }
 
+    /** @throws IOException if the host's address can't be resolved, which aborts the connection */
     private InetAddress resolveServerAddress() throws IOException {
         // Try to find an address that works for this host
         InetAddress[] addrs = InetAddress.getAllByName(context.serverAddress.address);
@@ -126,6 +144,11 @@ public class NvConnection {
         }
     }
 
+    /**
+     * @return whether this connection should be treated as local or remote, which the host uses to
+     *         pick its own defaults. Determined from the resolved address rather than trusted from
+     *         configuration, since a host saved by hostname can be either.
+     */
     private int detectServerConnectionType() {
         ConnectivityManager connMgr = (ConnectivityManager) appContext.getSystemService(Context.CONNECTIVITY_SERVICE);
         Network activeNetwork = connMgr.getActiveNetwork();
@@ -191,6 +214,15 @@ public class NvConnection {
         return StreamConfiguration.STREAM_CFG_AUTO;
     }
     
+    /**
+     * Launches or resumes the requested app on the host and negotiates the session.
+     *
+     * <p>Resume and launch are distinct host operations: if the requested app is already running
+     * it is resumed, a different running app has to be quit first, and only then can a new one be
+     * launched.
+     *
+     * @return true if the app is running and the stream may begin
+     */
     private boolean startApp() throws XmlPullParserException, IOException
     {
         NvHTTP h = new NvHTTP(context.serverAddress, context.httpsPort, uniqueId, context.serverCert, cryptoProvider);
@@ -300,6 +332,7 @@ public class NvConnection {
         }
     }
 
+    /** Quits whatever the host is running, then launches the requested app in its place. */
     protected boolean quitAndLaunch(NvHTTP h, ConnectionContext context) throws IOException,
             XmlPullParserException {
         try {
@@ -322,6 +355,7 @@ public class NvConnection {
         return launchNotRunningApp(h, context);
     }
     
+    /** Launches an app on a host that currently has nothing running. */
     private boolean launchNotRunningApp(NvHTTP h, ConnectionContext context)
             throws IOException, XmlPullParserException {
         // Launch the app since it's not running
@@ -335,6 +369,12 @@ public class NvConnection {
         return true;
     }
 
+    /**
+     * Starts the connection on a background thread, reporting progress through the listener.
+     *
+     * <p>Returns immediately; success or failure arrives as
+     * {@link NvConnectionListener#connectionStarted()} or a stage failure.
+     */
     public void start(final AudioRenderer audioRenderer, final VideoDecoderRenderer videoDecoderRenderer, final NvConnectionListener connectionListener)
     {
         new Thread(new Runnable() {
@@ -413,7 +453,8 @@ public class NvConnection {
                             context.riKey.getEncoded(), ib.array(),
                             context.videoCapabilities,
                             context.streamConfig.getColorSpace(),
-                            context.streamConfig.getColorRange());
+                            context.streamConfig.getColorRange(),
+                            context.streamConfig.getEncryptionFlags());
                     if (ret != 0) {
                         // LiStartConnection() failed, so the caller is not expected
                         // to stop the connection themselves. We need to release their
@@ -426,6 +467,7 @@ public class NvConnection {
         }).start();
     }
     
+    /** Sends relative mouse movement in host pixels. */
     public void sendMouseMove(final short deltaX, final short deltaY)
     {
         if (!isMonkey) {
@@ -433,6 +475,13 @@ public class NvConnection {
         }
     }
 
+    /**
+     * Sends an absolute cursor position.
+     *
+     * @param referenceWidth  width of the coordinate space x is expressed in, so the host can
+     *                        rescale to its own resolution
+     * @param referenceHeight height of that coordinate space
+     */
     public void sendMousePosition(short x, short y, short referenceWidth, short referenceHeight)
     {
         if (!isMonkey) {
@@ -440,6 +489,7 @@ public class NvConnection {
         }
     }
 
+    /** Sends relative movement as an absolute position, for hosts that handle relative input poorly. */
     public void sendMouseMoveAsMousePosition(short deltaX, short deltaY, short referenceWidth, short referenceHeight)
     {
         if (!isMonkey) {
@@ -447,6 +497,7 @@ public class NvConnection {
         }
     }
 
+    /** @param mouseButton a {@code MouseButtonPacket.BUTTON_*} constant */
     public void sendMouseButtonDown(final byte mouseButton)
     {
         if (!isMonkey) {
@@ -454,6 +505,7 @@ public class NvConnection {
         }
     }
     
+    /** @param mouseButton a {@code MouseButtonPacket.BUTTON_*} constant */
     public void sendMouseButtonUp(final byte mouseButton)
     {
         if (!isMonkey) {
@@ -461,6 +513,7 @@ public class NvConnection {
         }
     }
     
+    /** Sends one controller's complete state. State is absolute, not incremental. */
     public void sendControllerInput(final short controllerNumber,
             final short activeGamepadMask, final int buttonFlags,
             final byte leftTrigger, final byte rightTrigger,
@@ -473,30 +526,39 @@ public class NvConnection {
         }
     }
 
+    /**
+     * @param keyMap       wire keycode from {@code KeyboardTranslator}, prefix already applied
+     * @param keyDirection {@code KeyboardPacket.KEY_DOWN} or {@code KEY_UP}
+     * @param modifier     modifier bitfield in effect for this keystroke
+     */
     public void sendKeyboardInput(final short keyMap, final byte keyDirection, final byte modifier, final byte flags) {
         if (!isMonkey) {
             MoonBridge.sendKeyboardInput(keyMap, keyDirection, modifier, flags);
         }
     }
     
+    /** Sends vertical scrolling in whole wheel clicks. */
     public void sendMouseScroll(final byte scrollClicks) {
         if (!isMonkey) {
             MoonBridge.sendMouseHighResScroll((short)(scrollClicks * 120)); // WHEEL_DELTA
         }
     }
 
+    /** Sends horizontal scrolling in whole wheel clicks. */
     public void sendMouseHScroll(final byte scrollClicks) {
         if (!isMonkey) {
             MoonBridge.sendMouseHighResHScroll((short)(scrollClicks * 120)); // WHEEL_DELTA
         }
     }
 
+    /** Sends vertical scrolling at sub-click resolution, for smooth touch scrolling. */
     public void sendMouseHighResScroll(final short scrollAmount) {
         if (!isMonkey) {
             MoonBridge.sendMouseHighResScroll(scrollAmount);
         }
     }
 
+    /** Sends horizontal scrolling at sub-click resolution. */
     public void sendMouseHighResHScroll(final short scrollAmount) {
         if (!isMonkey) {
             MoonBridge.sendMouseHighResHScroll(scrollAmount);
@@ -551,10 +613,15 @@ public class NvConnection {
         }
     }
 
+    /** Reports a controller's battery state, so the host can display it. */
     public void sendControllerBatteryEvent(byte controllerNumber, byte batteryState, byte batteryPercentage) {
         MoonBridge.sendControllerBatteryEvent(controllerNumber, batteryState, batteryPercentage);
     }
 
+    /**
+     * Sends text directly, bypassing keycodes entirely. Used for soft keyboard input, where the
+     * characters produced don't necessarily correspond to any key the host would recognise.
+     */
     public void sendUtf8Text(final String text) {
         if (!isMonkey) {
             MoonBridge.sendUtf8Text(text);

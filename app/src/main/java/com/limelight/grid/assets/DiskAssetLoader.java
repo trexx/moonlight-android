@@ -12,6 +12,13 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
+/**
+ * On-disk box art cache, in the app's cache directory keyed by host UUID and app ID.
+ *
+ * <p>The middle cache tier, and the one the Android TV launcher reads through
+ * {@link com.limelight.PosterContentProvider}. Decoding is done with a sample size, so a large
+ * image on disk costs only the memory the grid cell needs.
+ */
 public class DiskAssetLoader {
     // 5 MB
     private static final long MAX_ASSET_SIZE = 5 * 1024 * 1024;
@@ -23,16 +30,22 @@ public class DiskAssetLoader {
     private final boolean isLowRamDevice;
     private final File cacheDir;
 
+    /** @param context supplies the cache directory the assets live in */
     public DiskAssetLoader(Context context) {
         this.cacheDir = context.getCacheDir();
         this.isLowRamDevice =
                 ((ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE)).isLowRamDevice();
     }
 
+    /** @return true if this asset is on disk, without decoding it */
     public boolean checkCacheExists(CachedAppAssetLoader.LoaderTuple tuple) {
         return CacheHelper.cacheFileExists(cacheDir, "boxart", tuple.computer.uuid, tuple.app.getAppId() + ".png");
     }
 
+    /**
+     * @param sampleSize downsampling factor, a power of two, applied while decoding
+     * @return the decoded bitmap, or null if it isn't cached or the file is corrupt
+     */
     public ScaledBitmap loadBitmapFromCache(CachedAppAssetLoader.LoaderTuple tuple, int sampleSize) {
         File file = getFile(tuple.computer.uuid, tuple.app.getAppId());
 
@@ -69,10 +82,12 @@ public class DiskAssetLoader {
         }
     }
 
+    /** @return the cache file for this asset, which may not exist */
     public File getFile(String computerUuid, int appId) {
         return CacheHelper.openPath(false, cacheDir, "boxart", computerUuid, appId + ".png");
     }
 
+    /** Deletes all cached art for a host, when that host is removed. */
     public void deleteAssetsForComputer(String computerUuid) {
         File dir = CacheHelper.openPath(false, cacheDir, "boxart", computerUuid);
         File[] files = dir.listFiles();
@@ -83,6 +98,10 @@ public class DiskAssetLoader {
         }
     }
 
+    /**
+     * Writes a freshly downloaded asset to the cache, via a temporary file so that an interrupted
+     * write cannot leave a truncated image behind for the next load to find.
+     */
     public void populateCacheWithStream(CachedAppAssetLoader.LoaderTuple tuple, InputStream input) {
         boolean success = false;
         try (final OutputStream out = CacheHelper.openCacheFileForOutput(

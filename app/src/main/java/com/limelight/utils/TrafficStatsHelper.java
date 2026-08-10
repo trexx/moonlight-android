@@ -43,10 +43,12 @@ public class TrafficStatsHelper {
         lastSampleTimeMs = nowMs;
     }
 
+    /** @return receive throughput in KB/s over the last sampling window */
     public float getRxKBps() {
         return lastRxKBps;
     }
 
+    /** @return transmit throughput in KB/s over the last sampling window */
     public float getTxKBps() {
         return lastTxKBps;
     }

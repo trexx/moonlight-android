@@ -1,6 +1,5 @@
 package com.limelight.binding.audio;
 
-import android.content.Context;
 import android.os.Build;
 
 import com.limelight.LimeLog;
@@ -16,8 +15,6 @@ import com.limelight.nvstream.jni.MoonBridge;
  */
 public class LowLatencyAudioRenderer implements AudioRenderer {
 
-    private final Context context;
-    private final boolean enableAudioFx;
     private final boolean enableAAudio;
 
     private AudioRenderer renderer;
@@ -28,22 +25,17 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     private int sampleRate;
     private int samplesPerFrame;
 
-    public LowLatencyAudioRenderer(Context context, boolean enableAudioFx, boolean enableAAudio) {
-        this.context = context;
-        this.enableAudioFx = enableAudioFx;
+    /**
+     * @param enableAAudio user opt-in. AAudio is never used without it, since the AudioTrack
+     *                     path is the better-tested one on most devices.
+     */
+    public LowLatencyAudioRenderer(boolean enableAAudio) {
         this.enableAAudio = enableAAudio;
     }
 
+    /** @return true if every precondition for the AAudio path holds for this stream */
     private boolean shouldTryAAudio(MoonBridge.AudioConfiguration audioConfiguration) {
         if (!enableAAudio) {
-            return false;
-        }
-
-        // The low latency path is incompatible with the audio effects pipeline, and the effect
-        // control session we open in start()/stop() is keyed on an AudioTrack session ID that
-        // AAudio has no equivalent for.
-        if (enableAudioFx) {
-            LimeLog.info("Not using AAudio because audio effects are enabled");
             return false;
         }
 
@@ -58,6 +50,13 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         return true;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Picks the backing renderer. AAudio is attempted first when eligible; anything short of
+     * a working stream falls through to {@link AndroidAudioRenderer}, whose result is returned
+     * as this renderer's own.
+     */
     @Override
     public int setup(MoonBridge.AudioConfiguration audioConfiguration, int sampleRate, int samplesPerFrame) {
         this.audioConfiguration = audioConfiguration;
@@ -77,10 +76,16 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
             candidate.cleanup();
         }
 
-        renderer = new AndroidAudioRenderer(context, enableAudioFx);
+        renderer = new AndroidAudioRenderer();
         return renderer.setup(audioConfiguration, sampleRate, samplesPerFrame);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Also where a dead AAudio stream is noticed and swapped out, since this is the only
+     * method called often enough to detect it promptly.
+     */
     @Override
     public void playDecodedAudio(short[] audioData) {
         // A route change we couldn't recover from leaves the AAudio stream unusable. Rather than
@@ -90,7 +95,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
             aaudioRenderer.cleanup();
             aaudioRenderer = null;
 
-            AudioRenderer fallback = new AndroidAudioRenderer(context, enableAudioFx);
+            AudioRenderer fallback = new AndroidAudioRenderer();
             if (fallback.setup(audioConfiguration, sampleRate, samplesPerFrame) != 0) {
                 LimeLog.severe("Unable to start AudioTrack fallback");
                 renderer = null;
@@ -106,6 +111,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
+    /** {@inheritDoc} Forwarded to whichever renderer {@link #setup} selected. */
     @Override
     public void start() {
         if (renderer != null) {
@@ -113,6 +119,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
+    /** {@inheritDoc} Forwarded to whichever renderer is currently active. */
     @Override
     public void stop() {
         if (renderer != null) {
@@ -120,6 +127,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
+    /** {@inheritDoc} Releases the active renderer, whichever one the session ended up on. */
     @Override
     public void cleanup() {
         if (renderer != null) {

@@ -1,6 +1,5 @@
 package com.limelight.preferences;
 
-import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
@@ -31,11 +30,22 @@ import android.view.ViewGroup;
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.binding.video.MediaCodecHelper;
+import com.limelight.nvstream.jni.MoonBridge;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.UiHelper;
 
 import java.util.Arrays;
 
+/**
+ * The settings screen.
+ *
+ * <p>Most of the logic here is making the options reflect the device: resolution and frame rate
+ * lists are filtered to what the display and decoders can actually do, and options whose hardware
+ * support is missing are removed rather than shown and ignored.
+ *
+ * <p>Some changes require rebuilding the whole preference tree, which is why the fragment is
+ * recreated rather than updated in place after those.
+ */
 public class StreamSettings extends FragmentActivity {
     private PreferenceConfiguration previousPrefs;
     private int previousDisplayPixelCount;
@@ -67,6 +77,7 @@ public class StreamSettings extends FragmentActivity {
         ).commitAllowingStateLoss();
     }
 
+    /** {@inheritDoc} Builds the preference tree, filtered to the device's real capabilities. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -79,6 +90,7 @@ public class StreamSettings extends FragmentActivity {
         UiHelper.notifyNewRootView(this);
     }
 
+    /** {@inheritDoc} */
     @Override
     public void onAttachedToWindow() {
         super.onAttachedToWindow();
@@ -86,6 +98,7 @@ public class StreamSettings extends FragmentActivity {
         reloadSettings();
     }
 
+    /** {@inheritDoc} */
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
@@ -104,10 +117,12 @@ public class StreamSettings extends FragmentActivity {
 
     @Override
     // NOTE: This will NOT be called on Android 13+ with android:enableOnBackInvokedCallback="true"
+    /** {@inheritDoc} Applies pending changes before leaving. */
     public void onBackPressed() {
         finish();
     }
 
+    /** Builds the preference tree and filters it against the device's real capabilities. */
     public static class SettingsFragment extends LeanbackPreferenceFragmentCompat {
         private int nativeResolutionStartIndex = Integer.MAX_VALUE;
         private boolean nativeFramerateShown = false;
@@ -262,6 +277,17 @@ public class StreamSettings extends FragmentActivity {
             setPreferencesFromResource(R.xml.preferences, rootKey);
             PreferenceScreen screen = getPreferenceScreen();
 
+            // Warn that encrypting video will be done in software on this device. The setting
+            // stays available - a user who wants it can have it and pay for it - so this appends
+            // to the summary rather than removing or disabling the preference.
+            if (!MoonBridge.hasFastAes()) {
+                Preference encryptionPref = findPreference(PreferenceConfiguration.ENCRYPTION_PREF_STRING);
+                if (encryptionPref != null) {
+                    encryptionPref.setSummary(getString(R.string.summary_encryption)
+                            + getString(R.string.summary_encryption_no_aes_warning));
+                }
+            }
+
             // Hide remote desktop mouse mode on NVIDIA SHIELD devices
             // (which support raw mouse input in pointer capture mode)
             if (getActivity().getPackageManager().hasSystemFeature("com.nvidia.feature.shield")) {
@@ -278,47 +304,12 @@ public class StreamSettings extends FragmentActivity {
                 category.removePreference(findPreference("checkbox_gamepad_motion_sensors"));
             }
 
-            // Hide gamepad motion sensor fallback option if the device has no gyro or accelerometer
-            if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_SENSOR_ACCELEROMETER) &&
-                    !getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_SENSOR_GYROSCOPE)) {
-                PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_gamepad_settings");
-                category.removePreference(findPreference("checkbox_gamepad_motion_fallback"));
-            }
-
             // Hide USB driver options on devices without USB host support
             if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST)) {
                 PreferenceCategory category =
                         (PreferenceCategory) findPreference("category_gamepad_settings");
                 category.removePreference(findPreference("checkbox_usb_bind_all"));
                 category.removePreference(findPreference("checkbox_usb_driver"));
-            }
-
-            // Remove PiP mode on devices where the feature is not available (some low RAM devices),
-            // and on Fire OS where it violates the Amazon App Store guidelines for some reason.
-            if (!getActivity().getPackageManager().hasSystemFeature("android.software.picture_in_picture") ||
-                    getActivity().getPackageManager().hasSystemFeature("com.amazon.software.fireos")) {
-                PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_ui_settings");
-                category.removePreference(findPreference("checkbox_enable_pip"));
-            }
-
-            // Fire TV apps are not allowed to use WebViews or browsers, so hide the Help category
-            /*if (getActivity().getPackageManager().hasSystemFeature("amazon.hardware.fire_tv")) {
-                PreferenceCategory category =
-                        (PreferenceCategory) findPreference("category_help");
-                screen.removePreference(category);
-            }*/
-            PreferenceCategory category_gamepad_settings =
-                    (PreferenceCategory) findPreference("category_gamepad_settings");
-            // Remove the vibration options if the device can't vibrate
-            if (!((Vibrator)getActivity().getSystemService(Context.VIBRATOR_SERVICE)).hasVibrator()) {
-                category_gamepad_settings.removePreference(findPreference("checkbox_vibrate_fallback"));
-                category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
-            }
-            else if (!((Vibrator)getActivity().getSystemService(Context.VIBRATOR_SERVICE)).hasAmplitudeControl()) {
-                // Remove the vibration strength selector of the device doesn't have amplitude control
-                category_gamepad_settings.removePreference(findPreference("seekbar_vibrate_fallback_strength"));
             }
 
             Display display = getActivityDisplay(getActivity());

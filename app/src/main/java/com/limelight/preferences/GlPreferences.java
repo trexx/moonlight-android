@@ -4,6 +4,12 @@ package com.limelight.preferences;
 import android.content.Context;
 import android.content.SharedPreferences;
 
+/**
+ * Caches the GL renderer string across launches.
+ *
+ * <p>Reading it requires creating a GL context, which is slow enough to be worth avoiding on every
+ * launch — and {@code MediaCodecHelper} needs it during startup to identify the GPU.
+ */
 public class GlPreferences {
     private static final String PREF_NAME = "GlPreferences";
 
@@ -18,6 +24,7 @@ public class GlPreferences {
         this.prefs = prefs;
     }
 
+    /** @return the cached renderer string, which is empty until it has been read and written once */
     public static GlPreferences readPreferences(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREF_NAME, 0);
         GlPreferences glPrefs = new GlPreferences(prefs);
@@ -28,6 +35,7 @@ public class GlPreferences {
         return glPrefs;
     }
 
+    /** Persists the renderer string for subsequent launches. @return true if written */
     public boolean writePreferences() {
         return prefs.edit()
                 .putString(GL_RENDERER_PREF_STRING, glRenderer)

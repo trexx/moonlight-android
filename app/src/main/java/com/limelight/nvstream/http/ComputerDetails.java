@@ -4,11 +4,22 @@ import java.security.cert.X509Certificate;
 import java.util.Objects;
 
 
+/**
+ * Everything known about one host: its addresses, identity, pairing state and what it is running.
+ *
+ * <p>A host can be reachable at several addresses at once — local, remote, IPv6, and a manually
+ * entered one — which is why the addresses are a set of {@link AddressTuple}s rather than a single
+ * value. The polling service tries them in parallel and records which one worked.
+ *
+ * <p>Mutable and updated in place by the polling service via {@link #update}, so the grid and the
+ * database observe the same instance.
+ */
 public class ComputerDetails {
     public enum State {
         ONLINE, OFFLINE, UNKNOWN
     }
 
+    /** One address and port a host may be reachable at. */
     public static class AddressTuple {
         public String address;
         public int port;
@@ -73,16 +84,22 @@ public class ComputerDetails {
     public int runningGameId;
     public String rawAppList;
 
+    /** Creates an empty host, to be filled in by a poll. */
     public ComputerDetails() {
         // Use defaults
         state = State.UNKNOWN;
     }
 
+    /** Copy constructor, used to snapshot a host without holding the live instance. */
     public ComputerDetails(ComputerDetails details) {
         // Copy details from the other computer
         update(details);
     }
 
+    /**
+     * Merges a freshly polled snapshot into this instance, preserving fields the poll didn't
+     * populate — a poll that reached the host over one address must not erase the others.
+     */
     public void update(ComputerDetails details) {
         this.state = details.state;
         this.name = details.name;
@@ -109,6 +126,7 @@ public class ComputerDetails {
         this.rawAppList = details.rawAppList;
     }
 
+    /** @return a diagnostic summary of the host's addresses and state */
     @Override
     public String toString() {
         StringBuilder str = new StringBuilder();

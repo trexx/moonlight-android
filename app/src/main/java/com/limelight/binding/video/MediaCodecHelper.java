@@ -24,8 +24,24 @@ import android.os.Build;
 
 import com.limelight.LimeLog;
 
+/**
+ * Device and decoder quirk database.
+ *
+ * <p>{@link MediaCodecInfo} describes what a decoder claims to support, which is often not what it
+ * actually does: decoders that report capabilities they cannot deliver, hang under load, or need
+ * the bitstream doctored before they will accept it. This class holds the accumulated knowledge
+ * about which ones, keyed by decoder name prefix (the vendor prefix is the only stable identifier
+ * across the many devices sharing a codec implementation).
+ *
+ * <p>The lists are populated in static initialisers and never change. {@link #initialize} adds the
+ * facts that need a {@link Context} — SoC identification and GPU model — and must be called before
+ * the query methods return meaningful answers.
+ *
+ * <p>Entries here are empirical. Each one traces back to a device that misbehaved, so removing one
+ * without a device to test on is how regressions get reintroduced.
+ */
 public class MediaCodecHelper {
-    
+
     private static final List<String> preferredDecoders;
 
     private static final List<String> blacklistedDecoderPrefixes;
@@ -42,6 +58,7 @@ public class MediaCodecHelper {
     private static final List<String> kirinDecoderPrefixes;
     private static final List<String> exynosDecoderPrefixes;
     private static final List<String> amlogicDecoderPrefixes;
+    private static final List<String> amlogicCodec2DecoderPrefixes;
     private static final List<String> knownVendorLowLatencyOptions;
 
     public static final boolean SHOULD_BYPASS_SOFTWARE_BLOCK =
@@ -50,6 +67,9 @@ public class MediaCodecHelper {
     private static boolean isLowEndSnapdragon = false;
     private static boolean isAdreno620 = false;
     private static boolean isAmlogicRfiSafe = false;
+    // Whether this Amlogic platform's HEVC decoder can be trusted at all. Fire OS is confirmed
+    // working; the newer Codec2 parts wedge mid-stream. See isKnownBrokenHevcDecoder().
+    private static boolean isAmlogicHevcTrusted = false;
     private static boolean initialized = false;
 
     static {
@@ -240,14 +260,20 @@ public class MediaCodecHelper {
 
         amlogicDecoderPrefixes.add("omx.amlogic");
         amlogicDecoderPrefixes.add("c2.amlogic"); // Unconfirmed
+
+        // The Codec2 subset, which behaves differently to the older OMX decoders on the same
+        // silicon. See isKnownBrokenHevcDecoder().
+        amlogicCodec2DecoderPrefixes = new LinkedList<>();
+
+        amlogicCodec2DecoderPrefixes.add("c2.amlogic");
     }
 
     private static boolean isPowerVR(String glRenderer) {
-        return glRenderer.toLowerCase().contains("powervr");
+        return glRenderer.toLowerCase(Locale.ROOT).contains("powervr");
     }
 
     private static String getAdrenoVersionString(String glRenderer) {
-        glRenderer = glRenderer.toLowerCase().trim();
+        glRenderer = glRenderer.toLowerCase(Locale.ROOT).trim();
 
         if (!glRenderer.contains("adreno")) {
             return null;
@@ -295,6 +321,14 @@ public class MediaCodecHelper {
         return getAdrenoRendererModelNumber(glRenderer) >= 400;
     }
 
+    /**
+     * Adds the quirks that can only be determined at runtime: SoC and GPU identification, and
+     * device-family whitelists. Idempotent, and must be called before the query methods are
+     * trusted.
+     *
+     * @param glRenderer the GL renderer string, used to identify the GPU and hence the SoC where
+     *                   {@code Build} properties are not specific enough
+     */
     public static void initialize(Context context, String glRenderer) {
         if (initialized) {
             return;
@@ -335,6 +369,10 @@ public class MediaCodecHelper {
             // record that here. Other Amlogic devices are excluded in
             // decoderSupportsRefFrameInvalidationHevc() below.
             isAmlogicRfiSafe = true;
+
+            // Fire OS is also the only Amlogic platform whose HEVC decoder is confirmed not to
+            // wedge mid-stream, so it is the one exception to isKnownBrokenHevcDecoder().
+            isAmlogicHevcTrusted = true;
         }
 
         ActivityManager activityManager =
@@ -483,6 +521,43 @@ public class MediaCodecHelper {
                 !isAdreno620;
     }
 
+    /**
+     * @return true if this HEVC decoder is known to wedge mid-stream and must never be used,
+     *         whatever else would otherwise justify HEVC
+     *
+     * <p>The Amlogic Codec2 HEVC decoders advertise low latency support, accept every option
+     * without complaint, and decode correctly for anywhere from seconds to many minutes. Then the
+     * V4L2 accelerator raises an error event and the component starts silently discarding every
+     * input buffer it is handed. It never recovers and it never reports a {@code CodecException},
+     * so the picture freezes while the client happily submits 60 frames a second into nothing.
+     * Captured on the Homatics Box R 4K Plus (S905X4, Android 14): 3,442 consecutive discarded
+     * frames over 57 seconds, with audio and input still running.
+     *
+     * <p>Reported across the S905X4/S905X5M boxes in moonlight-stream/moonlight-android#1504,
+     * where the same hardware worked under the old OMX decoders on Android 11 and broke when the
+     * vendor moved to Codec2. Disabling the low latency options makes it survive longer at roughly
+     * double the decode latency, but it is still the same faulty decoder, so we refuse it instead.
+     *
+     * <p>Deliberately scoped to {@code c2.amlogic}: {@code omx.amlogic} is the Fire OS path, which
+     * is separately confirmed working and is excluded by {@link #isAmlogicHevcTrusted} anyway.
+     */
+    public static boolean isKnownBrokenHevcDecoder(MediaCodecInfo decoderInfo) {
+        return !isAmlogicHevcTrusted &&
+                isDecoderInList(amlogicCodec2DecoderPrefixes, decoderInfo.getName());
+    }
+
+    /**
+     * Applies low latency decoder options to a format, one escalation step at a time.
+     *
+     * <p>There is no way to ask whether a vendor option is accepted other than to configure the
+     * codec and see, so the caller loops: call this with an increasing {@code tryNumber}, attempt
+     * to configure, and try again if it fails. Options are ordered most to least aggressive, so
+     * the first configuration that succeeds is the lowest latency one the decoder will take.
+     *
+     * @param tryNumber attempt counter, starting at 0
+     * @return true if this attempt set options the previous one didn't. False means the options
+     *         are exhausted and a configuration failure now is a real failure.
+     */
     public static boolean setDecoderLowLatencyOptions(MediaFormat videoFormat, MediaCodecInfo decoderInfo, int tryNumber) {
         // Options here should be tried in the order of most to least risky. The decoder will use
         // the first MediaFormat that doesn't fail in configure().
@@ -582,6 +657,10 @@ public class MediaCodecHelper {
         return setNewOption;
     }
 
+    /**
+     * @return true if new codec-specific data can be submitted in the same buffer as the keyframe
+     *         that follows it, saving a round trip through the codec on every IDR frame
+     */
     public static boolean decoderSupportsFusedIdrFrame(MediaCodecInfo decoderInfo, String mimeType) {
         // If adaptive playback is supported, we can submit new CSD together with a keyframe
         try {
@@ -598,6 +677,11 @@ public class MediaCodecHelper {
         return false;
     }
 
+    /**
+     * @return true if the decoder can change resolution mid-stream without being reconfigured.
+     *         Blacklist-checked first, because some decoders advertise the feature and then fail
+     *         when a resolution change actually arrives.
+     */
     public static boolean decoderSupportsAdaptivePlayback(MediaCodecInfo decoderInfo, String mimeType) {
         if (isDecoderInList(blacklistedAdaptivePlaybackPrefixes, decoderInfo.getName())) {
             LimeLog.info("Decoder blacklisted for adaptive playback");
@@ -620,22 +704,45 @@ public class MediaCodecHelper {
         return false;
     }
 
+    /**
+     * @return true if the SPS should advertise Constrained High Profile, which tells the decoder
+     *         not to buffer for B-frames that this stream never contains
+     */
     public static boolean decoderNeedsConstrainedHighProfile(String decoderName) {
         return isDecoderInList(constrainedHighProfilePrefixes, decoderName);
     }
 
+    /**
+     * @return true if decode units can be submitted straight from the network receive thread,
+     *         skipping a thread hop. Only safe on decoders whose input buffer latency is low
+     *         enough that blocking the receive thread doesn't cost packet loss.
+     */
     public static boolean decoderCanDirectSubmit(String decoderName) {
         return isDecoderInList(directSubmitPrefixes, decoderName) && !isExynos4Device();
     }
-    
+
+    /**
+     * @return true if the SPS must be rewritten with explicit bitstream restrictions. Without
+     *         them these decoders buffer frames for reordering that will never come, adding
+     *         latency the stream doesn't need.
+     */
     public static boolean decoderNeedsSpsBitstreamRestrictions(String decoderName) {
         return isDecoderInList(spsFixupBitstreamFixupDecoderPrefixes, decoderName);
     }
 
+    /**
+     * @return true if the decoder rejects a High profile SPS at configuration time and must be
+     *         configured with a baseline SPS, then given the real one once running
+     */
     public static boolean decoderNeedsBaselineSpsHack(String decoderName) {
         return isDecoderInList(baselineProfileHackPrefixes, decoderName);
     }
 
+    /**
+     * @return how many slices per frame to ask the host to encode. More slices let the decoder
+     *         start work sooner at a small cost in compression efficiency, which is worth it only
+     *         on decoders slow enough to benefit.
+     */
     public static byte getDecoderOptimalSlicesPerFrame(String decoderName) {
         if (isDecoderInList(useFourSlicesPrefixes, decoderName)) {
             // 4 slices per frame reduces decoding latency on older Qualcomm devices
@@ -647,6 +754,14 @@ public class MediaCodecHelper {
         }
     }
 
+    /**
+     * Reference frame invalidation lets the host recover from packet loss by referencing an older
+     * intact frame instead of sending a full IDR frame, which is far cheaper and far less visible.
+     * It only works if the decoder handles the resulting reference structure correctly.
+     *
+     * @param videoHeight stream height, since the feature is broken above 720p on some SoCs
+     * @return true if RFI can be enabled for H.264 on this decoder
+     */
     public static boolean decoderSupportsRefFrameInvalidationAvc(String decoderName, int videoHeight) {
         // Reference frame invalidation is broken on low-end Snapdragon SoCs at 1080p.
         if (videoHeight > 720 && isLowEndSnapdragon) {
@@ -662,6 +777,12 @@ public class MediaCodecHelper {
         return isDecoderInList(refFrameInvalidationAvcPrefixes, decoderName);
     }
 
+    /**
+     * @return true if RFI can be enabled for HEVC. Nearly all HEVC decoders implement it, so the
+     *         question here is latency rather than correctness: low latency support is used as a
+     *         proxy for a decoder that won't buffer excessively once there are multiple reference
+     *         frames in play.
+     */
     public static boolean decoderSupportsRefFrameInvalidationHevc(MediaCodecInfo decoderInfo) {
         // HEVC decoders seem to universally support RFI, but it can have huge latency penalties
         // for some decoders due to the number of references frames being > 1. Old Amlogic
@@ -692,6 +813,7 @@ public class MediaCodecHelper {
         return isDecoderInList(refFrameInvalidationHevcPrefixes, decoderInfo.getName());
     }
 
+    /** @return true if RFI can be enabled for AV1 on this decoder */
     public static boolean decoderSupportsRefFrameInvalidationAv1(MediaCodecInfo decoderInfo) {
         // We'll use the same heuristics as HEVC for now
         if (decoderSupportsAndroidRLowLatency(decoderInfo, "video/av01") ||
@@ -703,6 +825,11 @@ public class MediaCodecHelper {
         return false;
     }
 
+    /**
+     * @return true if this HEVC decoder is trusted for streaming. A decoder qualifies by media
+     *         performance class, by advertising {@code FEATURE_LowLatency}, or by being on the
+     *         known-good list — otherwise H.264 on known-good hardware is the safer choice.
+     */
     public static boolean decoderIsWhitelistedForHevc(MediaCodecInfo decoderInfo) {
         //
         // Software decoders are terrible and we never want to use them.
@@ -742,6 +869,7 @@ public class MediaCodecHelper {
         return isDecoderInList(whitelistedHevcDecoders, decoderInfo.getName());
     }
 
+    /** @return true if this AV1 decoder is trusted for streaming; see {@link #decoderIsWhitelistedForHevc} */
     public static boolean isDecoderWhitelistedForAv1(MediaCodecInfo decoderInfo) {
         //
         // Software decoders are terrible and we never want to use them.
@@ -773,6 +901,11 @@ public class MediaCodecHelper {
         return infoList;
     }
     
+    /**
+     * @return a listing of every decoder on the device with its supported types, profiles and
+     *         levels. Diagnostic aid for adding entries to the quirk lists above; not called in
+     *         normal operation.
+     */
     @SuppressWarnings("RedundantThrows")
     public static String dumpDecoders() throws Exception {
         String str = "";
@@ -838,6 +971,11 @@ public class MediaCodecHelper {
         return false;
     }
     
+    /**
+     * @return the platform's first non-blacklisted decoder for this MIME type, or null. The last
+     *         resort when capability queries can't be trusted; {@link #findProbableSafeDecoder}
+     *         is what callers should normally use.
+     */
     public static MediaCodecInfo findFirstDecoder(String mimeType) {
         for (MediaCodecInfo codecInfo : getMediaCodecList()) {
             // Skip encoders
@@ -867,6 +1005,14 @@ public class MediaCodecHelper {
         return null;
     }
     
+    /**
+     * Picks the best decoder for a codec, in decreasing order of confidence: a decoder named in
+     * the preferred list, then one whose advertised capabilities check out, then simply the first
+     * one available if the capability queries themselves throw — which they do on some devices.
+     *
+     * @param requiredProfile a {@link CodecProfileLevel} profile constant, or -1 for any
+     * @return the chosen decoder, or null if there is none
+     */
     public static MediaCodecInfo findProbableSafeDecoder(String mimeType, int requiredProfile) {
         // First look for a preferred decoder by name
         MediaCodecInfo info = findPreferredDecoder();
@@ -948,6 +1094,11 @@ public class MediaCodecHelper {
         return null;
     }
     
+    /**
+     * @return the contents of {@code /proc/cpuinfo}
+     * @throws Exception if it can't be read, which is increasingly common as the file gets locked
+     *                   down on newer Android versions
+     */
     public static String readCpuinfo() throws Exception {
         StringBuilder cpuInfo = new StringBuilder();
         try (final BufferedReader br = new BufferedReader(new FileReader(new File("/proc/cpuinfo")))) {
@@ -966,6 +1117,11 @@ public class MediaCodecHelper {
         return string.toLowerCase(Locale.ENGLISH).contains(substring.toLowerCase(Locale.ENGLISH));
     }
     
+    /**
+     * @return true if this is an Exynos 4 SoC, identified from {@code /proc/cpuinfo}. Its decoder
+     *         mishandles both direct submit and the constrained high profile flags, so it is
+     *         excluded from each.
+     */
     public static boolean isExynos4Device() {
         try {
             // Try reading CPU info too look for 

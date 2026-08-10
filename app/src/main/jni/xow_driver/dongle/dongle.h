@@ -47,10 +47,19 @@ public:
     Dongle(std::unique_ptr<UsbDevice> usbDevice, jobject obj, JavaVM *jvm);
     ~Dongle();
 
-    using Mt76::setPairingStatus;
-
     bool start(std::string);
     void stop();
+
+    /**
+     * Turns pairing mode on or off, serialised against the read threads.
+     *
+     * <p>Local addition. Upstream only ever reaches pairing mode from the adapter's physical
+     * button, which is dead on some units; this is the same state Windows sets from
+     * "Add a device", exposed so the app can offer it. Every caller goes through here rather
+     * than Mt76::setPairingStatus so the beacon write and the LED command cannot interleave
+     * between the two read threads and the app.
+     */
+    bool setPairing(bool enable);
 
 private:
     /* Packet handling */
@@ -71,5 +80,8 @@ private:
     std::atomic<bool> stopThreads;
 
     std::mutex controllerMutex;
+    // Guards setPairing() only. Both read threads can reach pairing changes - one via the
+    // button event, the other via a controller completing pairing - and the app can too.
+    std::mutex pairingMutex;
     std::array<std::unique_ptr<Controller>, MT_WCID_COUNT> controllers;
 };

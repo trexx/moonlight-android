@@ -22,6 +22,13 @@ import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.preferences.PreferenceConfiguration;
 
 
+/**
+ * Shared UI behaviour: window insets, TV-specific layout adjustments, and the dialogs used from
+ * more than one screen.
+ *
+ * <p>Also carries the notification hooks that tell the system when a stream starts and ends, which
+ * is what suppresses interruptions during play.
+ */
 public class UiHelper {
 
     private static final int TV_VERTICAL_PADDING_DP = 15;
@@ -50,26 +57,22 @@ public class UiHelper {
         }
     }
 
+    /** Signals that a stream is being established, so the system can prepare for it. */
     public static void notifyStreamConnecting(Context context) {
         setGameModeStatus(context, true, true);
     }
 
+    /** Signals that a stream is live, which suppresses interruptions during play. */
     public static void notifyStreamConnected(Context context) {
         setGameModeStatus(context, true, false);
     }
 
-    public static void notifyStreamEnteringPiP(Context context) {
-        setGameModeStatus(context, true, true);
-    }
-
-    public static void notifyStreamExitingPiP(Context context) {
-        setGameModeStatus(context, true, false);
-    }
-
+    /** Signals that the stream has ended and normal behaviour can resume. */
     public static void notifyStreamEnded(Context context) {
         setGameModeStatus(context, false, false);
     }
 
+    /** Insets a view below the status bar, for screens drawn edge to edge. */
     public static void applyStatusBarPadding(View view) {
         // This applies the padding that we omitted in notifyNewRootView() on Q
         view.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
@@ -85,6 +88,10 @@ public class UiHelper {
         view.requestApplyInsets();
     }
 
+    /**
+     * Applies the app's window conventions to a newly set content view: insets, and the TV
+     * overscan margins that keep content off the edges of televisions.
+     */
     public static void notifyNewRootView(final Activity activity)
     {
         View rootView = activity.findViewById(android.R.id.content);
@@ -142,6 +149,10 @@ public class UiHelper {
         }
     }
 
+    /**
+     * Reports that the decoder crashed in the previous session and offers to reset the streaming
+     * settings, which is usually what fixes it.
+     */
     public static void showDecoderCrashDialog(Activity activity) {
         final SharedPreferences prefs = activity.getSharedPreferences("DecoderTombstone", 0);
         final int crashCount = prefs.getInt("CrashCount", 0);
@@ -180,6 +191,7 @@ public class UiHelper {
         }
     }
 
+    /** Confirms quitting an app that is already running, since another client may be using it. */
     public static void displayQuitConfirmationDialog(Activity parent, final Runnable onYes, final Runnable onNo) {
         DialogInterface.OnClickListener dialogClickListener = new DialogInterface.OnClickListener() {
             @Override
@@ -207,6 +219,7 @@ public class UiHelper {
                 .show();
     }
 
+    /** Confirms removing a host, which also discards its pairing and cached data. */
     public static void displayDeletePcConfirmationDialog(Activity parent, ComputerDetails computer, final Runnable onYes, final Runnable onNo) {
         DialogInterface.OnClickListener dialogClickListener = new DialogInterface.OnClickListener() {
             @Override

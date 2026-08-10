@@ -25,6 +25,17 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * Loads box art through a three-tier cache: memory, disk, then the host.
+ *
+ * <p>Each tier gets its own bounded thread pool, so a slow network fetch can't hold up a load that
+ * would have been satisfied from memory, and the queue bounds mean a fast scroll discards work
+ * rather than accumulating it.
+ *
+ * <p>Loads are tied to the {@link ImageView} that requested them and are cancelled when that view
+ * is recycled. The view is held weakly: the grid can be destroyed while loads are in flight, and
+ * the load has no business keeping it alive.
+ */
 public class CachedAppAssetLoader {
     private static final int MAX_CONCURRENT_DISK_LOADS = 3;
     private static final int MAX_CONCURRENT_NETWORK_LOADS = 3;
@@ -74,6 +85,7 @@ public class CachedAppAssetLoader {
         this.placeholderBitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
     }
 
+    /** Drops queued loads that no visible cell is waiting on. */
     public void cancelBackgroundLoads() {
         Runnable r;
         while ((r = cacheExecutor.getQueue().poll()) != null) {
@@ -81,6 +93,7 @@ public class CachedAppAssetLoader {
         }
     }
 
+    /** Drops queued loads for cells that are no longer on screen. */
     public void cancelForegroundLoads() {
         Runnable r;
 
@@ -93,6 +106,7 @@ public class CachedAppAssetLoader {
         }
     }
 
+    /** Releases the memory tier, leaving the disk cache intact. */
     public void freeCacheMemory() {
         memoryLoader.clearCache();
     }
@@ -360,6 +374,7 @@ public class CachedAppAssetLoader {
         return true;
     }
 
+    /** Warms the memory cache for an app in the background, before its cell scrolls into view. */
     public void queueCacheLoad(NvApp app) {
         final LoaderTuple tuple = new LoaderTuple(computer, app);
 
@@ -389,6 +404,11 @@ public class CachedAppAssetLoader {
                 (bitmap.originalWidth == 628 && bitmap.originalHeight == 888); // GFE 3.0
     }
 
+    /**
+     * Loads an app's box art into a view, from cache if possible and asynchronously otherwise.
+     *
+     * @return true if the art was available immediately, meaning no placeholder is needed
+     */
     public boolean populateImageView(NvApp app, ImageView imgView, TextView textView) {
         LoaderTuple tuple = new LoaderTuple(computer, app);
 

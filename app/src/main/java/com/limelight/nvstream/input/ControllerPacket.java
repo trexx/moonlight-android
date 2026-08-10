@@ -1,5 +1,12 @@
 package com.limelight.nvstream.input;
 
+/**
+ * Wire constants for controller state.
+ *
+ * <p>The button flags are the host's own bit assignments, not Android's — see
+ * {@code ControllerHandler}'s map for the translation. Values above 0xFFFF are Sunshine
+ * extensions and are ignored by GeForce Experience hosts.
+ */
 public class ControllerPacket {
     public static final int A_FLAG = 0x1000;
     public static final int B_FLAG = 0x2000;

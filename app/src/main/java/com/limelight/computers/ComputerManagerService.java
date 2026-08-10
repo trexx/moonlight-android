@@ -29,6 +29,20 @@ import android.os.SystemClock;
 
 import org.xmlpull.v1.XmlPullParserException;
 
+/**
+ * Background service that tracks every known host: reachability, pairing state and running app.
+ *
+ * <p>Each host gets its own polling thread. Within a poll, all of that host's candidate addresses
+ * are tried in parallel and the first to answer wins, because a host saved with several addresses
+ * is usually only reachable at one of them and trying them in sequence would mean waiting out a
+ * timeout per address.
+ *
+ * <p>Polling frequency adapts: a host that has been offline for several polls is checked less
+ * often, and app lists are refreshed on a slower cycle than server info.
+ *
+ * <p>A service rather than activity state so that host state survives navigation between
+ * {@code PcView} and {@code AppView} without every host being re-polled from scratch.
+ */
 public class ComputerManagerService extends Service {
     private static final int SERVERINFO_POLLING_PERIOD_MS = 1500;
     private static final int APPLIST_POLLING_PERIOD_MS = 30000;
@@ -113,6 +127,7 @@ public class ComputerManagerService extends Service {
         return true;
     }
 
+    /** Builds one host's polling loop, which runs until polling is stopped. */
     private Thread createPollingThread(final PollingTuple tuple) {
         Thread t = new Thread() {
             @Override
@@ -188,10 +203,12 @@ public class ComputerManagerService extends Service {
             }
         }
 
+        /** Adds a host by address; see the service method of the same name. Blocking. */
         public boolean addComputerBlocking(ComputerDetails fakeDetails) throws InterruptedException {
             return ComputerManagerService.this.addComputerBlocking(fakeDetails);
         }
 
+        /** Stops tracking and deletes a host, along with its cached data. */
         public void removeComputer(ComputerDetails computer) {
             ComputerManagerService.this.removeComputer(computer);
         }
@@ -236,6 +253,7 @@ public class ComputerManagerService extends Service {
         }
     }
 
+    /** {@inheritDoc} Stops polling once the last client unbinds. */
     @Override
     public boolean onUnbind(Intent intent) {
         // Stop polling
@@ -256,6 +274,7 @@ public class ComputerManagerService extends Service {
         return false;
     }
 
+    /** Begins tracking a host, starting its polling thread if polling is active. */
     private void addTuple(ComputerDetails details) {
         synchronized (pollingTuples) {
             for (PollingTuple tuple : pollingTuples) {
@@ -287,6 +306,15 @@ public class ComputerManagerService extends Service {
         }
     }
 
+    /**
+     * Adds a host by address and polls it immediately to fill in its real identity.
+     *
+     * <p>Blocking: the caller is adding a host the user just typed in and needs to know whether it
+     * answered. Never called on the UI thread.
+     *
+     * @param fakeDetails a placeholder carrying only the address to try
+     * @return true if a host answered and is now tracked
+     */
     public boolean addComputerBlocking(ComputerDetails fakeDetails) throws InterruptedException {
         // Block while we try to fill the details
 
@@ -321,6 +349,7 @@ public class ComputerManagerService extends Service {
         }
     }
 
+    /** Stops tracking a host and deletes it, its cached app list and its box art. */
     public void removeComputer(ComputerDetails computer) {
         if (!getLocalDatabaseReference()) {
             return;
@@ -347,6 +376,14 @@ public class ComputerManagerService extends Service {
         releaseLocalDatabaseReference();
     }
 
+    /**
+     * Takes a reference on the database, opening it if this is the first.
+     *
+     * <p>Reference counted because polling threads and the UI both use it and neither knows when
+     * the other is finished.
+     *
+     * @return false if the service is shutting down and the database must not be reopened
+     */
     private boolean getLocalDatabaseReference() {
         if (dbRefCount.get() == 0) {
             return false;
@@ -362,6 +399,7 @@ public class ComputerManagerService extends Service {
         }
     }
 
+    /** @return the host details if this address answered, or null */
     private ComputerDetails tryPollIp(ComputerDetails details, ComputerDetails.AddressTuple address) {
         try {
             // If the current address's port number matches the active address's port number, we can also assume
@@ -419,6 +457,7 @@ public class ComputerManagerService extends Service {
         }
     }
 
+    /** Starts one address's poll, skipping addresses already being tried in this round. */
     private void startParallelPollThread(ParallelPollTuple tuple, HashSet<ComputerDetails.AddressTuple> uniqueAddresses) {
         // Don't bother starting a polling thread for an address that doesn't exist
         // or if the address has already been polled with an earlier tuple
@@ -445,6 +484,11 @@ public class ComputerManagerService extends Service {
         tuple.pollingThread.start();
     }
 
+    /**
+     * Polls all of a host's addresses at once and returns the first success.
+     *
+     * @return details from whichever address answered first, or null if none did
+     */
     private ComputerDetails parallelPollPc(ComputerDetails details) throws InterruptedException {
         ParallelPollTuple localInfo = new ParallelPollTuple(details.localAddress, details);
         ParallelPollTuple manualInfo = new ParallelPollTuple(details.manualAddress, details);
@@ -519,6 +563,7 @@ public class ComputerManagerService extends Service {
         }
     }
 
+    /** {@inheritDoc} Opens the database and loads the known hosts. */
     @Override
     public void onCreate() {
         // Lookup or generate this device's UID
@@ -573,6 +618,7 @@ public class ComputerManagerService extends Service {
         connMgr.registerDefaultNetworkCallback(networkCallback);
     }
 
+    /** {@inheritDoc} Stops all polling threads and closes the database. */
     @Override
     public void onDestroy() {
         ConnectivityManager connMgr = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
@@ -584,6 +630,7 @@ public class ComputerManagerService extends Service {
         releaseLocalDatabaseReference();
     }
 
+    /** {@inheritDoc} @return the binder clients use to poll, add and remove hosts */
     @Override
     public IBinder onBind(Intent intent) {
         return binder;
@@ -744,6 +791,7 @@ class PollingTuple {
     public final Object networkLock;
     public long lastSuccessfulPollMs;
 
+        /** Pairs a host with the thread polling it. */
     public PollingTuple(ComputerDetails computer, Thread thread) {
         this.computer = computer;
         this.thread = thread;
@@ -755,6 +803,7 @@ class ReachabilityTuple {
     public final String reachableAddress;
     public final ComputerDetails computer;
 
+        /** Records which of a host's addresses answered a poll. */
     public ReachabilityTuple(ComputerDetails computer, String reachableAddress) {
         this.computer = computer;
         this.reachableAddress = reachableAddress;

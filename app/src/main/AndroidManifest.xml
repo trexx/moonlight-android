@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- INTERNET and ACCESS_NETWORK_STATE reach hosts; ACCESS_WIFI_STATE backs the high
+         performance and low latency Wi-Fi locks taken during a stream. VIBRATE is needed to
+         drive a gamepad's rumble motors, since InputDevice vibrators go through the same
+         Vibrator API as the device's own. WAKE_LOCK keeps the screen on while streaming, and
+         the TV EPG permissions are for the Android TV channel. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -9,6 +14,10 @@
     <uses-permission android:name="com.android.providers.tv.permission.READ_EPG_DATA"/>
     <uses-permission android:name="com.android.providers.tv.permission.WRITE_EPG_DATA"/>
 
+    <!-- All optional, and they must stay that way: the app runs on devices that have none of
+         these, and the package installer refuses a package whose required features are absent.
+         Marking touchscreen required would lock out every TV box; marking leanback required
+         would lock out everything else. -->
     <uses-feature
         android:name="android.hardware.touchscreen"
         android:required="false" />
@@ -24,18 +33,22 @@
     <uses-feature
         android:name="android.software.leanback"
         android:required="false" />
-    <uses-feature
-        android:name="android.hardware.sensor.accelerometer"
-        android:required="false" />
-    <uses-feature
-        android:name="android.hardware.sensor.gyroscope"
-        android:required="false" />
 
     <!-- Disable legacy input emulation on ChromeOS -->
     <uses-feature
         android:name="android.hardware.type.pc"
         android:required="false"/>
 
+    <!--
+      gwpAsanMode samples native allocations for heap corruption, which is how memory bugs in the
+      native decode path get caught in the field.
+
+      enableOnBackInvokedCallback is off at the application level: the browsing activities opt in
+      individually, while Game and its dialogs keep the classic onBackPressed() path.
+
+      Every activity below declares configChanges for rotation and resize so Android does not
+      recreate it - for Game that would mean tearing down and rebuilding the stream.
+    -->
     <application
         android:label="@string/app_label"
         android:allowBackup="true"
@@ -49,8 +62,11 @@
         android:installLocation="auto"
         android:gwpAsanMode="always"
         android:enableOnBackInvokedCallback="false"
+        android:supportsRtl="false"
         android:theme="@style/AppTheme">
 
+        <!-- Exported so the Android TV launcher process can read cached box art for the channel.
+             It serves nothing else; see PosterContentProvider. -->
         <provider
             android:name=".PosterContentProvider"
             android:authorities="poster.${applicationId}"
@@ -58,37 +74,23 @@
             android:exported="true">
         </provider>
 
-        <!-- Samsung multi-window support -->
-        <uses-library
-            android:name="com.sec.android.app.multiwindow"
-            android:required="false" />
-        <meta-data
-            android:name="com.sec.android.support.multiwindow"
-            android:value="true" />
-
         <!-- Disable Game Mode downscaling since it can break our UI dialogs and doesn't benefit
              performance much for us since we don't use GL/Vulkan for rendering anyway -->
         <meta-data
             android:name="com.android.graphics.intervention.wm.allowDownscale"
             android:value="false"/>
-        
+
         <!-- Game Mode configuration -->
         <meta-data
             android:name="android.game_mode_config"
             android:resource="@xml/game_mode_config" />
 
-        <!-- Samsung DeX support requires explicit placement of android:resizeableActivity="true"
-             in each activity even though it is implied by targeting API 24+ -->
-
         <activity
             android:name=".PcView"
             android:exported="true"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
-
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -102,54 +104,52 @@
             android:name=".ShortcutTrampoline"
             android:noHistory="true"
             android:exported="true"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
         <activity
             android:name=".AppView"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
         <activity
             android:name=".preferences.StreamSettings"
             android:theme="@style/SettingsTheme"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:label="Streaming Settings">
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
         <activity
             android:name=".preferences.AddComputerManually"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:windowSoftInputMode="stateVisible"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:label="Add Computer Manually">
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
+        <!-- The streaming activity. singleTask plus noHistory means a second launch (from a
+             shortcut, say) reuses the running stream rather than stacking another one, and
+             excludeFromRecents keeps a dead stream out of the recents list.
+             preferMinimalPostProcessing asks the display to use game mode, which cuts the TV's
+             own image processing latency.
+             stateAlwaysHidden keeps the soft keyboard down. StreamView always reports itself as
+             a text editor so typed text can reach the host, and without a state policy that
+             lets the framework restore the IME whenever the window takes focus. It only governs
+             the state on focus gain, so explicitly showing the keyboard still works. -->
         <activity
             android:name=".Game"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:noHistory="true"
-            android:supportsPictureInPicture="true"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="false"
             android:launchMode="singleTask"
+            android:windowSoftInputMode="stateAlwaysHidden"
             android:excludeFromRecents="true"
             android:theme="@style/StreamTheme"
             android:preferMinimalPostProcessing="true">
-
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
 
             <!-- Special metadata for NVIDIA Shield devices to prevent input buffering
                  and most importantly, opt out of mouse acceleration while streaming -->
@@ -161,6 +161,7 @@
                 android:value="true" />
         </activity>
 
+        <!-- Neither service is exported: both are bound only from within this app -->
         <service
             android:name=".computers.ComputerManagerService"
             android:label="Computer Management Service" />
@@ -171,11 +172,9 @@
         <activity
             android:name=".HelpActivity"
             android:theme="@style/HelpTheme"
-            android:resizeableActivity="true"
+            android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
-            <meta-data android:name="WindowManagerPreference:FreeformWindowSize" android:value="system-default" />
-            <meta-data android:name="WindowManagerPreference:FreeformWindowOrientation" android:value="landscape" />
         </activity>
     </application>
 

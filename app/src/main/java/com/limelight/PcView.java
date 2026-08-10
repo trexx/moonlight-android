@@ -21,7 +21,6 @@ import com.limelight.preferences.GlPreferences;
 import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.StreamSettings;
 import com.limelight.utils.Dialog;
-import com.limelight.utils.HelpLauncher;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.UiHelper;
@@ -51,6 +50,16 @@ import org.xmlpull.v1.XmlPullParserException;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
+/**
+ * The app's launcher screen: the grid of known hosts.
+ *
+ * <p>Hosts are owned by {@link com.limelight.computers.ComputerManagerService}, which this activity
+ * binds to for the duration it is visible. The service polls each host's reachability and pairing
+ * state in the background, and the grid simply reflects the state it publishes.
+ *
+ * <p>Pairing, unpairing, waking and removing hosts are all driven from the per-host actions screen
+ * here, which is why so much of this class is dialog and menu handling rather than view code.
+ */
 public class PcView extends FragmentActivity implements
         PcGridFragment.Callbacks, PcActionsFragment.Callbacks {
     private PcGridFragment pcGridFragment;
@@ -83,6 +92,7 @@ public class PcView extends FragmentActivity implements
         }
     };
 
+    /** {@inheritDoc} Rebuilds the grid layout for the new configuration. */
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
@@ -108,6 +118,7 @@ public class PcView extends FragmentActivity implements
     private final static int TEST_NETWORK_ID = 10;
     private final static int MANAGEMENT_PAGE_ID = 12;
 
+    /** Wires up the grid, the empty-state text and the add-computer affordances. */
     private void initializeViews() {
         setContentView(R.layout.activity_pc_view);
 
@@ -124,7 +135,6 @@ public class PcView extends FragmentActivity implements
         // Setup the list view
         ImageButton settingsButton = findViewById(R.id.settingsButton);
         ImageButton addComputerButton = findViewById(R.id.manuallyAddPc);
-        ImageButton helpButton = findViewById(R.id.helpButton);
 
         settingsButton.setOnClickListener(new OnClickListener() {
             @Override
@@ -139,19 +149,6 @@ public class PcView extends FragmentActivity implements
                 startActivity(i);
             }
         });
-        helpButton.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                HelpLauncher.launchSetupGuide(PcView.this);
-            }
-        });
-
-        // Amazon review didn't like the help button because the wiki was not entirely
-        // navigable via the Fire TV remote (though the relevant parts were). Let's hide
-        // it on Fire TV.
-        if (getPackageManager().hasSystemFeature("amazon.hardware.fire_tv")) {
-            helpButton.setVisibility(View.GONE);
-        }
 
         // Re-use the existing grid fragment across config changes so the PC list and the
         // current D-pad focus survive.
@@ -176,6 +173,7 @@ public class PcView extends FragmentActivity implements
         }
     }
 
+    /** {@inheritDoc} Binds the computer manager and builds the grid. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -223,6 +221,10 @@ public class PcView extends FragmentActivity implements
         }
     }
 
+    /**
+     * Finishes setup once the required permissions are settled. Split out of {@code onCreate}
+     * because a permission prompt can defer it to a later callback.
+     */
     private void completeOnCreate() {
         completeOnCreateCalled = true;
 
@@ -236,6 +238,7 @@ public class PcView extends FragmentActivity implements
         initializeViews();
     }
 
+    /** Starts polling hosts and receiving state updates. Bound to the activity being visible. */
     private void startComputerUpdates() {
         // Only allow polling to start if we're bound to CMS, polling is not already running,
         // and our activity is in the foreground.
@@ -263,6 +266,12 @@ public class PcView extends FragmentActivity implements
         }
     }
 
+    /**
+     * Stops polling hosts.
+     *
+     * @param wait block until in-flight polls have finished, which is required before the process
+     *             can safely tear down the service binding
+     */
     private void stopComputerUpdates(boolean wait) {
         if (managerBinder != null) {
             if (!runningPolling) {
@@ -281,6 +290,7 @@ public class PcView extends FragmentActivity implements
         }
     }
 
+    /** {@inheritDoc} Unbinds the computer manager. */
     @Override
     public void onDestroy() {
         super.onDestroy();
@@ -290,6 +300,7 @@ public class PcView extends FragmentActivity implements
         }
     }
 
+    /** {@inheritDoc} Resumes polling and refreshes shortcut state. */
     @Override
     protected void onResume() {
         super.onResume();
@@ -301,6 +312,7 @@ public class PcView extends FragmentActivity implements
         startComputerUpdates();
     }
 
+    /** {@inheritDoc} */
     @Override
     protected void onPause() {
         super.onPause();
@@ -309,6 +321,7 @@ public class PcView extends FragmentActivity implements
         stopComputerUpdates(false);
     }
 
+    /** {@inheritDoc} Stops polling, since nothing is visible to update. */
     @Override
     protected void onStop() {
         super.onStop();
@@ -316,6 +329,7 @@ public class PcView extends FragmentActivity implements
         Dialog.closeDialogs();
     }
 
+    /** {@inheritDoc} Builds the per-host menu, whose entries depend on pairing and online state. */
     @Override
     public void onComputerClicked(ComputerObject computer) {
         if (computer.details.state == ComputerDetails.State.UNKNOWN ||
@@ -330,6 +344,7 @@ public class PcView extends FragmentActivity implements
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     public void onComputerLongClicked(ComputerObject computer) {
         // Pause polling while the sheet is up, matching the old context menu behaviour
@@ -338,6 +353,12 @@ public class PcView extends FragmentActivity implements
                 PcActionsFragment.newInstance(computer.details));
     }
 
+    /**
+     * Runs the pairing exchange with a host and shows the PIN the user must type there.
+     *
+     * <p>Runs off the UI thread: pairing is a multi-step network exchange that waits on the user
+     * entering the PIN on the host.
+     */
     private void doPair(final ComputerDetails computer) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
             Toast.makeText(PcView.this, getResources().getString(R.string.pair_pc_offline), Toast.LENGTH_SHORT).show();
@@ -443,6 +464,7 @@ public class PcView extends FragmentActivity implements
         }).start();
     }
 
+    /** Asks the host to forget this client, off the UI thread. */
     private void doUnpair(final ComputerDetails computer) {
         if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
             Toast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
@@ -495,6 +517,12 @@ public class PcView extends FragmentActivity implements
         }).start();
     }
 
+    /**
+     * Opens the app list for a host.
+     *
+     * @param newlyPaired     true if pairing just completed, which affects how failures are reported
+     * @param showHiddenGames include apps the user has hidden
+     */
     private void doAppList(ComputerDetails computer, boolean newlyPaired, boolean showHiddenGames) {
         if (computer.state == ComputerDetails.State.OFFLINE) {
             Toast.makeText(PcView.this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
@@ -513,6 +541,7 @@ public class PcView extends FragmentActivity implements
         startActivity(i);
     }
 
+    /** {@inheritDoc} Dispatches the per-host actions: pair, unpair, wake, view apps, delete. */
     @Override
     public void onPcActionSelected(String uuid, int actionId) {
         // The sheet has been dismissed, so resume polling regardless of the action taken
@@ -626,6 +655,7 @@ public class PcView extends FragmentActivity implements
         updateEmptyStateVisibility();
     }
 
+    /** Applies a state update from the polling service to the grid entry for this host. */
     private void updateComputer(ComputerDetails details) {
         if (pcGridFragment != null) {
             pcGridFragment.addOrUpdateComputer(new ComputerObject(details));

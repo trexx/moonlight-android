@@ -6,13 +6,19 @@ import android.util.AttributeSet;
 import androidx.preference.DialogPreference;
 
 // Based on a Stack Overflow example: http://stackoverflow.com/questions/1974193/slider-on-my-preferencescreen
-//
-// Ported from android.preference.DialogPreference to androidx.preference. The attribute
-// parsing and persistence stay here; the dialog itself moved to
-// SeekBarPreferenceDialogFragment, because androidx splits DialogPreference into a
-// preference plus a PreferenceDialogFragmentCompat rather than having the preference build
-// its own view. Attributes are still read straight off the AttributeSet by namespace URL,
-// so no declare-styleable is needed.
+/**
+ * Preference backed by a slider in a dialog, with a live value readout and an optional suffix.
+ *
+ * <p>Custom rather than the platform's because these sliders need a minimum as well as a maximum
+ * (the deadzone setting goes negative, for compensation) and a step size other than one.
+ *
+ * <p>Ported from {@code android.preference.DialogPreference} to {@code androidx.preference}. The
+ * attribute parsing and persistence stay here; the dialog itself moved to
+ * {@link SeekBarPreferenceDialogFragment}, because androidx splits DialogPreference into a
+ * preference plus a PreferenceDialogFragmentCompat rather than having the preference build its own
+ * view. Attributes are still read straight off the AttributeSet by namespace URL, so no
+ * declare-styleable is needed.
+ */
 public class SeekBarPreference extends DialogPreference
 {
     private static final String ANDROID_SCHEMA_URL = "http://schemas.android.com/apk/res/android";
@@ -32,6 +38,7 @@ public class SeekBarPreference extends DialogPreference
     // behaviour of every existing preference untouched.
     private final int progressOffset;
 
+    /** Reads min, max, step, keyStep and divisor from the seekbar: namespace attributes. */
     public SeekBarPreference(Context context, AttributeSet attrs) {
         super(context, attrs);
 
@@ -65,6 +72,7 @@ public class SeekBarPreference extends DialogPreference
     int getDivisor() { return divisor; }
     int getProgressOffset() { return progressOffset; }
 
+    /** {@inheritDoc} Seeds the slider from the stored value. */
     @Override
     protected Object onGetDefaultValue(android.content.res.TypedArray a, int index) {
         return a.getInt(index, defaultValue);
@@ -82,13 +90,14 @@ public class SeekBarPreference extends DialogPreference
         }
     }
 
+    /** Sets the current value, clamped to the configured range. */
     public void setProgress(int progress) {
         this.currentValue = progress;
         if (shouldPersist()) {
             persistInt(progress);
         }
     }
-
+    /** @return the current value, in the units the preference is defined in */
     public int getProgress() {
         return currentValue;
     }

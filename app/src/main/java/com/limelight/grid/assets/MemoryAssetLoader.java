@@ -7,6 +7,12 @@ import com.limelight.LimeLog;
 import java.lang.ref.SoftReference;
 import java.util.HashMap;
 
+/**
+ * In-memory box art cache, sized as a fraction of the app's heap.
+ *
+ * <p>The first tier of the three the grid uses: memory, then disk
+ * ({@link DiskAssetLoader}), then the host ({@link NetworkAssetLoader}).
+ */
 public class MemoryAssetLoader {
     private static final int maxMemory = (int) (Runtime.getRuntime().maxMemory() / 1024);
     private static final LruCache<String, ScaledBitmap> memoryCache = new LruCache<String, ScaledBitmap>(maxMemory / 16) {
@@ -32,6 +38,10 @@ public class MemoryAssetLoader {
         return tuple.computer.uuid+"-"+tuple.app.getAppId();
     }
 
+    /**
+     * @return the cached bitmap if one is present and detailed enough for the requested size, or
+     *         null. A cached bitmap decoded for a smaller cell is rejected rather than upscaled.
+     */
     public ScaledBitmap loadBitmapFromCache(CachedAppAssetLoader.LoaderTuple tuple) {
         final String key = constructKey(tuple);
 
@@ -62,10 +72,12 @@ public class MemoryAssetLoader {
         return null;
     }
 
+    /** Stores a decoded bitmap for later reuse. */
     public void populateCache(CachedAppAssetLoader.LoaderTuple tuple, ScaledBitmap bitmap) {
         memoryCache.put(constructKey(tuple), bitmap);
     }
 
+    /** Drops everything, e.g. under memory pressure. */
     public void clearCache() {
         // We must evict first because that will push all items into the eviction cache
         memoryCache.evictAll();

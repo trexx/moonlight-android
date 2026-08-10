@@ -1,3 +1,21 @@
+// Callback bridge from moonlight-common-c into the Java MoonBridge class.
+//
+// moonlight-common-c is plain C and calls back through function pointers; everything the client
+// actually does - decoding video, playing audio, reporting connection state - lives in Java. This
+// file is the translation layer: it resolves the Java method IDs once at init and forwards each
+// callback across JNI.
+//
+// Two things make that non-trivial:
+//
+//   * Callbacks arrive on threads the library created, which are not attached to the JVM. Each one
+//     attaches itself on first use and registers a TLS destructor to detach on exit, since a
+//     thread that dies while attached leaks a JVM reference.
+//
+//   * The decode and audio callbacks run per frame, so the buffers handed to Java are allocated
+//     once and reused rather than allocated per callback.
+//
+// Opus decoding also happens here rather than in Java, so the audio renderer receives PCM.
+
 #include <jni.h>
 
 #include <pthread.h>
@@ -41,10 +59,12 @@ static jmethodID BridgeClSetControllerLEDMethod;
 static jbyteArray DecodedFrameBuffer;
 static jshortArray DecodedAudioBuffer;
 
+// TLS destructor: detaches a library thread from the JVM as it exits.
 void DetachThread(void* context) {
     (*JVM)->DetachCurrentThread(JVM);
 }
 
+// Creates the TLS slot holding each thread's JNIEnv.
 void JniEnvKeyInit(void) {
     // Create a TLS slot for the JNIEnv. We aren't in
     // a pthread during init, so we must wait until we
@@ -52,6 +72,8 @@ void JniEnvKeyInit(void) {
     pthread_key_create(&JniEnvKey, DetachThread);
 }
 
+// Returns this thread's JNIEnv, attaching the thread to the JVM the first time it is called from
+// a thread moonlight-common-c created.
 JNIEnv* GetThreadEnv(void) {
     JNIEnv* env;
 
@@ -143,6 +165,9 @@ void BridgeDrCleanup(void) {
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeDrCleanupMethod);
 }
 
+// Copies one decode unit into the reusable Java byte array and hands it to the decoder. The unit
+// arrives as a linked list of buffers, which is flattened here because MediaCodec wants one
+// contiguous buffer.
 int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
     JNIEnv* env = GetThreadEnv();
     int ret;
@@ -200,6 +225,7 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
     }
 }
 
+// Creates the Opus decoder and the reusable PCM buffer, then sets up the Java audio renderer.
 int BridgeArInit(int audioConfiguration, POPUS_MULTISTREAM_CONFIGURATION opusConfig, void* context, int flags) {
     JNIEnv* env = GetThreadEnv();
     int err;
@@ -451,6 +477,13 @@ hasFastAes() {
     }
 }
 
+// Exposed so the settings screen can warn that encrypting video here will be done in software.
+// It no longer decides anything on its own: the encryption flags come from the user's preference.
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_nvstream_jni_MoonBridge_hasFastAes(JNIEnv *env, jclass clazz) {
+    return hasFastAes() ? JNI_TRUE : JNI_FALSE;
+}
+
 JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass clazz,
                                                            jstring address, jstring appVersion, jstring gfeVersion,
@@ -461,7 +494,8 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
                                                            jint clientRefreshRateX100,
                                                            jbyteArray riAesKey, jbyteArray riAesIv,
                                                            jint videoCapabilities,
-                                                           jint colorSpace, jint colorRange) {
+                                                           jint colorSpace, jint colorRange,
+                                                           jint encryptionFlags) {
     SERVER_INFORMATION serverInfo = {
             .address = (*env)->GetStringUTFChars(env, address, 0),
             .serverInfoAppVersion = (*env)->GetStringUTFChars(env, appVersion, 0),
@@ -479,7 +513,7 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
             .audioConfiguration = audioConfiguration,
             .supportedVideoFormats = supportedVideoFormats,
             .clientRefreshRateX100 = clientRefreshRateX100,
-            .encryptionFlags = ENCFLG_AUDIO,
+            .encryptionFlags = encryptionFlags,
             .colorSpace = colorSpace,
             .colorRange = colorRange
     };
@@ -493,11 +527,6 @@ Java_com_limelight_nvstream_jni_MoonBridge_startConnection(JNIEnv *env, jclass c
     (*env)->ReleaseByteArrayElements(env, riAesIv, riAesIvBuf, JNI_ABORT);
 
     BridgeVideoRendererCallbacks.capabilities = videoCapabilities;
-
-    // Enable all encryption features if the platform has fast AES support
-    if (hasFastAes()) {
-        streamConfig.encryptionFlags = ENCFLG_ALL;
-    }
 
     int ret = LiStartConnection(&serverInfo,
                                 &streamConfig,

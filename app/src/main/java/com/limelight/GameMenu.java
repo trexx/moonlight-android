@@ -43,6 +43,7 @@ public class GameMenu {
     private final NvConnection conn;
     private final GameInputDevice device;
 
+    /** Building the menu shows it immediately; there is no separate show call. */
     public GameMenu(Game game, NvConnection conn, GameInputDevice device) {
         this.game = game;
         this.conn = conn;
@@ -188,6 +189,13 @@ public class GameMenu {
 
         if (device != null) {
             options.addAll(device.getGameMenuOptions());
+        }
+
+        // Only worth offering when an adapter is actually claimed and running. It stands in for
+        // the adapter's physical pairing button, which is dead on some units.
+        if (game.hasXboxWirelessDongle()) {
+            options.add(new MenuOption(getString(R.string.game_menu_pair_xbox_controller),
+                    () -> game.startDonglePairing()));
         }
 
         options.add(new MenuOption(getString(R.string.game_menu_toggle_performance_overlay), () -> game.togglePerformanceOverlay()));

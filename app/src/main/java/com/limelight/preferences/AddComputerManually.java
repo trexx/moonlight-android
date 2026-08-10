@@ -32,6 +32,13 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.widget.Toast;
 
+/**
+ * Screen for adding a host by hostname or IP.
+ *
+ * <p>Needed because host discovery was removed from this fork: hosts are always added by address.
+ * The address is polled before it is accepted, so the user finds out immediately whether it is
+ * reachable rather than getting an entry in the grid that never comes online.
+ */
 public class AddComputerManually extends FragmentActivity implements AddPcFragment.Callbacks {
     private ComputerManagerService.ComputerManagerBinder managerBinder;
     private final LinkedBlockingQueue<String> computersToAdd = new LinkedBlockingQueue<>();
@@ -239,6 +246,7 @@ public class AddComputerManually extends FragmentActivity implements AddPcFragme
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     protected void onStop() {
         super.onStop();
@@ -247,6 +255,7 @@ public class AddComputerManually extends FragmentActivity implements AddPcFragme
         SpinnerDialog.closeDialogs(this);
     }
 
+    /** {@inheritDoc} Unbinds the computer manager. */
     @Override
     protected void onDestroy() {
         super.onDestroy();
@@ -257,6 +266,7 @@ public class AddComputerManually extends FragmentActivity implements AddPcFragme
         }
     }
 
+    /** {@inheritDoc} Binds the computer manager so an entered address can be polled. */
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);

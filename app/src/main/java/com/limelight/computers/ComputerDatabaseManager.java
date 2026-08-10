@@ -20,6 +20,13 @@ import android.database.sqlite.SQLiteException;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+/**
+ * SQLite storage for known hosts.
+ *
+ * <p>One row per host, keyed by UUID, with the addresses and certificate stored as JSON — the
+ * address set is variable-length and the schema would otherwise need a second table for something
+ * only ever read as a whole.
+ */
 public class ComputerDatabaseManager {
     private static final String COMPUTER_DB_NAME = "computers4.db";
     private static final String COMPUTER_TABLE_NAME = "Computers";
@@ -40,6 +47,7 @@ public class ComputerDatabaseManager {
 
     private SQLiteDatabase computerDb;
 
+    /** Opens, creating the schema on first use. */
     public ComputerDatabaseManager(Context c) {
         try {
             // Create or open an existing DB
@@ -52,6 +60,7 @@ public class ComputerDatabaseManager {
         initializeDb();
     }
 
+    /** Closes the database. Callers hold references through the service's reference count. */
     public void close() {
         computerDb.close();
     }
@@ -70,10 +79,12 @@ public class ComputerDatabaseManager {
                 ADDRESSES_COLUMN_NAME, MAC_ADDRESS_COLUMN_NAME, SERVER_CERT_COLUMN_NAME));
     }
 
+    /** Forgets a host entirely, including its certificate. */
     public void deleteComputer(ComputerDetails details) {
         computerDb.delete(COMPUTER_TABLE_NAME, COMPUTER_UUID_COLUMN_NAME+"=?", new String[]{details.uuid});
     }
 
+    /** @return the address encoded as JSON for storage */
     public static JSONObject tupleToJson(ComputerDetails.AddressTuple tuple) throws JSONException {
         if (tuple == null) {
             return null;
@@ -86,6 +97,7 @@ public class ComputerDatabaseManager {
         return json;
     }
 
+    /** @return the address decoded from its stored JSON form */
     public static ComputerDetails.AddressTuple tupleFromJson(JSONObject json, String name) throws JSONException {
         if (!json.has(name)) {
             return null;
@@ -96,6 +108,7 @@ public class ComputerDatabaseManager {
                 address.getString(AddressFields.ADDRESS), address.getInt(AddressFields.PORT));
     }
 
+    /** Inserts or replaces a host's row. @return true if the write succeeded */
     public boolean updateComputer(ComputerDetails details) {
         ContentValues values = new ContentValues();
         values.put(COMPUTER_UUID_COLUMN_NAME, details.uuid);
@@ -159,6 +172,7 @@ public class ComputerDatabaseManager {
         return details;
     }
 
+    /** @return every known host, as loaded at startup to populate the grid */
     public List<ComputerDetails> getAllComputers() {
         try (final Cursor c = computerDb.rawQuery("SELECT * FROM "+COMPUTER_TABLE_NAME, null)) {
             LinkedList<ComputerDetails> computerList = new LinkedList<>();
@@ -178,6 +192,7 @@ public class ComputerDatabaseManager {
      * @see ComputerDatabaseManager#getComputerByUUID(String) for alternative.
      * @return The computer details, or null if no computer with that name exists
      */
+    /** @return the host with this name, or null. Used to resolve hosts named in shortcuts. */
     public ComputerDetails getComputerByName(String name) {
         try (final Cursor c = computerDb.query(
                 COMPUTER_TABLE_NAME, null, COMPUTER_NAME_COLUMN_NAME+"=?",
@@ -198,6 +213,7 @@ public class ComputerDatabaseManager {
      * @see ComputerDatabaseManager#getComputerByName(String) for alternative.
      * @return The computer details, or null if no computer with that UUID exists
      */
+    /** @return the host with this UUID, or null */
     public ComputerDetails getComputerByUUID(String uuid) {
         try (final Cursor c = computerDb.query(
                 COMPUTER_TABLE_NAME, null, COMPUTER_UUID_COLUMN_NAME+"=?",

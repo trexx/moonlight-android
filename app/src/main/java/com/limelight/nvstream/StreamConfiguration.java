@@ -3,12 +3,28 @@ package com.limelight.nvstream;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.jni.MoonBridge;
 
+/**
+ * Everything negotiated with the host before a stream starts: resolution, frame rate, bitrate,
+ * codecs, audio configuration, colour space and encryption.
+ *
+ * <p>Built with the nested {@link Builder} and then immutable in practice. The values come from
+ * three places that have to agree — the user's preferences, what the decoder reports it can
+ * handle, and what the host supports — which is why this is assembled once in {@code Game} rather
+ * than read from preferences where it is needed.
+ */
 public class StreamConfiguration {
     public static final int INVALID_APP_ID = 0;
 
     public static final int STREAM_CFG_LOCAL = 0;
     public static final int STREAM_CFG_REMOTE = 1;
     public static final int STREAM_CFG_AUTO = 2;
+
+    // Mirrors the ENCFLG_* values in Limelight.h. These say what the client asks to have
+    // encrypted; a host that requires encryption enables it whatever we request here.
+    public static final int ENCFLG_NONE = 0x00000000;
+    public static final int ENCFLG_AUDIO = 0x00000001;
+    public static final int ENCFLG_VIDEO = 0x00000002;
+    public static final int ENCFLG_ALL = 0xFFFFFFFF;
     
     private NvApp app;
     private int width, height;
@@ -108,6 +124,11 @@ public class StreamConfiguration {
             return this;
         }
 
+        public StreamConfiguration.Builder setEncryptionFlags(int encryptionFlags) {
+            config.encryptionFlags = encryptionFlags;
+            return this;
+        }
+
         public StreamConfiguration.Builder setColorRange(int colorRange) {
             config.colorRange = colorRange;
             return this;
@@ -140,71 +161,93 @@ public class StreamConfiguration {
         this.attachedGamepadMask = 0;
     }
     
+    /** @return stream width in pixels */
     public int getWidth() {
         return width;
     }
     
+    /** @return stream height in pixels */
     public int getHeight() {
         return height;
     }
     
+    /** @return stream frame rate in Hz */
     public int getRefreshRate() {
         return refreshRate;
     }
 
+    /** @return the frame rate requested at launch, which can differ from the streaming rate */
     public int getLaunchRefreshRate() {
         return launchRefreshRate;
     }
     
+    /** @return video bitrate in Kbps */
     public int getBitrate() {
         return bitrate;
     }
     
+    /** @return maximum packet size, reduced for remote connections to avoid fragmentation */
     public int getMaxPacketSize() {
         return maxPacketSize;
     }
 
+    /** @return the app to launch */
     public NvApp getApp() {
         return app;
     }
     
+    /** @return whether the host may change its own resolution to match the stream */
     public boolean getSops() {
         return sops;
     }
     
     
+    /** @return whether audio also plays on the host's speakers */
     public boolean getPlayLocalAudio() {
         return playLocalAudio;
     }
     
+    /** @return whether this connection is local, remote, or auto-detected */
     public int getRemote() {
         return remote;
     }
 
+    /** @return the negotiated channel count and channel mask */
     public MoonBridge.AudioConfiguration getAudioConfiguration() {
         return audioConfiguration;
     }
     
+    /** @return bitmask of codecs the client can decode */
     public int getSupportedVideoFormats() {
         return supportedVideoFormats;
     }
 
+    /** @return bitmask of controllers attached at launch, so the host creates the right slots */
     public int getAttachedGamepadMask() {
         return attachedGamepadMask;
     }
 
+    /** @return whether host-side controllers persist after the stream ends */
     public boolean getPersistGamepadsAfterDisconnect() {
         return persistGamepadsAfterDisconnect;
     }
 
+    /** @return the client display's refresh rate in hundredths of a Hz, for host-side pacing */
     public int getClientRefreshRateX100() {
         return clientRefreshRateX100;
     }
 
+    /** @return the {@code ENCFLG_*} mask of streams this client asks to have encrypted */
+    public int getEncryptionFlags() {
+        return encryptionFlags;
+    }
+
+    /** @return full or limited colour range */
     public int getColorRange() {
         return colorRange;
     }
 
+    /** @return the requested colourspace */
     public int getColorSpace() {
         return colorSpace;
     }

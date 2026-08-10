@@ -18,6 +18,8 @@ public class NativeAAudioRenderer implements AudioRenderer {
     // initializer owns. Nothing can reach this class before that has run, since the renderer is
     // only ever created for a connection that moonlight-common-c is already driving.
 
+    // Opaque pointer to the native AAudioRenderer struct, or 0 once released. Every native call
+    // below is a no-op or a failure without it, so it doubles as the "is set up" flag.
     private long handle;
 
     private static native long nativeSetup(int channelCount, int channelMask, int sampleRate, int samplesPerFrame);
@@ -25,6 +27,12 @@ public class NativeAAudioRenderer implements AudioRenderer {
     private static native boolean nativeIsDead(long handle);
     private static native void nativeCleanup(long handle);
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Opens and starts the AAudio stream. Failure here is expected on devices where the
+     * requested configuration isn't available, and is the caller's cue to fall back.
+     */
     @Override
     public int setup(MoonBridge.AudioConfiguration audioConfiguration, int sampleRate, int samplesPerFrame) {
         // The channel mask moonlight-common-c computes uses the same bit layout as AAudio's, so
@@ -47,6 +55,13 @@ public class NativeAAudioRenderer implements AudioRenderer {
         return handle == 0 || nativeIsDead(handle);
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Copies into the native ring buffer and returns; the samples are consumed later by
+     * AAudio's realtime callback. Unlike the AudioTrack path this never blocks, so a full ring
+     * drops the frame rather than back-pressuring the decode thread.
+     */
     @Override
     public void playDecodedAudio(short[] audioData) {
         if (handle == 0) {
@@ -63,15 +78,23 @@ public class NativeAAudioRenderer implements AudioRenderer {
         }
     }
 
+    /** {@inheritDoc} */
     @Override
     public void start() {
         // The stream is started as part of setup()
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Nothing to do: there is no effect session to close, and the stream is stopped as part
+     * of {@link #cleanup()} instead, so that samples still in the ring buffer play out.
+     */
     @Override
     public void stop() {
     }
 
+    /** {@inheritDoc} Stops and closes the stream and frees the native context. Idempotent. */
     @Override
     public void cleanup() {
         if (handle != 0) {

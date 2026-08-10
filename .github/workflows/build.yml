@@ -3,6 +3,7 @@ name: Build
 
 on:
   workflow_dispatch:
+  pull_request:
 
 jobs:
   build:
@@ -10,32 +11,96 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/setup-java@v5
+      - name: Setup Java JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           java-version: 25
           distribution: 'corretto'
 
-      - uses: android-actions/setup-android@v4
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
         with:
             packages: ''
 
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Checkout Repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: recursive
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v6
-
-      - name: Build artifact
-        run: ./gradlew build connectedCheck
-
-      - name: Debug Sign
-        run: jarsigner -verbose -keystore ~/.android/debug.keystore -storepass android -keypass android -signedjar app/build/outputs/apk/release/app-release-debugsigned.apk app/build/outputs/apk/release/app-release-unsigned.apk androiddebugkey
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
+      # NB: assembleRelease, not assembleNonRoot. The nonRoot task came from a fork lineage
+      # that defined a product flavour of that name; this project has no flavours, so that
+      # task does not exist and the build failed at task resolution.
+      #
+      # Both variants are built. The debug build is not just an unminified release: per-frame
+      # instrumentation is compiled out of release behind BuildConfig.DEBUG, so the decode
+      # timing and presentation-gap counters exist only in the debug APK. It is the artifact to
+      # reach for when diagnosing a device, and it installs alongside release because the debug
+      # build type carries an applicationIdSuffix.
+      #
+      # Both lint variants run too. lintRelease covers a broader issue set than the
+      # lintVitalRelease that assembleRelease triggers on its own - a NewApi error and a
+      # WrongViewCast both survived green assembleRelease builds and were only caught here -
+      # and lintDebug is what covers the debug-only code, which lintRelease cannot see at all.
+      #
+      # connectedCheck is deliberately absent: it runs instrumented tests against a connected
+      # device and the runner has none, so it can only fail or no-op.
+      - name: Build Moonlight
+        uses: burrunan/gradle-cache-action@4b67497abd37a511d6c1dc6299bdd84ff39f7bf5 # v3
         with:
-          name: moonlight-android
-          path: app/build/outputs/apk/release/app-release-unsigned.apk
+          arguments: assembleRelease assembleDebug lintRelease lintDebug
+
+      # The SDK ships several build-tools versions and the pinned 34.0.0 is not guaranteed to
+      # be present on the runner (setup-android installs no extra packages). Resolve the
+      # newest installed version instead of hardcoding one.
+      - name: Locate build tools
+        run: echo "BUILD_TOOLS=$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)" >> "$GITHUB_ENV"
+
+      - name: Decode Keystore
+        run: echo "${{ secrets.KEYSTORE }}" | base64 -d > /tmp/debug.keystore
+
+      - name: Align and sign release APK
+        run: |
+          "$BUILD_TOOLS/zipalign" -v 4 \
+            ./app/build/outputs/apk/release/app-release-unsigned.apk \
+            ./app/build/outputs/apk/release/app-release-aligned.apk
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks /tmp/debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --out ./app/build/outputs/apk/release/app-release-debugsigned.apk \
+            ./app/build/outputs/apk/release/app-release-aligned.apk
+
+      - name: Upload Signed APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: moonlight-android.apk
+          path: ./app/build/outputs/apk/release/app-release-debugsigned.apk
+          if-no-files-found: error
+
+      # AGP already signs the debug APK, but with whatever debug keystore happens to exist on the
+      # runner - which is generated fresh per run. Two CI debug builds would then have different
+      # signatures and refuse to upgrade over one another, forcing an uninstall (and the loss of
+      # host pairing) every time. Re-signing with the same key as release keeps them upgradeable.
+      #
+      # zipalign before signing, not after: aligning an APK rewrites entry offsets and would
+      # invalidate a v2 signature applied first.
+      - name: Align and sign debug APK
+        run: |
+          "$BUILD_TOOLS/zipalign" -f -v 4 \
+            ./app/build/outputs/apk/debug/app-debug.apk \
+            ./app/build/outputs/apk/debug/app-debug-aligned.apk
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks /tmp/debug.keystore \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --ks-key-alias androiddebugkey \
+            --out ./app/build/outputs/apk/debug/app-debug-signed.apk \
+            ./app/build/outputs/apk/debug/app-debug-aligned.apk
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: moonlight-android-debug.apk
+          path: ./app/build/outputs/apk/debug/app-debug-signed.apk
           if-no-files-found: error
