@@ -5,6 +5,7 @@ import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
 
+import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
@@ -36,6 +37,13 @@ public class AndroidAudioRenderer implements AudioRenderer {
     // Buffers dropped because too much audio was already pending. Written only by the audio decode
     // thread in playDecodedAudio; volatile so the teardown summary sees the final value.
     private volatile int droppedBuffers;
+
+    // Debug builds only; see playDecodedAudio. How long the blocking write actually blocked is the
+    // direct measure of output backpressure on this path, and the only thing that says whether the
+    // 40 ms pending-audio bound is being reached in practice.
+    private long writeBlockedTotalNs;
+    private long writeBlockedMaxNs;
+    private int writeCount;
 
     /** Names what {@link AudioTrack#getPerformanceMode} returned, which is not what was asked for. */
     private static String performanceModeText(int performanceMode) {
@@ -238,7 +246,18 @@ public class AndroidAudioRenderer implements AudioRenderer {
             // This will block until the write is completed. That can cause a backlog
             // of pending audio data, so we do the above check to be able to bound
             // latency at 40 ms in that situation.
+            //
+            // The timing either side is compiled out of release builds: BuildConfig.DEBUG is a
+            // compile-time constant, so the ternary folds to 0 and the block below disappears.
+            // This runs on the audio decode thread once per buffer, which is a hot path, and
+            // instrumentation on a hot path does not ship.
+            long writeStartNs = BuildConfig.DEBUG ? System.nanoTime() : 0;
+
             track.write(audioData, 0, audioData.length);
+
+            if (BuildConfig.DEBUG) {
+                recordWriteBlocked(System.nanoTime() - writeStartNs);
+            }
         }
         else {
             // Counted in the branch that already logs, so this costs nothing a healthy stream
@@ -246,6 +265,19 @@ public class AndroidAudioRenderer implements AudioRenderer {
             // makes the two output paths comparable.
             droppedBuffers++;
             LimeLog.info("Too much pending audio data: " + MoonBridge.getPendingAudioDuration() +" ms");
+        }
+    }
+
+    /**
+     * Accumulates one blocking-write measurement. Only ever called from a {@code BuildConfig.DEBUG}
+     * branch, and only from the audio decode thread, so the plain fields need no synchronisation.
+     */
+    private void recordWriteBlocked(long blockedNs) {
+        writeBlockedTotalNs += blockedNs;
+        writeCount++;
+
+        if (blockedNs > writeBlockedMaxNs) {
+            writeBlockedMaxNs = blockedNs;
         }
     }
 
@@ -284,6 +316,11 @@ public class AndroidAudioRenderer implements AudioRenderer {
         String summary = "AudioTrack session ended: performance mode "
                 +performanceModeText(grantedPerformanceMode)+", "+grantedBufferFrames
                 +" frame buffer, "+underruns+" underruns, "+droppedBuffers+" dropped buffers";
+
+        if (BuildConfig.DEBUG && writeCount > 0) {
+            summary += ", write blocked avg "+(writeBlockedTotalNs / writeCount / 1000)
+                    +" us, max "+(writeBlockedMaxNs / 1000)+" us";
+        }
 
         if (grantedPerformanceMode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
                 && underruns == 0 && droppedBuffers == 0) {
