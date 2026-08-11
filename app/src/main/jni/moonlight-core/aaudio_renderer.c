@@ -53,6 +53,17 @@ typedef struct {
     _Atomic int32_t actualPerformanceMode;
     _Atomic int32_t actualSharingMode;
     _Atomic int32_t actualSampleRate;
+
+    // Session totals, folded in whenever a stream is retired - replaced by recovery, or closed at
+    // teardown. Written only from cold paths, never from the data callback.
+    _Atomic uint32_t recoveryCount;
+    _Atomic uint32_t xrunCount;
+    _Atomic uint32_t silenceSamplesTotal;
+    _Atomic uint64_t framesWrittenTotal;
+
+    // readIndex when the current stream opened, so a stream's own contribution can be separated
+    // out. The ring deliberately survives recovery, so readIndex does not restart with the stream.
+    _Atomic uint32_t readIndexAtStreamStart;
 } AAudioRenderer;
 
 // AAudioStreamBuilder_setChannelMask() arrived in API 32, above our minSdk of 30, so the NDK
@@ -147,18 +158,55 @@ static aaudio_data_callback_result_t dataCallback(AAudioStream* stream, void* us
 
 static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sharingMode);
 
+// Folds a stream's contribution into the session totals, then stops and closes it.
+//
+// Both callers own the stream at this point, which is what makes the getters safe to call - and
+// they have to be called before the close, since they stop working afterwards. Keeping the
+// sampling and the close together in one function is what stops the two call sites from drifting.
+static void retireStream(AAudioRenderer* ctx) {
+    AAudioStream* stream = ctx->stream;
+    if (stream == NULL) {
+        return;
+    }
+
+    // A negative return is an aaudio_result_t error code rather than a count, which is what a
+    // disconnected stream gives us here.
+    int32_t xruns = AAudioStream_getXRunCount(stream);
+    if (xruns > 0) {
+        atomic_fetch_add_explicit(&ctx->xrunCount, (uint32_t)xruns, memory_order_relaxed);
+    }
+
+    int64_t framesWritten = AAudioStream_getFramesWritten(stream);
+    if (framesWritten > 0) {
+        atomic_fetch_add_explicit(&ctx->framesWrittenTotal, (uint64_t)framesWritten,
+                                  memory_order_relaxed);
+
+        // How much silence the callback emitted, derived rather than counted. getFramesWritten()
+        // covers every frame the callback produced; readIndex advances only by what it actually
+        // took from the ring; the difference is what got papered over. That keeps the underrun
+        // figure available in release builds without the callback counting anything itself.
+        //
+        // Deliberately uint32 throughout: the subtraction is then correct across readIndex's own
+        // wraparound, which is the same ~12.4 hours a uint32 sample counter would give anyway.
+        uint32_t output = (uint32_t)((uint64_t)framesWritten * (uint32_t)ctx->channelCount);
+        uint32_t fromRing = atomic_load_explicit(&ctx->readIndex, memory_order_relaxed) -
+                            atomic_load_explicit(&ctx->readIndexAtStreamStart, memory_order_relaxed);
+        atomic_fetch_add_explicit(&ctx->silenceSamplesTotal, output - fromRing,
+                                  memory_order_relaxed);
+    }
+
+    AAudioStream_requestStop(stream);
+    AAudioStream_close(stream);
+    ctx->stream = NULL;
+}
+
 // Runs on a detached thread because AAudio forbids closing or stopping a stream from inside its
 // own error callback. A route change (HDMI replug, switching to a soundbar, Bluetooth connect)
 // disconnects the stream, and without this the audio would stop permanently.
 static void* recoverThread(void* userData) {
     AAudioRenderer* ctx = (AAudioRenderer*)userData;
 
-    AAudioStream* oldStream = ctx->stream;
-    if (oldStream != NULL) {
-        AAudioStream_requestStop(oldStream);
-        AAudioStream_close(oldStream);
-        ctx->stream = NULL;
-    }
+    retireStream(ctx);
 
     // The ring is deliberately left alone. The producer keeps running during recovery, so
     // resetting the indices from here would mean two threads writing them. Whatever is queued is
@@ -211,6 +259,10 @@ static void errorCallback(AAudioStream* stream, void* userData, aaudio_result_t 
         // A recovery is already in flight
         return;
     }
+
+    // A stream that quietly rebuilds itself over and over is a real defect, and nothing counted
+    // it before. Not the realtime callback: this runs on AAudio's error callback thread.
+    atomic_fetch_add_explicit(&ctx->recoveryCount, 1, memory_order_relaxed);
 
     pthread_t thread;
     if (pthread_create(&thread, NULL, recoverThread, ctx) != 0) {
@@ -277,6 +329,12 @@ static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sha
     atomic_store_explicit(&ctx->actualSharingMode, (int32_t)AAudioStream_getSharingMode(stream),
                           memory_order_relaxed);
     atomic_store_explicit(&ctx->actualSampleRate, AAudioStream_getSampleRate(stream),
+                          memory_order_relaxed);
+
+    // Baseline for the derived silence figure in retireStream(). Safe to take here because no
+    // callback can run until requestStart(), so readIndex cannot move between now and then.
+    atomic_store_explicit(&ctx->readIndexAtStreamStart,
+                          atomic_load_explicit(&ctx->readIndex, memory_order_relaxed),
                           memory_order_relaxed);
 
     // Not fatal, and deliberately not a reason to fall back. AudioTrack is the path this file
@@ -431,17 +489,31 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeCleanup(
         return;
     }
 
-    // Stop the callback before anything it touches goes away.
-    if (ctx->stream != NULL) {
-        AAudioStream_requestStop(ctx->stream);
-        AAudioStream_close(ctx->stream);
-        ctx->stream = NULL;
-    }
+    // Stop the callback before anything it touches goes away. Also folds this stream's counters
+    // into the session totals, which has to happen before the close.
+    retireStream(ctx);
 
     uint32_t dropped = atomic_load_explicit(&ctx->droppedBuffers, memory_order_relaxed);
-    if (dropped != 0) {
-        LOGW("Dropped %u audio buffers due to ring buffer overrun", dropped);
-    }
+    uint32_t recoveries = atomic_load_explicit(&ctx->recoveryCount, memory_order_relaxed);
+    uint32_t xruns = atomic_load_explicit(&ctx->xrunCount, memory_order_relaxed);
+    uint32_t silence = atomic_load_explicit(&ctx->silenceSamplesTotal, memory_order_relaxed);
+    uint64_t framesWritten = atomic_load_explicit(&ctx->framesWrittenTotal, memory_order_relaxed);
+    int32_t perfMode = atomic_load_explicit(&ctx->actualPerformanceMode, memory_order_relaxed);
+    int32_t sharingMode = atomic_load_explicit(&ctx->actualSharingMode, memory_order_relaxed);
+
+    // Unconditional, unlike the overlay: this is the line that reaches a bug report, and it runs
+    // on every session end rather than only when something crashed. The priority is computed so a
+    // session with anything wrong with it is findable in a logcat dump without knowing what to
+    // grep for - including a stream that ran perfectly but never got the mode it asked for.
+    bool clean = perfMode == AAUDIO_PERFORMANCE_MODE_LOW_LATENCY &&
+                 (silence | dropped | recoveries | xruns) == 0;
+
+    __android_log_print(clean ? ANDROID_LOG_INFO : ANDROID_LOG_WARN, LOG_TAG,
+                        "AAudio session ended: %s / %s, %llu frames written, %u xruns, "
+                        "%u silence samples, %u dropped buffers, %u recoveries",
+                        performanceModeText((aaudio_performance_mode_t)perfMode),
+                        sharingModeText((aaudio_sharing_mode_t)sharingMode),
+                        (unsigned long long)framesWritten, xruns, silence, dropped, recoveries);
 
     free(ctx->ring);
     free(ctx);
