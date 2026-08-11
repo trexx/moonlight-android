@@ -40,6 +40,10 @@ static jmethodID BridgeDrStartMethod;
 static jmethodID BridgeDrStopMethod;
 static jmethodID BridgeDrCleanupMethod;
 static jmethodID BridgeDrSubmitDecodeUnitMethod;
+static jmethodID BridgeDrStartPicDataMethod;
+static jmethodID BridgeDrSubmitPicDataMethod;
+static jmethodID BridgeDrAbortPicDataMethod;
+static jmethodID ByteBufferPositionMethod;
 static jmethodID BridgeArInitMethod;
 static jmethodID BridgeArStartMethod;
 static jmethodID BridgeArStopMethod;
@@ -108,6 +112,15 @@ Java_com_limelight_nvstream_jni_MoonBridge_init(JNIEnv *env, jclass clazz) {
     BridgeDrStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStop", "()V");
     BridgeDrCleanupMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrCleanup", "()V");
     BridgeDrSubmitDecodeUnitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitDecodeUnit", "([BIIIICJJ)I");
+    BridgeDrStartPicDataMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrStartPicData", "(IIICJJ)Ljava/nio/ByteBuffer;");
+    BridgeDrSubmitPicDataMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrSubmitPicData", "(I)I");
+    BridgeDrAbortPicDataMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeDrAbortPicData", "()I");
+
+    // Resolved once: the picture data path needs the input buffer's position on every frame, and
+    // GetDirectBufferAddress only reports where the buffer starts.
+    jclass byteBufferClass = (*env)->FindClass(env, "java/nio/Buffer");
+    ByteBufferPositionMethod = (*env)->GetMethodID(env, byteBufferClass, "position", "()I");
+    (*env)->DeleteLocalRef(env, byteBufferClass);
     BridgeArInitMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArInit", "(III)I");
     BridgeArStartMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStart", "()V");
     BridgeArStopMethod = (*env)->GetStaticMethodID(env, clazz, "bridgeArStop", "()V");
@@ -165,12 +178,102 @@ void BridgeDrCleanup(void) {
     (*env)->CallStaticVoidMethod(env, GlobalBridgeClass, BridgeDrCleanupMethod);
 }
 
-// Copies one decode unit into the reusable Java byte array and hands it to the decoder. The unit
-// arrives as a linked list of buffers, which is flattened here because MediaCodec wants one
-// contiguous buffer.
+// Writes the picture data entries of a decode unit straight into the decoder's input buffer.
+//
+// The decode unit arrives as a linked list, and MediaCodec wants one contiguous buffer, so a copy
+// is unavoidable. What is avoidable is doing it twice: this used to flatten the list into a Java
+// byte array, which the Java side then copied again into the codec's input buffer. Here the Java
+// side hands back that input buffer first and the list is flattened directly into it.
+//
+// MEMORY SAFETY - read before changing the call sequence.
+//
+// Between BridgeDrStartPicData returning and BridgeDrSubmitPicData being called, we hold a raw
+// pointer into a MediaCodec input buffer. If codec recovery completed in that window the buffer
+// would be released underneath us and this would write into freed memory.
+//
+// It cannot, and the reason is not local to this function. Recovery only runs once every
+// codec-touching thread has marked itself quiesced, and this thread's flag is only ever set inside
+// doCodecRecoveryIfRequired(), which the Java side reaches from fetchNextInputBuffer() and
+// queueNextInputBuffer() - one on each side of this window, neither inside it. So this thread
+// cannot quiesce mid-copy, so recovery cannot complete mid-copy.
+//
+// That makes the quiesce barrier load-bearing for memory safety, not just for codec state. Adding
+// any call that could reach doCodecRecoveryIfRequired() between the two phases would reintroduce
+// the use-after-free with nothing to warn you.
+static int SubmitPicData(JNIEnv* env, PDECODE_UNIT decodeUnit, int picDataLength) {
+    jobject inputBuffer = (*env)->CallStaticObjectMethod(env, GlobalBridgeClass, BridgeDrStartPicDataMethod,
+                                                         picDataLength,
+                                                         decodeUnit->frameNumber, decodeUnit->frameType,
+                                                         (jchar)decodeUnit->frameHostProcessingLatency,
+                                                         (jlong)decodeUnit->receiveTimeUs,
+                                                         (jlong)decodeUnit->enqueueTimeUs);
+    if ((*env)->ExceptionCheck(env)) {
+        // We will crash here
+        (*JVM)->DetachCurrentThread(JVM);
+        return DR_OK;
+    }
+
+    if (inputBuffer == NULL) {
+        return (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrAbortPicDataMethod);
+    }
+
+    // GetDirectBufferAddress gives the start of the buffer, not its current position. The position
+    // is non-zero whenever codec specific data has been prepended for a fused IDR frame, so it has
+    // to be asked for separately - one cached-methodID call, against a copy of tens of kilobytes.
+    uint8_t* base = (*env)->GetDirectBufferAddress(env, inputBuffer);
+    jlong capacity = (*env)->GetDirectBufferCapacity(env, inputBuffer);
+    jint position = (*env)->CallIntMethod(env, inputBuffer, ByteBufferPositionMethod);
+
+    // MediaCodec input buffers are direct, so this should not happen. If it ever does, unwinding
+    // is the only safe move: the Java side has already fetched a buffer, and there is no way to
+    // reach its contents from here.
+    if (base == NULL || capacity < 0) {
+        __android_log_print(ANDROID_LOG_ERROR, "moonlight",
+                            "Codec input buffer is not direct; cannot submit picture data");
+        (*env)->DeleteLocalRef(env, inputBuffer);
+        return (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrAbortPicDataMethod);
+    }
+
+    // The Java side already rejected a decode unit too large for the buffer, so this is a
+    // belt-and-braces check on the arithmetic rather than on the input.
+    if (position < 0 || (jlong)position + picDataLength > capacity) {
+        __android_log_print(ANDROID_LOG_ERROR, "moonlight",
+                            "Picture data (%d bytes at %d) exceeds input buffer capacity %lld",
+                            picDataLength, position, (long long)capacity);
+        (*env)->DeleteLocalRef(env, inputBuffer);
+        return (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrAbortPicDataMethod);
+    }
+
+    int written = 0;
+    for (PLENTRY entry = decodeUnit->bufferList; entry != NULL; entry = entry->next) {
+        if (entry->bufferType == BUFFER_TYPE_PICDATA) {
+            memcpy(base + position + written, entry->data, entry->length);
+            written += entry->length;
+        }
+    }
+
+    (*env)->DeleteLocalRef(env, inputBuffer);
+
+    int ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitPicDataMethod, written);
+    if ((*env)->ExceptionCheck(env)) {
+        // queueInputBuffer can surface a decoder failure as a RendererException, same as the
+        // byte array path this replaced. We will crash here.
+        (*JVM)->DetachCurrentThread(JVM);
+        return DR_OK;
+    }
+
+    return ret;
+}
+
+// Hands one decode unit to the decoder.
+//
+// Parameter sets still go through the Java byte array: they are tens of bytes, they are parsed,
+// patched and re-serialised on the Java side anyway, and that code is the most device-quirk-laden
+// in the app. Picture data - the part that is actually large - takes the copy-free path above.
 int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
     JNIEnv* env = GetThreadEnv();
     int ret;
+    int picDataLength = 0;
 
     // Increase the size of our frame data buffer if our frame won't fit
     if ((*env)->GetArrayLength(env, DecodedFrameBuffer) < decodeUnit->fullLength) {
@@ -179,10 +282,8 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
     }
 
     PLENTRY currentEntry;
-    int offset;
 
     currentEntry = decodeUnit->bufferList;
-    offset = 0;
     while (currentEntry != NULL) {
         // Submit parameter set NALUs separately from picture data
         if (currentEntry->bufferType != BUFFER_TYPE_PICDATA) {
@@ -204,25 +305,14 @@ int BridgeDrSubmitDecodeUnit(PDECODE_UNIT decodeUnit) {
             }
         }
         else {
-            (*env)->SetByteArrayRegion(env, DecodedFrameBuffer, offset, currentEntry->length, (jbyte*)currentEntry->data);
-            offset += currentEntry->length;
+            // Measured now and copied later, once the destination buffer exists
+            picDataLength += currentEntry->length;
         }
 
         currentEntry = currentEntry->next;
     }
 
-    ret = (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrSubmitDecodeUnitMethod,
-                                       DecodedFrameBuffer, offset, BUFFER_TYPE_PICDATA,
-                                       decodeUnit->frameNumber, decodeUnit->frameType, (jchar)decodeUnit->frameHostProcessingLatency,
-                                       (jlong)decodeUnit->receiveTimeUs, (jlong)decodeUnit->enqueueTimeUs);
-    if ((*env)->ExceptionCheck(env)) {
-        // We will crash here
-        (*JVM)->DetachCurrentThread(JVM);
-        return DR_OK;
-    }
-    else {
-        return ret;
-    }
+    return SubmitPicData(env, decodeUnit, picDataLength);
 }
 
 // Creates the Opus decoder and the reusable PCM buffer, then sets up the Java audio renderer.

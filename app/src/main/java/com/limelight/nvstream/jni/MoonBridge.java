@@ -1,5 +1,7 @@
 package com.limelight.nvstream.jni;
 
+import java.nio.ByteBuffer;
+
 import com.limelight.nvstream.NvConnectionListener;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
@@ -257,6 +259,47 @@ public class MoonBridge {
         if (videoRenderer != null) {
             return videoRenderer.submitDecodeUnit(decodeUnitData, decodeUnitLength,
                     decodeUnitType, frameNumber, frameType, frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs);
+        }
+        else {
+            return DR_OK;
+        }
+    }
+
+    /**
+     * Callback from native: begin a copy-free picture data submission.
+     *
+     * <p>See {@link VideoDecoderRenderer#startPicData}. A non-null return obliges the caller to
+     * call {@link #bridgeDrSubmitPicData}; a null return obliges it to call
+     * {@link #bridgeDrAbortPicData}.
+     *
+     * @return the decoder's input buffer to write into, or null
+     */
+    public static ByteBuffer bridgeDrStartPicData(int decodeUnitLength, int frameNumber, int frameType,
+                                                  char frameHostProcessingLatency,
+                                                  long receiveTimeUs, long enqueueTimeUs) {
+        if (videoRenderer != null) {
+            return videoRenderer.startPicData(decodeUnitLength, frameNumber, frameType,
+                    frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs);
+        }
+        else {
+            return null;
+        }
+    }
+
+    /** Callback from native: the picture data has been written; queue it. */
+    public static int bridgeDrSubmitPicData(int bytesWritten) {
+        if (videoRenderer != null) {
+            return videoRenderer.submitPicData(bytesWritten);
+        }
+        else {
+            return DR_OK;
+        }
+    }
+
+    /** Callback from native: bridgeDrStartPicData returned null, so unwind. */
+    public static int bridgeDrAbortPicData() {
+        if (videoRenderer != null) {
+            return videoRenderer.abortPicData();
         }
         else {
             return DR_OK;

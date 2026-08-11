@@ -1827,72 +1827,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return MoonBridge.DR_OK;
         }
 
-        if (lastFrameNumber == 0) {
-            activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
-        } else if (frameNumber != lastFrameNumber && frameNumber != lastFrameNumber + 1) {
-            // We can receive the same "frame" multiple times if it's an IDR frame.
-            // In that case, each frame start NALU is submitted independently.
-            activeWindowVideoStats.framesLost += frameNumber - lastFrameNumber - 1;
-            activeWindowVideoStats.totalFrames += frameNumber - lastFrameNumber - 1;
-            activeWindowVideoStats.frameLossEvents++;
-        }
-
-        // Reset CSD data for each IDR frame
-        if (lastFrameNumber != frameNumber && frameType == MoonBridge.FRAME_TYPE_IDR) {
-            vpsBuffers.clear();
-            spsBuffers.clear();
-            ppsBuffers.clear();
-        }
-
-        lastFrameNumber = frameNumber;
-
-        // Flip stats windows roughly every second
-        if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
-            // Cache the overlay's visibility for the per-frame paths. They need it 60 times a
-            // second and this is the only place already asking, so they read a field rather than
-            // making an interface call. Visibility rather than the preference: the game menu's
-            // toggle flips it mid-stream without touching prefConfig.
-            perfMetricsEnabled = perfListener.isPerfOverlayVisible();
-
-            if (perfMetricsEnabled) {
-                // Snapshot here, format on the main thread. This runs on the decode thread, and
-                // building the text meant a dozen resource lookups, three JNI stats calls, a
-                // TrafficStats sample and a StringBuilder on the frame path once a second.
-                //
-                // The snapshot is required regardless: activeWindowVideoStats is cleared a few
-                // lines below, so the formatter cannot be handed a live reference. The frame
-                // rates are computed here too, since they derive from the time elapsed since the
-                // window opened and would drift by however long the thread hop took.
-                final VideoStats lastTwo = new VideoStats();
-                lastTwo.add(lastWindowVideoStats);
-                lastTwo.add(activeWindowVideoStats);
-
-                final VideoStatsFps fps = lastTwo.getFps();
-                final String decoder;
-
-                if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
-                    decoder = avcDecoder.getName();
-                } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
-                    decoder = hevcDecoder.getName();
-                } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
-                    decoder = av1Decoder.getName();
-                } else {
-                    decoder = "(unknown)";
-                }
-
-                overlayHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        perfListener.onPerfUpdate(buildPerfOverlayText(lastTwo, fps, decoder));
-                    }
-                });
-            }
-
-            globalVideoStats.add(activeWindowVideoStats);
-            lastWindowVideoStats.copy(activeWindowVideoStats);
-            activeWindowVideoStats.clear();
-            activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
-        }
+        updateFrameTracking(frameNumber, frameType);
 
         boolean csdSubmittedForThisFrame = false;
 
@@ -2034,49 +1969,113 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 ppsBuffers.add(naluBuffer);
                 return MoonBridge.DR_OK;
             }
-            else if ((videoFormat & (MoonBridge.VIDEO_FORMAT_MASK_H264 | MoonBridge.VIDEO_FORMAT_MASK_H265)) != 0) {
-                // If this is the first CSD blob or we aren't supporting fused IDR frames, we will
-                // submit the CSD blob in a separate input buffer for each IDR frame.
-                if (!submittedCsd || !fusedIdrFrame) {
-                    if (!fetchNextInputBuffer()) {
-                        return MoonBridge.DR_NEED_IDR;
-                    }
-
-                    // Submit all CSD when we receive the first non-CSD blob in an IDR frame
-                    for (byte[] vpsBuffer : vpsBuffers) {
-                        nextInputBuffer.put(vpsBuffer);
-                    }
-                    for (byte[] spsBuffer : spsBuffers) {
-                        nextInputBuffer.put(spsBuffer);
-                    }
-                    for (byte[] ppsBuffer : ppsBuffers) {
-                        nextInputBuffer.put(ppsBuffer);
-                    }
-
-                    if (!queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)) {
-                        return MoonBridge.DR_NEED_IDR;
-                    }
-
-                    // Remember that we already submitted CSD for this frame, so we don't do it
-                    // again in the fused IDR case below.
-                    csdSubmittedForThisFrame = true;
-
-                    // Remember that we submitted CSD globally for this MediaCodec instance
-                    submittedCsd = true;
-
-                    if (needsBaselineSpsHack) {
-                        needsBaselineSpsHack = false;
-
-                        if (!replaySps()) {
-                            return MoonBridge.DR_NEED_IDR;
-                        }
-
-                        LimeLog.info("SPS replay complete");
-                    }
+            else {
+                int csdResult = submitCsdBeforePicData();
+                if (csdResult == CSD_FAILED) {
+                    return MoonBridge.DR_NEED_IDR;
                 }
+                csdSubmittedForThisFrame = (csdResult == CSD_SUBMITTED);
             }
         }
 
+        updateFrameCounters(frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs);
+
+        if (!prepareInputBufferForData(decodeUnitLength, frameType, enqueueTimeUs, csdSubmittedForThisFrame)) {
+            return MoonBridge.DR_NEED_IDR;
+        }
+
+        // Copy data from our buffer list into the input buffer
+        nextInputBuffer.put(decodeUnitData, 0, decodeUnitLength);
+
+        if (!queueNextInputBuffer(pendingTimestampUs, pendingCodecFlags)) {
+            return MoonBridge.DR_NEED_IDR;
+        }
+
+        return MoonBridge.DR_OK;
+    }
+
+    /**
+     * Per-frame bookkeeping done before anything touches the codec: loss detection, discarding
+     * stale parameter sets at an IDR boundary, and rolling the measurement window over.
+     *
+     * <p>Shared by both submission paths so the statistics do not depend on which one a decode
+     * unit arrived through.
+     */
+    private void updateFrameTracking(int frameNumber, int frameType) {
+        if (lastFrameNumber == 0) {
+            activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
+        } else if (frameNumber != lastFrameNumber && frameNumber != lastFrameNumber + 1) {
+            // We can receive the same "frame" multiple times if it's an IDR frame.
+            // In that case, each frame start NALU is submitted independently.
+            activeWindowVideoStats.framesLost += frameNumber - lastFrameNumber - 1;
+            activeWindowVideoStats.totalFrames += frameNumber - lastFrameNumber - 1;
+            activeWindowVideoStats.frameLossEvents++;
+        }
+
+        // Reset CSD data for each IDR frame
+        if (lastFrameNumber != frameNumber && frameType == MoonBridge.FRAME_TYPE_IDR) {
+            vpsBuffers.clear();
+            spsBuffers.clear();
+            ppsBuffers.clear();
+        }
+
+        lastFrameNumber = frameNumber;
+
+        // Flip stats windows roughly every second
+        if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
+            // Cache the overlay's visibility for the per-frame paths. They need it 60 times a
+            // second and this is the only place already asking, so they read a field rather than
+            // making an interface call. Visibility rather than the preference: the game menu's
+            // toggle flips it mid-stream without touching prefConfig.
+            perfMetricsEnabled = perfListener.isPerfOverlayVisible();
+
+            if (perfMetricsEnabled) {
+                // Snapshot here, format on the main thread. This runs on the decode thread, and
+                // building the text meant a dozen resource lookups, three JNI stats calls, a
+                // TrafficStats sample and a StringBuilder on the frame path once a second.
+                //
+                // The snapshot is required regardless: activeWindowVideoStats is cleared a few
+                // lines below, so the formatter cannot be handed a live reference. The frame
+                // rates are computed here too, since they derive from the time elapsed since the
+                // window opened and would drift by however long the thread hop took.
+                final VideoStats lastTwo = new VideoStats();
+                lastTwo.add(lastWindowVideoStats);
+                lastTwo.add(activeWindowVideoStats);
+
+                final VideoStatsFps fps = lastTwo.getFps();
+                final String decoder;
+
+                if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
+                    decoder = avcDecoder.getName();
+                } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H265) != 0) {
+                    decoder = hevcDecoder.getName();
+                } else if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
+                    decoder = av1Decoder.getName();
+                } else {
+                    decoder = "(unknown)";
+                }
+
+                overlayHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        perfListener.onPerfUpdate(buildPerfOverlayText(lastTwo, fps, decoder));
+                    }
+                });
+            }
+
+            globalVideoStats.add(activeWindowVideoStats);
+            lastWindowVideoStats.copy(activeWindowVideoStats);
+            activeWindowVideoStats.clear();
+            activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
+        }
+
+    }
+
+    /**
+     * Accumulates the per-decode-unit counters. Shared by both submission paths, and separate
+     * from {@link #updateFrameTracking} because the parameter set handling runs between them.
+     */
+    private void updateFrameCounters(char frameHostProcessingLatency, long receiveTimeUs, long enqueueTimeUs) {
         if (frameHostProcessingLatency != 0) {
             if (activeWindowVideoStats.minHostProcessingLatency != 0) {
                 activeWindowVideoStats.minHostProcessingLatency = (char) Math.min(activeWindowVideoStats.minHostProcessingLatency, frameHostProcessingLatency);
@@ -2097,9 +2096,176 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // caused by a slow decoder.
             activeWindowVideoStats.totalTimeMs += (enqueueTimeUs - receiveTimeUs) / 1000;
         }
+    }
+
+    // Outcomes of submitCsdBeforePicData()
+    private static final int CSD_NOT_NEEDED = 0;
+    private static final int CSD_SUBMITTED = 1;
+    private static final int CSD_FAILED = 2;
+
+    /**
+     * Submits the accumulated parameter sets ahead of the first picture data of an IDR frame.
+     *
+     * <p>Despite living among the parameter set handling, this runs on the <em>picture data</em>
+     * decode unit, not on the parameter sets themselves: the SPS, PPS and VPS are cached as they
+     * arrive, and this flushes them the moment the frame data that needs them shows up. Both
+     * submission paths must call it, or a decoder never receives parameter sets at all.
+     *
+     * <p>AV1 is excluded because its sequence header travels in the frame data rather than as
+     * separate parameter set NALUs.
+     *
+     * @return {@link #CSD_SUBMITTED} if parameter sets were queued, {@link #CSD_NOT_NEEDED} if
+     *         they were not required, or {@link #CSD_FAILED} if the caller must request an IDR
+     */
+    private int submitCsdBeforePicData() {
+        if ((videoFormat & (MoonBridge.VIDEO_FORMAT_MASK_H264 | MoonBridge.VIDEO_FORMAT_MASK_H265)) == 0) {
+            return CSD_NOT_NEEDED;
+        }
+
+        // If this is the first CSD blob or we aren't supporting fused IDR frames, we will
+        // submit the CSD blob in a separate input buffer for each IDR frame.
+        if (submittedCsd && fusedIdrFrame) {
+            return CSD_NOT_NEEDED;
+        }
 
         if (!fetchNextInputBuffer()) {
+            return CSD_FAILED;
+        }
+
+        // Submit all CSD when we receive the first non-CSD blob in an IDR frame
+        for (byte[] vpsBuffer : vpsBuffers) {
+            nextInputBuffer.put(vpsBuffer);
+        }
+        for (byte[] spsBuffer : spsBuffers) {
+            nextInputBuffer.put(spsBuffer);
+        }
+        for (byte[] ppsBuffer : ppsBuffers) {
+            nextInputBuffer.put(ppsBuffer);
+        }
+
+        if (!queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)) {
+            return CSD_FAILED;
+        }
+
+        // Remember that we submitted CSD globally for this MediaCodec instance
+        submittedCsd = true;
+
+        if (needsBaselineSpsHack) {
+            needsBaselineSpsHack = false;
+
+            if (!replaySps()) {
+                return CSD_FAILED;
+            }
+
+            LimeLog.info("SPS replay complete");
+        }
+
+        return CSD_SUBMITTED;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Runs the same preamble as {@link #submitDecodeUnit} and then stops, handing back the
+     * codec's own input buffer so the caller can write the frame straight into it.
+     *
+     * <p>The parameter set parsing itself is skipped, since those decode units still take the
+     * byte array path. {@link #submitCsdBeforePicData()} is <em>not</em> skipped: despite sitting
+     * among that parsing, it runs on the picture data rather than on the parameter sets, flushing
+     * the cached SPS, PPS and VPS ahead of the frame that needs them. Omitting it means a decoder
+     * never receives parameter sets and decodes nothing.
+     */
+    @Override
+    public ByteBuffer startPicData(int decodeUnitLength, int frameNumber, int frameType,
+                                   char frameHostProcessingLatency, long receiveTimeUs, long enqueueTimeUs) {
+        if (stopping) {
+            return null;
+        }
+
+        updateFrameTracking(frameNumber, frameType);
+
+        boolean csdSubmittedForThisFrame = false;
+        if (frameType == MoonBridge.FRAME_TYPE_IDR) {
+            int csdResult = submitCsdBeforePicData();
+            if (csdResult == CSD_FAILED) {
+                return null;
+            }
+            csdSubmittedForThisFrame = (csdResult == CSD_SUBMITTED);
+        }
+
+        updateFrameCounters(frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs);
+
+        if (!prepareInputBufferForData(decodeUnitLength, frameType, enqueueTimeUs, csdSubmittedForThisFrame)) {
+            return null;
+        }
+
+        return nextInputBuffer;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>The position has to be advanced here. Native wrote through a raw pointer obtained from
+     * {@code GetDirectBufferAddress}, which does not touch the ByteBuffer's own state, and
+     * {@link #queueNextInputBuffer} takes the buffer's length from {@code position()}.
+     */
+    @Override
+    public int submitPicData(int bytesWritten) {
+        nextInputBuffer.position(nextInputBuffer.position() + bytesWritten);
+
+        if (!queueNextInputBuffer(pendingTimestampUs, pendingCodecFlags)) {
             return MoonBridge.DR_NEED_IDR;
+        }
+
+        return MoonBridge.DR_OK;
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Teardown is reported as success so that the host is not asked for an IDR frame on a
+     * connection that is going away, matching what {@link #submitDecodeUnit} returns when
+     * {@code stopping} is set.
+     *
+     * <p>Any input buffer fetched by {@link #startPicData} is retained rather than leaked:
+     * {@link #fetchNextInputBuffer} short-circuits while {@code nextInputBuffer} is non-null, so
+     * the next decode unit reuses it. It is reset here because a fused IDR frame will already
+     * have written codec-specific data into it, and without this the retry would prepend a second
+     * copy behind the first. Same reasoning as the transient-error path in
+     * {@link #queueNextInputBuffer}.
+     */
+    @Override
+    public int abortPicData() {
+        if (nextInputBuffer != null) {
+            nextInputBuffer.clear();
+        }
+
+        return stopping ? MoonBridge.DR_OK : MoonBridge.DR_NEED_IDR;
+    }
+
+    // Carried between prepareInputBufferForData() and the queueNextInputBuffer() that follows it.
+    // Fields rather than parameters because the picture data path splits those two steps across a
+    // return to native code. Safe: only the decode thread reaches either, and it already holds
+    // nextInputBuffer across calls for the same reason.
+    private long pendingTimestampUs;
+    private int pendingCodecFlags;
+
+    /**
+     * Obtains an input buffer and makes it ready to receive {@code decodeUnitLength} bytes.
+     *
+     * <p>Everything between the per-frame statistics and the copy itself: fetching a buffer,
+     * prepending codec-specific data for fused IDR frames, assigning the presentation timestamp,
+     * and checking the data will fit. On success {@link #nextInputBuffer} is positioned where the
+     * data belongs and {@link #pendingTimestampUs}/{@link #pendingCodecFlags} describe the pending
+     * submission.
+     *
+     * @param csdSubmittedForThisFrame true if CSD was already queued separately for this frame
+     * @return false if the caller must ask the host for a fresh IDR frame
+     */
+    private boolean prepareInputBufferForData(int decodeUnitLength, int frameType,
+                                              long enqueueTimeUs, boolean csdSubmittedForThisFrame) {
+        if (!fetchNextInputBuffer()) {
+            return false;
         }
 
         int codecFlags = 0;
@@ -2141,14 +2307,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             throw new RendererException(this, exception);
         }
 
-        // Copy data from our buffer list into the input buffer
-        nextInputBuffer.put(decodeUnitData, 0, decodeUnitLength);
-
-        if (!queueNextInputBuffer(timestampUs, codecFlags)) {
-            return MoonBridge.DR_NEED_IDR;
-        }
-
-        return MoonBridge.DR_OK;
+        pendingTimestampUs = timestampUs;
+        pendingCodecFlags = codecFlags;
+        return true;
     }
 
     /**
