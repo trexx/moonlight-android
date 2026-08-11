@@ -64,6 +64,15 @@ typedef struct {
     // readIndex when the current stream opened, so a stream's own contribution can be separated
     // out. The ring deliberately survives recovery, so readIndex does not restart with the stream.
     _Atomic uint32_t readIndexAtStreamStart;
+
+#ifdef LC_DEBUG
+    // Debug builds only, and inside the guard so release keeps this struct's exact layout. The
+    // derived silence figure covers release; what these add is the *callback* count, which is
+    // what separates one long dropout from constant micro-starvation. They are gated because
+    // they are the only instrumentation here that would run on the realtime callback thread.
+    _Atomic uint32_t underrunSamples;
+    _Atomic uint32_t underrunCallbacks;
+#endif
 } AAudioRenderer;
 
 // AAudioStreamBuilder_setChannelMask() arrived in API 32, above our minSdk of 30, so the NDK
@@ -151,6 +160,25 @@ static aaudio_data_callback_result_t dataCallback(AAudioStream* stream, void* us
     // Underrun. Emit silence for the remainder rather than glitching or stalling the stream.
     if (copied < requested) {
         memset(out + copied, 0, (size_t)(requested - copied) * sizeof(int16_t));
+
+#ifdef LC_DEBUG
+        // The only instrumentation in this function, and it is compiled out of release builds
+        // entirely rather than merely made cheap.
+        //
+        // Load-add-store rather than atomic_fetch_add, for the same reason readIndex above is
+        // written that way: this callback is the only writer, so no read-modify-write is needed.
+        // That is not a micro-optimisation. A relaxed fetch_add compiles to a call to
+        // __aarch64_ldadd4_relax under the NDK's default -moutline-atomics on arm64, and to an
+        // ldrex/strex pair on armeabi-v7a - and a function call has no business in a realtime
+        // callback even in a debug build. A plain load and store lowers to ldr/str on both.
+        atomic_store_explicit(&ctx->underrunSamples,
+                              atomic_load_explicit(&ctx->underrunSamples, memory_order_relaxed) +
+                                      (requested - copied),
+                              memory_order_relaxed);
+        atomic_store_explicit(&ctx->underrunCallbacks,
+                              atomic_load_explicit(&ctx->underrunCallbacks, memory_order_relaxed) + 1,
+                              memory_order_relaxed);
+#endif
     }
 
     return AAUDIO_CALLBACK_RESULT_CONTINUE;
@@ -514,6 +542,15 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeCleanup(
                         performanceModeText((aaudio_performance_mode_t)perfMode),
                         sharingModeText((aaudio_sharing_mode_t)sharingMode),
                         (unsigned long long)framesWritten, xruns, silence, dropped, recoveries);
+
+#ifdef LC_DEBUG
+    // The counted figures, alongside the derived one above. They measure the same silence by
+    // different routes, so a disagreement means the derivation is wrong - which is the only way
+    // to keep release builds' underrun number honest.
+    LOGI("AAudio underrun detail: %u callbacks underran, %u samples counted (%u derived)",
+         atomic_load_explicit(&ctx->underrunCallbacks, memory_order_relaxed),
+         atomic_load_explicit(&ctx->underrunSamples, memory_order_relaxed), silence);
+#endif
 
     free(ctx->ring);
     free(ctx);
