@@ -26,6 +26,31 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
     private AudioTrack track;
 
+    // What the platform actually granted, read back once at setup so nothing has to touch the
+    // track afterwards. Until now the only record of the configuration was what we asked for,
+    // which says nothing: AudioTrack may decline PERFORMANCE_MODE_LOW_LATENCY without saying so.
+    private int grantedPerformanceMode = AudioTrack.PERFORMANCE_MODE_NONE;
+    private int grantedBufferFrames;
+    private int acceptedAttempt;
+
+    // Buffers dropped because too much audio was already pending. Written only by the audio decode
+    // thread in playDecodedAudio; volatile so the teardown summary sees the final value.
+    private volatile int droppedBuffers;
+
+    /** Names what {@link AudioTrack#getPerformanceMode} returned, which is not what was asked for. */
+    private static String performanceModeText(int performanceMode) {
+        switch (performanceMode) {
+            case AudioTrack.PERFORMANCE_MODE_LOW_LATENCY:
+                return "low latency";
+            case AudioTrack.PERFORMANCE_MODE_POWER_SAVING:
+                return "power saving";
+            case AudioTrack.PERFORMANCE_MODE_NONE:
+                return "none";
+            default:
+                return "unknown";
+        }
+    }
+
     /**
      * @param lowLatency request {@code PERFORMANCE_MODE_LOW_LATENCY}, which the platform may
      *                   silently decline
@@ -155,7 +180,28 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 track.play();
 
                 // Successfully created working AudioTrack. We're done here.
-                LimeLog.info("Audio track configuration: "+bufferSize+" "+lowLatency);
+                //
+                // Read back what was granted rather than repeating what was requested. Which of
+                // the four combinations won was previously unrecoverable from the log too, so
+                // "small buffer, low latency" and "large buffer, standard" looked the same.
+                acceptedAttempt = i + 1;
+                grantedPerformanceMode = track.getPerformanceMode();
+                grantedBufferFrames = track.getBufferSizeInFrames();
+
+                LimeLog.info("Audio track configuration: attempt "+acceptedAttempt+"/4, "
+                        +grantedBufferFrames+" frame buffer granted (requested "+bufferSize
+                        +" bytes), performance mode "+performanceModeText(grantedPerformanceMode));
+
+                // The failure this renderer cannot do anything about, and the reason the AAudio
+                // path exists: the request is accepted, playback works, and the output is half a
+                // second behind. There is nothing better to fall back to here - the search above
+                // has already picked the best combination the platform would take - so say so and
+                // carry on.
+                if (lowLatency && grantedPerformanceMode != AudioTrack.PERFORMANCE_MODE_LOW_LATENCY) {
+                    LimeLog.warning("AudioTrack declined PERFORMANCE_MODE_LOW_LATENCY and granted "
+                            +performanceModeText(grantedPerformanceMode)+" instead. Audio output "
+                            +"latency will be higher than requested.");
+                }
                 break;
             } catch (Exception e) {
                 // Try to release the AudioTrack if we got far enough
@@ -195,6 +241,10 @@ public class AndroidAudioRenderer implements AudioRenderer {
             track.write(audioData, 0, audioData.length);
         }
         else {
+            // Counted in the branch that already logs, so this costs nothing a healthy stream
+            // would notice. AAudio's renderer counts the same event on its side, which is what
+            // makes the two output paths comparable.
+            droppedBuffers++;
             LimeLog.info("Too much pending audio data: " + MoonBridge.getPendingAudioDuration() +" ms");
         }
     }
@@ -217,10 +267,37 @@ public class AndroidAudioRenderer implements AudioRenderer {
      */
     @Override
     public void cleanup() {
+        // setup() returns -2 without a track if every combination was rejected, and the connection
+        // is torn down through here either way.
+        if (track == null) {
+            return;
+        }
+
+        // Sampled before the release, since the getters stop working afterwards. getUnderrunCount()
+        // is maintained by the framework, so this output path gets its underrun figure exactly and
+        // for free - no counting of our own anywhere.
+        int underruns = track.getUnderrunCount();
+
+        // Unconditional, and at warning level when anything went wrong, so it survives in a bug
+        // report. A session that played perfectly but never got the mode it asked for counts as
+        // wrong here: that is the whole failure mode.
+        String summary = "AudioTrack session ended: performance mode "
+                +performanceModeText(grantedPerformanceMode)+", "+grantedBufferFrames
+                +" frame buffer, "+underruns+" underruns, "+droppedBuffers+" dropped buffers";
+
+        if (grantedPerformanceMode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
+                && underruns == 0 && droppedBuffers == 0) {
+            LimeLog.info(summary);
+        }
+        else {
+            LimeLog.warning(summary);
+        }
+
         // Immediately drop all pending data
         track.pause();
         track.flush();
 
         track.release();
+        track = null;
     }
 }
