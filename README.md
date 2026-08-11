@@ -139,6 +139,23 @@ mask layout is bit-identical, so 5.1 and 7.1 keep their centre, LFE and rear cha
 Route changes are handled by an error callback that reopens the stream off the audio
 thread.
 
+Both output paths report the configuration the platform **granted**, rather than the one
+they asked for. Requesting `PERFORMANCE_MODE_LOW_LATENCY` is not the same as getting it —
+that denial is the entire problem this feature exists to work around — and neither renderer
+used to check, so a downgraded stream and a working one produced identical logs. Confirming
+which you had meant reaching for `adb shell dumpsys media.metrics`. Now the granted mode,
+sharing mode and buffer size appear in the startup log, in a session-end summary that runs
+on every exit, and in the performance overlay; a downgrade warns rather than failing, since
+there is nothing better to fall back to. That applies to the AudioTrack path too, which had
+the same blindness on the path most users are actually on.
+
+None of that instrumentation runs on a hot path in a release build. The realtime callback's
+generated code is byte-for-byte identical to what it was before the counters were added; the
+underrun figure is instead *derived* from AAudio's own frame counter against the ring's read
+index, which costs nothing because both were already being maintained. The per-callback
+breakdown, and the AudioTrack write-blocking measurement, are compiled out of release
+entirely and exist only in debug builds.
+
 Thanks to [ClassicOldSong/moonlight-android#567](https://github.com/ClassicOldSong/moonlight-android/pull/567)
 for the diagnosis; see also upstream issues
 [#1423](https://github.com/moonlight-stream/moonlight-android/issues/1423),
@@ -204,6 +221,14 @@ automatically and now is not unless asked for.
   exactly like a host sending nothing. Both are now counted and surfaced: unconditionally in
   the end-of-stream summary, and in the overlay only when non-zero, so the line's *absence*
   is the healthy signal. That is the surface the silent-audio bug above should have had.
+* **Audio failures are counted.** Audio's failure modes are silent by construction: an
+  underrun is papered over with silence, a disconnected stream is rebuilt in the background,
+  and a full ring drops the incoming buffer. A device could be doing all three continuously
+  and nothing anywhere said so. All of them are now counted, alongside the granted output
+  configuration, and reported the same way — unconditionally in a session-end summary that
+  runs on every exit, and in the overlay only when non-zero. Counters a backend has no
+  concept of render as `—` rather than `0`, because a zero is indistinguishable from a real
+  count of none.
 * **The overlay is built off the decode thread.** Formatting it cost roughly a dozen
   `String.format` lookups, three JNI stats calls and a `TrafficStats` sample once a second on
   moonlight-common-c's decode thread — the frame path the overlay exists to measure. The

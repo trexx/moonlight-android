@@ -138,8 +138,66 @@ pad. Test both configurations — the second block is the regression check.
 Off by default. The first item is what makes this safe to ship; the rest only matter once
 it is switched on.
 
-- [X] **Setting off: audio behaviour is byte-for-byte unchanged.** No new logging, no
-      change in latency, no change in device selection.
+> **Un-silence logging before running any of this.** The Homatics ships `persist.log.tag=S`,
+> which silences the whole main buffer, so every log check in this section passes silently
+> whatever the truth is. Same caveat as §5, and it applies here too:
+> ```bash
+> adb shell getprop persist.log.tag          # note the original value
+> adb shell setprop persist.log.tag '""'
+> adb logcat -c
+> ```
+> Restore it afterwards. Note also that the AAudio startup line is easy to lose even with
+> logging on: the buffer is only 256 KiB and HDMI CEC chatter floods it within minutes, so
+> read it soon after the stream starts.
+
+- [X] **Setting off: renderer selection is unchanged.** AudioTrack is still chosen, and no
+      AAudio stream is opened (`adb logcat -d -s MoonlightAAudio:V` is empty). Note this no
+      longer means "no new logging" in general — the AudioTrack path reports its own granted
+      configuration now, by design, since that is the path most users are on.
+- [ ] **Both paths report what was *granted*, not what was requested.** With the setting on,
+      the AAudio startup line must name a performance mode; with it off, the AudioTrack line
+      must do the same:
+      ```bash
+      adb logcat -d -s MoonlightAAudio:V              # "... low latency / exclusive ..."
+      adb logcat -d | grep -a "Audio track configuration"
+      ```
+      A downgrade warns rather than failing, so the absence of a warning is the pass
+      condition. This is the check that previously required `dumpsys media.metrics`.
+- [ ] **Cross-check the app against the platform.** While streaming:
+      ```bash
+      adb shell dumpsys media.metrics \
+        | grep -aE "performanceModeActual|sharingModeActual|burstFrames|bufferSizeFrames"
+      ```
+      `performanceModeActual` and `sharingModeActual` must agree with what the app logged.
+      **Disagreement here invalidates everything downstream** — it means the readback is
+      wrong, and the overlay and session summary are reporting fiction. Baseline measured on
+      the Homatics Box R 4K Plus: `LOW_LATENCY`, `EXCLUSIVE`, `burstFrames=384`,
+      `bufferSizeFrames=768`.
+- [ ] **Session-end summary appears on every exit**, not just after a crash:
+      ```bash
+      adb logcat -d -s MoonlightAAudio:V | grep -a "session ended"
+      ```
+      INFO when clean, WARN when anything was wrong — including a session that played
+      perfectly but never got the mode it asked for. The AudioTrack path emits its own
+      equivalent through `LimeLog`.
+- [ ] **Overlay shows the audio row** (enable the performance overlay in settings). It must
+      name the backend actually in use, and follow a mid-session fallback from AAudio to
+      AudioTrack rather than going blank. Counters that a backend does not report render as
+      `—`, never as `0`.
+- [ ] **Deliberate downgrade is detected.** Temporarily force it and confirm the warning,
+      the log line and the overlay row all say so, then revert:
+      - AAudio: set `AAUDIO_PERFORMANCE_MODE_NONE` at the `setPerformanceMode` call in
+        `aaudio_renderer.c`.
+      - AudioTrack: make the native-sample-rate check in `AndroidAudioRenderer.setup()`
+        always `continue`, so only the standard-mode combinations are reachable.
+
+      This is the same style of forced-failure proof §5 uses for the decrypt counter — the
+      counters are worthless until they have been seen to move.
+- [ ] **Debug build only: counted and derived underruns agree.** Install the debug variant
+      (it sits alongside via the `.debug` suffix) and force starvation by dropping one buffer
+      in fifty in `nativeEnqueue`. The `AAudio underrun detail` line reports both figures;
+      they must match. Release builds report only the derived one, so this is what licenses
+      trusting it.
 - [x] Setting on, **stereo**: audio plays, and stays in sync across a long session — 30+
       minutes — with no dropouts, crackle or drift. *(Verified on the Homatics Box R 4K.)*
 - [ ] Setting on, **5.1 or 7.1**: **every speaker produces sound.** Use Windows'
@@ -155,12 +213,24 @@ it is switched on.
       reports of unplayable stuttering exist against the implementation this replaces, so it
       is worth deliberately stressing.
 
-> **Cannot be verified on the hardware available.** The problem this targets is AudioTrack's
-> fast path being denied on certain Android TV devices, producing roughly 0.5–1 s of audio
-> delay. The Android TV box on hand does **not** exhibit that symptom, so the latency win
-> itself is unconfirmed. Everything above is still worth running — it establishes the
-> feature does no harm — but the benefit remains unproven until it reaches an affected
-> device (Google TV Streamer or similar).
+> **What is now measured, and what still is not.**
+>
+> Measured on the Homatics Box R 4K Plus (Amlogic, API 34), and confirmed against
+> `dumpsys media.metrics`: AAudio grants `LOW_LATENCY` and `EXCLUSIVE` on the first attempt,
+> with a 384-frame burst and a 768-frame buffer — about 16 ms at 48 kHz — and ran a
+> ~4-minute session with zero underruns. The callback thread is `SCHED_FIFO`. These are the
+> numbers any future device gets compared against.
+>
+> Still unproven: the benefit **relative to** a broken AudioTrack. The problem this targets
+> is AudioTrack's fast path being denied on certain Android TV devices, producing roughly
+> 0.5–1 s of delay, and this box does not exhibit that — its AudioTrack is granted
+> `PERFORMANCE_MODE_LOW_LATENCY` too. So the feature is confirmed to work and to do no harm;
+> what remains unconfirmed is how much it wins where AudioTrack fails.
+>
+> That gap is now narrower than it was. Both paths report their granted mode, so on an
+> affected device (Google TV Streamer or similar) the comparison is a pair of log lines
+> rather than an inference — and the AudioTrack line alone is enough to identify such a
+> device without building anything.
 
 ---
 
