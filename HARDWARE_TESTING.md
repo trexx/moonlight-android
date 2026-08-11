@@ -304,9 +304,29 @@ adb logcat -d | grep -a -A40 "Stream summary:"
       NALUs, so *all* of its bytes take the new path and the sequence header rides inside the
       picture data. Confirm `CSD stats: 0, 0, 0` — a non-zero value there means the fused branch is
       prepending on AV1 and the offset risk applies to it too.
-      *Not testable on the Shield: the summary reports `AV1 Decoder: (none)`. Needs the Homatics,
-      and if that has no AV1 decoder either then this risk class cannot be covered on the supported
-      hardware at all — record that rather than leaving the box open.*
+      *Not testable on the Shield: the summary reports `AV1 Decoder: (none)`. Covered on the
+      Homatics instead — see below.*
+
+> **AV1 partially verified on the Homatics, 2026-08-11, release build.** `c2.amlogic.av1.decoder`
+> (hardware), `video/av01`, 1920x1080, **45020 frames over 750 s**, ending `error_state: STARTED`
+> with no error code. Neither native bail-out appeared (`Codec input buffer is not direct`,
+> `exceeds input buffer capacity` — these are `__android_log_print` in `callbacks.c` and are *not*
+> stripped from release, which is what makes this checkable without a debug build). No dropbox
+> crash. The stream took genuine packet loss during the run — 25 `Invalidate reference frame`
+> requests — and kept decoding.
+>
+> This matters because AV1 is the codec where **every byte takes the new path**: no separate
+> parameter set NALUs, so `submitCsdBeforePicData` returns `CSD_NOT_NEEDED` and the sequence header
+> rides inside the picture data.
+>
+> **Still outstanding for AV1:** the byte-level invariant counters, which need the instrumented
+> debug build. Note the offset risk does *not* apply here — with no CSD to prepend the write offset
+> is always 0 — so what the counters would add is confirmation of length and of a valid OBU header
+> at the write offset, not the fused-offset case.
+>
+> **Getting AV1 at all needs a host that can encode it.** An earlier attempt silently negotiated
+> H.264; confirm with `dumpsys media.metrics`, which records the codec on *release*, so stop the
+> stream before checking. Release builds strip `LimeLog.info`, so logcat will not name the codec.
 - [x] `Frames in-out: N, M` — the gap stays small and constant. A **growing** gap means frames enter
       the codec and never come out, which is the signature of a wrongly-offset write.
       *Shield/HEVC: gap of 10, flat across 16172 frames.*
