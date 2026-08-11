@@ -555,6 +555,38 @@ the change trades one bulk copy for several JNI operations per frame - two upcal
 `GetDirectBufferAddress`, `GetDirectBufferCapacity` and a `position()` call - which plausibly offsets
 some of the saving and is consistent with measuring nothing.
 
+**On the Homatics the change is real: about 6% off the submit thread, reproduced twice.**
+H.264 at 4K, release builds, alternating, two 90 s windows each, normalised by bytes received on
+`wlan0`:
+
+| bitrate | baseline | HEAD | delta |
+|---|---|---|---|
+| 82 Mbps | 10.26 ns/byte | 9.65 ns/byte | **-6.0%** |
+| 152 Mbps | 8.92 ns/byte | 8.40 ns/byte | **-5.9%** |
+
+Two independent pairs at different operating points agreeing to 0.1 points is much harder to explain
+as noise than any single pair. It is also specific to the thread the change touches: across the
+152 Mbps pair every other thread came in at **+0.8%** per byte, with the largest controls flat
+(`MediaCodec_loop` -0.6%, `CodecLooper` -1.0%). In absolute terms the submit thread went from
+170 to 160 ms/s at 152 Mbps, roughly 1% of one core.
+
+**So the answer is device-dependent, and that is the finding.** No effect on the Shield (Tegra X1,
+strong memory subsystem, effect below a ±10% resolution), a repeatable ~6% on the Homatics
+(32-bit userspace on Amlogic S905X4). The copy costs real time on the weaker memory subsystem and
+vanishes into the noise on the stronger one. Measuring only the Shield would have concluded the
+change was worthless; measuring only the Homatics would have overstated it.
+
+**Match the bitrate before comparing.** Per-byte cost is not scale-invariant - it fell from ~10.3 to
+~8.9 ns/byte on the same build purely by going from 81 to 152 Mbps, as fixed per-frame overheads
+amortise over more bytes. Only compare runs at similar Mbps, and record the Mbps with every result.
+
+**Codec coverage on the Homatics.** All of the above is **H.264**. HEVC is reported broken on this
+box, and AV1 could not be exercised: the box has `c2.amlogic.av1.decoder` in hardware, but the
+Sunshine host could not encode AV1, so the client silently negotiated H.264 - confirmed by
+`dumpsys media.metrics` showing `c2.amlogic.avc.decoder` instantiated and no `av01` instance. AV1
+therefore remains the one untested risk class, and it is the one where **100% of bytes take the new
+path**. It needs a host with an AV1-capable encoder.
+
 **Identifying the submit thread: do not grep for `VideoRecv`.** It does not exist at runtime.
 `callbacks.c:98` calls `AttachCurrentThread(JVM, &env, NULL)` with no `JavaVMAttachArgs`, so ART
 assigns a default name *and renames the OS thread* on its first JNI call. It appears as an anonymous
