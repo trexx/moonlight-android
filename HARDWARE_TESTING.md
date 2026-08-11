@@ -508,9 +508,48 @@ adb shell "cat /proc/$PID/task/<TID>/schedstat"   # field 1 = sum_exec_runtime, 
 - [ ] `simpleperf` shows the `SetByteArrayRegion` frame beneath `BridgeDrSubmitDecodeUnit` present
       in a `HEAD~1` profile and **absent** at `HEAD`. A frame disappearing is unambiguous in a way a
       sub-percent timing delta is not; this is the primary evidence.
-- [ ] Paired `schedstat` runs (5 per build, alternating, fixed 300 s, fixed scene, overlay state
+      *Blocked. Release builds are not `profileable`, so simpleperf refuses them, and debug builds
+      are useless for this because ART forces CheckJNI on for any debuggable app — see below.
+      Needs `<profileable android:shell="true"/>` in the manifest and a rebuild of both sides.*
+- [x] Paired `schedstat` runs (5 per build, alternating, fixed 300 s, fixed scene, overlay state
       identical) report a mean and a spread. **If the spread swallows the difference, say exactly
       that** — per CLAUDE.md, a metric that can be wrong is worse than no metric.
+      *Done 2026-08-11, Shield, release builds, 120 s paired windows, 4K60 HEVC, overlay off.*
+
+**Result: no measurable difference.** Submit thread 944.0 ms → 943.9 ms (−0.0%); workload-normalised
+`submit/codec` ratio 0.2168 → 0.2174 (+0.2%). The runs were well matched — codec-thread CPU within
+0.3% — so this is a fair comparison rather than a mismatched one.
+
+**State it as "too small to resolve at these frame sizes", not as "zero".** The arithmetic says the
+effect was never going to clear the noise floor in this test. From a stream summary on the same
+setup: 635033 video RTP packets across 21881 frames is 29 packets/frame, about **32 KB** — nowhere
+near the 167 KB an 80 Mbps cap implies, because the encoder sits far below its ceiling on ordinary
+content. A 32 KB `memcpy` is roughly 8 µs, so at ~40 fps the removed copy is ~0.3 ms/s against a
+7.87 ms/s thread: **~4%**. For calibration, the renderer thread moved 15% between these two runs
+while the codec threads moved 0.3%, so single-digit percentages are not reliably separable by this
+method.
+
+**The test design suppressed the effect.** Using static content was right for run-to-run
+comparability and wrong for sensitivity: frame size is precisely what the eliminated copy scales
+with, and static scenes minimise it. Re-run with **high-motion content** to put frame sizes where
+the change actually matters, and lean on the `submit/codec` ratio rather than absolute CPU, since
+that normalises the differing frame counts high-motion content will produce.
+
+**Identifying the submit thread: do not grep for `VideoRecv`.** It does not exist at runtime.
+`callbacks.c:98` calls `AttachCurrentThread(JVM, &env, NULL)` with no `JavaVMAttachArgs`, so ART
+assigns a default name *and renames the OS thread* on its first JNI call. It appears as an anonymous
+`Thread-N` (`Thread-46` and `Thread-14` in the two runs here). Identify it by position instead: it
+is the anonymous `Thread-N` whose TID falls between `Video - Rendere` and `VideoPing`, matching the
+creation order in `VideoStream.c`.
+
+```bash
+PID=$(adb shell pidof com.limelight.unofficial | tr -d '\r')
+adb shell "for t in /proc/$PID/task/*; do printf '%s %s %s\n' \$(basename \$t) \
+  \"\$(cat \$t/comm)\" \$(cut -d' ' -f1 \$t/schedstat); done"
+```
+
+`schedstat` field 1 is `sum_exec_runtime` in ns and is readable from a plain `adb shell` even for a
+non-debuggable release build, which is what makes this the only performance method available here.
 
 ### 6.7 Known gaps
 
