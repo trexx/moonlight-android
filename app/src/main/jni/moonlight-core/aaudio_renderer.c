@@ -45,6 +45,14 @@ typedef struct {
     _Atomic bool dead;
     _Atomic bool recovering;
     _Atomic uint32_t droppedBuffers;
+
+    // What AAudio actually granted, cached when the stream opens. Requesting LOW_LATENCY is not
+    // the same as getting it, and a stream that quietly landed on PERFORMANCE_MODE_NONE is the
+    // half-second delay this file exists to avoid - from the outside it is indistinguishable from
+    // a working one. Atomic because recoverThread rewrites them while another thread may read.
+    _Atomic int32_t actualPerformanceMode;
+    _Atomic int32_t actualSharingMode;
+    _Atomic int32_t actualSampleRate;
 } AAudioRenderer;
 
 // AAudioStreamBuilder_setChannelMask() arrived in API 32, above our minSdk of 30, so the NDK
@@ -70,6 +78,26 @@ static AAudioStreamBuilder_setChannelMask_fn resolveSetChannelMask(void) {
 static const char* resultText(aaudio_result_t result) {
     const char* text = AAudio_convertResultToText(result);
     return text != NULL ? text : "unknown";
+}
+
+// Naming what AAudio actually granted, which is not necessarily what was asked for. Unlike
+// AAudioStreamBuilder_setChannelMask() above, the getters these describe all arrived in API 26,
+// below our minSdk of 30, so they are called directly and need none of the dlsym apparatus.
+static const char* performanceModeText(aaudio_performance_mode_t mode) {
+    switch (mode) {
+        case AAUDIO_PERFORMANCE_MODE_LOW_LATENCY:  return "low latency";
+        case AAUDIO_PERFORMANCE_MODE_POWER_SAVING: return "power saving";
+        case AAUDIO_PERFORMANCE_MODE_NONE:         return "none";
+        default:                                   return "unknown";
+    }
+}
+
+static const char* sharingModeText(aaudio_sharing_mode_t mode) {
+    switch (mode) {
+        case AAUDIO_SHARING_MODE_EXCLUSIVE: return "exclusive";
+        case AAUDIO_SHARING_MODE_SHARED:    return "shared";
+        default:                            return "unknown";
+    }
 }
 
 static uint32_t roundUpToPowerOfTwo(uint32_t value) {
@@ -154,7 +182,12 @@ static void* recoverThread(void* userData) {
         atomic_store_explicit(&ctx->dead, true, memory_order_release);
     }
     else {
-        LOGI("Recovered AAudio stream after device disconnect");
+        // Naming the granted mode matters here: recovery can quietly land on a degraded stream,
+        // which would otherwise be indistinguishable from a clean one.
+        LOGI("Recovered AAudio stream after device disconnect: %s / %s",
+             performanceModeText(
+                     atomic_load_explicit(&ctx->actualPerformanceMode, memory_order_relaxed)),
+             sharingModeText(atomic_load_explicit(&ctx->actualSharingMode, memory_order_relaxed)));
     }
 
     atomic_store_explicit(&ctx->recovering, false, memory_order_release);
@@ -234,6 +267,26 @@ static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sha
         return result;
     }
 
+    // Read back what we were actually given. This lives here rather than in nativeSetup() because
+    // recoverThread re-enters openStream(): a route change can land us on a degraded replacement
+    // stream, and that is otherwise completely invisible.
+    aaudio_performance_mode_t performanceMode = AAudioStream_getPerformanceMode(stream);
+
+    atomic_store_explicit(&ctx->actualPerformanceMode, (int32_t)performanceMode,
+                          memory_order_relaxed);
+    atomic_store_explicit(&ctx->actualSharingMode, (int32_t)AAudioStream_getSharingMode(stream),
+                          memory_order_relaxed);
+    atomic_store_explicit(&ctx->actualSampleRate, AAudioStream_getSampleRate(stream),
+                          memory_order_relaxed);
+
+    // Not fatal, and deliberately not a reason to fall back. AudioTrack is the path this file
+    // exists to escape, so dropping to it would trade a reported problem for a silent one - and
+    // we already knowingly accept the SHARED downgrade below. Warn and carry on.
+    if (performanceMode != AAUDIO_PERFORMANCE_MODE_LOW_LATENCY) {
+        LOGW("AAudio granted performance mode '%s' after LOW_LATENCY was requested. Audio latency "
+             "will be no better than AudioTrack's.", performanceModeText(performanceMode));
+    }
+
     ctx->stream = stream;
     return AAUDIO_OK;
 }
@@ -298,12 +351,18 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeSetup(
         return 0;
     }
 
-    LOGI("AAudio stream started: %d ch (mask 0x%x), %d Hz, %d frame burst, %d frame buffer, "
-         "%s mode, ring %u samples",
-         channelCount, channelMask, sampleRate, burstFrames,
+    // Everything here is read back from the stream rather than echoed from the arguments. The
+    // sample rate is included because a silently resampled stream is a real, latency-adding
+    // downgrade that would otherwise look like a clean start.
+    int32_t grantedSampleRate = atomic_load_explicit(&ctx->actualSampleRate, memory_order_relaxed);
+
+    LOGI("AAudio stream started: %d ch (mask 0x%x), %d Hz (requested %d), %d frame burst, "
+         "%d frame buffer, %s / %s, ring %u samples",
+         channelCount, channelMask, grantedSampleRate, sampleRate, burstFrames,
          AAudioStream_getBufferSizeInFrames(ctx->stream),
-         AAudioStream_getSharingMode(ctx->stream) == AAUDIO_SHARING_MODE_EXCLUSIVE
-                 ? "exclusive" : "shared",
+         performanceModeText(
+                 atomic_load_explicit(&ctx->actualPerformanceMode, memory_order_relaxed)),
+         sharingModeText(atomic_load_explicit(&ctx->actualSharingMode, memory_order_relaxed)),
          ctx->ringCapacity);
 
     return (jlong)(intptr_t)ctx;
