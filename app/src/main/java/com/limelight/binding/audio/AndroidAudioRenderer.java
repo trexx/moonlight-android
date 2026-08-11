@@ -196,6 +196,11 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 grantedPerformanceMode = track.getPerformanceMode();
                 grantedBufferFrames = track.getBufferSizeInFrames();
 
+                // info(), so proguard-rules.pro strips this from release builds along with every
+                // other LimeLog.info call. That is deliberate and the right trade here: the
+                // release-build answers are the warning below when something is wrong, and the
+                // performance overlay when it is not. Unlike the AAudio renderer, which logs
+                // natively and so keeps its equivalent line in release, this one is debug-only.
                 LimeLog.info("Audio track configuration: attempt "+acceptedAttempt+"/4, "
                         +grantedBufferFrames+" frame buffer granted (requested "+bufferSize
                         +" bytes), performance mode "+performanceModeText(grantedPerformanceMode));

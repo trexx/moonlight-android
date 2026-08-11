@@ -163,6 +163,12 @@ it is switched on.
       ```
       A downgrade warns rather than failing, so the absence of a warning is the pass
       condition. This is the check that previously required `dumpsys media.metrics`.
+
+      **The second command needs a debug build.** `proguard-rules.pro` strips every
+      `LimeLog.info` call from release, so the AudioTrack configuration line exists only in
+      debug. The AAudio renderer logs natively and so keeps its line in both. In a release
+      build the AudioTrack path's answers are the downgrade *warning* — which is kept — and
+      the overlay row; verify it there instead.
 - [ ] **Cross-check the app against the platform.** While streaming:
       ```bash
       adb shell dumpsys media.metrics \
