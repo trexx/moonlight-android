@@ -516,24 +516,44 @@ adb shell "cat /proc/$PID/task/<TID>/schedstat"   # field 1 = sum_exec_runtime, 
       that** — per CLAUDE.md, a metric that can be wrong is worse than no metric.
       *Done 2026-08-11, Shield, release builds, 120 s paired windows, 4K60 HEVC, overlay off.*
 
-**Result: no measurable difference.** Submit thread 944.0 ms → 943.9 ms (−0.0%); workload-normalised
-`submit/codec` ratio 0.2168 → 0.2174 (+0.2%). The runs were well matched — codec-thread CPU within
-0.3% — so this is a fair comparison rather than a mismatched one.
+**Result: no measurable difference, in either direction.** Six 90-120 s windows on the Shield,
+release builds either side of the change, alternating between them, 4K60 HEVC over wired Ethernet,
+overlay off. Normalising submit-thread CPU by bytes received:
 
-**State it as "too small to resolve at these frame sizes", not as "zero".** The arithmetic says the
-effect was never going to clear the noise floor in this test. From a stream summary on the same
-setup: 635033 video RTP packets across 21881 frames is 29 packets/frame, about **32 KB** — nowhere
-near the 167 KB an 80 Mbps cap implies, because the encoder sits far below its ceiling on ordinary
-content. A 32 KB `memcpy` is roughly 8 µs, so at ~40 fps the removed copy is ~0.3 ms/s against a
-7.87 ms/s thread: **~4%**. For calibration, the renderer thread moved 15% between these two runs
-while the codec threads moved 0.3%, so single-digit percentages are not reliably separable by this
-method.
+| | baseline | HEAD |
+|---|---|---|
+| mean | 9.81 ns/byte | 9.96 ns/byte |
+| sd | 0.35 | 0.58 |
+| range | 9.56 - 10.21 | 9.33 - 10.47 |
 
-**The test design suppressed the effect.** Using static content was right for run-to-run
-comparability and wrong for sensitivity: frame size is precisely what the eliminated copy scales
-with, and static scenes minimise it. Re-run with **high-motion content** to put frame sizes where
-the change actually matters, and lean on the `submit/codec` ratio rather than absolute CPU, since
-that normalises the differing frame counts high-motion content will produce.
+Difference in means +1.5%, t = 0.38 against ~2.8 needed for significance at this sample size. The
+best-matched pair, where bytes received agreed to 0.1% (794/787 MB vs 793/787 MB), differs by
+**-0.4%**. The 95% interval on the difference spans roughly -10% to +12%, so the honest claim is
+**"no effect larger than about 10% either way on that thread"**, not "no effect".
+
+**A single unpaired comparison suggested a 4-5% regression and it was noise.** That pair had HEAD
+measured before baseline and content that differed by 1.5% in bytes, and it landed inside the
+baseline's own later spread. One run per build is not enough here whatever it appears to show;
+alternate the builds and normalise, or do not draw the conclusion.
+
+**Normalise by bytes received, not by the codec threads.** `submit/codec` swung from 0.58 to 1.31
+across sessions purely on content, because codec CPU tracks frames while the submit thread tracks
+bytes. It is only meaningful within a single session. Bytes come from `/proc/net/dev` on the
+interface carrying the stream, sampled either side of the window.
+
+**Content intensity dominates everything and must be reported.** Between sessions here the stream
+ranged from 34 to 70 Mbps and submit-thread CPU from 7.9 to 90 ms/s - an order of magnitude - while
+the effect under test is a few percent. Static content is worst: it minimises frame size, which is
+exactly what the removed copy scales with, so the first attempt at this measured a regime where the
+change cannot matter. Use sustained high-motion content and record the Mbps alongside any result.
+
+**What this means for the change.** It is a null result on CPU, not evidence against the change.
+The second copy is provably gone from the code and the correctness work stands; what the numbers say
+is that at realistic frame sizes the saving does not clear the measurement noise on this hardware,
+so the commit should be described as structural rather than as a measurable CPU win. Note also that
+the change trades one bulk copy for several JNI operations per frame - two upcalls plus
+`GetDirectBufferAddress`, `GetDirectBufferCapacity` and a `position()` call - which plausibly offsets
+some of the saving and is consistent with measuring nothing.
 
 **Identifying the submit thread: do not grep for `VideoRecv`.** It does not exist at runtime.
 `callbacks.c:98` calls `AttachCurrentThread(JVM, &env, NULL)` with no `JavaVMAttachArgs`, so ART
