@@ -520,6 +520,47 @@ public class MoonBridge {
 
     public static native long[] getRTPVideoStats();
 
+
+    // Indices into the array returned by getAudioStats(). One shape for every audio backend, so
+    // an entry that the active one has no concept of reads AUDIO_STAT_NA rather than 0 - a zero
+    // would be indistinguishable from a real count of none.
+    public static final int AUDIO_STAT_BACKEND          = 0;
+    public static final int AUDIO_STAT_PERFORMANCE_MODE = 1;
+    public static final int AUDIO_STAT_SHARING_MODE     = 2;
+    public static final int AUDIO_STAT_BUFFER_FRAMES    = 3;
+    public static final int AUDIO_STAT_UNDERRUNS        = 4;
+    public static final int AUDIO_STAT_DROPPED_BUFFERS  = 5;
+    public static final int AUDIO_STAT_RECOVERIES       = 6;
+    public static final int AUDIO_STAT_COUNT            = 7;
+
+    /** Value of any entry the active backend does not report. */
+    public static final int AUDIO_STAT_NA = -1;
+
+    public static final int AUDIO_BACKEND_AUDIOTRACK = 0;
+    public static final int AUDIO_BACKEND_AAUDIO     = 1;
+
+    // Performance mode is normalised across backends rather than passed through as the platform
+    // enum, because AudioTrack and AAudio number theirs differently and a reader of the overlay
+    // should not have to know which one produced the number.
+    public static final int AUDIO_PERF_MODE_NONE         = 0;
+    public static final int AUDIO_PERF_MODE_LOW_LATENCY  = 1;
+    public static final int AUDIO_PERF_MODE_POWER_SAVING = 2;
+
+    public static final int AUDIO_SHARING_MODE_EXCLUSIVE = 0;
+    public static final int AUDIO_SHARING_MODE_SHARED    = 1;
+
+    /**
+     * Snapshot of the active audio renderer's own output counters, or null when it keeps none.
+     *
+     * <p>Null is meaningful rather than an error: it says the renderer has nothing to claim, not
+     * that something failed. Safe to call at any time, including between sessions.
+     */
+    public static long[] getAudioStats() {
+        // Read once. cleanupBridge() clears the field from the connection-stop thread.
+        AudioRenderer renderer = audioRenderer;
+        return renderer != null ? renderer.getAudioStats() : null;
+    }
+
     public static native int testClientConnectivity(String testServerHostName, int referencePort, int testFlags);
 
     public static native int getPortFlagsFromStage(int stage);

@@ -297,8 +297,54 @@ public class AndroidAudioRenderer implements AudioRenderer {
      * <p>Pauses and flushes before releasing so that buffered audio is discarded rather than
      * played out after the stream has ended.
      */
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Unlike the AAudio path this reports underruns live, because getUnderrunCount() is a call
+     * on a Java object whose lifetime the lock below covers - there is no raw pointer to outlive.
+     */
     @Override
-    public void cleanup() {
+    public synchronized long[] getAudioStats() {
+        if (track == null) {
+            return null;
+        }
+
+        long[] stats = new long[MoonBridge.AUDIO_STAT_COUNT];
+        stats[MoonBridge.AUDIO_STAT_BACKEND] = MoonBridge.AUDIO_BACKEND_AUDIOTRACK;
+        stats[MoonBridge.AUDIO_STAT_PERFORMANCE_MODE] = normalisedPerformanceMode();
+        stats[MoonBridge.AUDIO_STAT_SHARING_MODE] = MoonBridge.AUDIO_STAT_NA; // AAudio-only concept
+        stats[MoonBridge.AUDIO_STAT_BUFFER_FRAMES] = grantedBufferFrames;
+        stats[MoonBridge.AUDIO_STAT_UNDERRUNS] = track.getUnderrunCount();
+        stats[MoonBridge.AUDIO_STAT_DROPPED_BUFFERS] = droppedBuffers;
+        stats[MoonBridge.AUDIO_STAT_RECOVERIES] = MoonBridge.AUDIO_STAT_NA; // AAudio-only concept
+
+        return stats;
+    }
+
+    /** Maps AudioTrack's performance mode onto the backend-independent {@link MoonBridge} values. */
+    private long normalisedPerformanceMode() {
+        switch (grantedPerformanceMode) {
+            case AudioTrack.PERFORMANCE_MODE_LOW_LATENCY:
+                return MoonBridge.AUDIO_PERF_MODE_LOW_LATENCY;
+            case AudioTrack.PERFORMANCE_MODE_POWER_SAVING:
+                return MoonBridge.AUDIO_PERF_MODE_POWER_SAVING;
+            case AudioTrack.PERFORMANCE_MODE_NONE:
+                return MoonBridge.AUDIO_PERF_MODE_NONE;
+            default:
+                return MoonBridge.AUDIO_STAT_NA;
+        }
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>{@code synchronized} against {@link #getAudioStats()}, which the overlay calls about once
+     * a second: without it that could reach a released track. Deliberately not against
+     * {@link #playDecodedAudio}, which runs on the audio decode thread - moonlight-common-c joins
+     * that thread before calling ArCleanup, so they never overlap.
+     */
+    @Override
+    public synchronized void cleanup() {
         // setup() returns -2 without a track if every combination was rejected, and the connection
         // is torn down through here either way.
         if (track == null) {

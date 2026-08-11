@@ -50,4 +50,22 @@ public interface AudioRenderer {
 
     /** Releases all output resources. Nothing else is called afterwards. */
     void cleanup();
+
+    /**
+     * Snapshot of this renderer's own output counters, for diagnostics.
+     *
+     * <p>Indices, backend ids and the normalised mode values are the {@code AUDIO_STAT_*},
+     * {@code AUDIO_BACKEND_*} and {@code AUDIO_PERF_MODE_*} constants on {@link MoonBridge}.
+     * Entries the backend has no concept of read {@link MoonBridge#AUDIO_STAT_NA}, which is
+     * distinct from a genuine count of zero.
+     *
+     * <p>Called about once a second from the UI thread while the performance overlay is visible,
+     * so implementations must tolerate being called concurrently with {@link #cleanup}.
+     *
+     * @return the counters, or null if this renderer keeps none. Null is meaningful: it says
+     *         there is nothing to claim rather than that something went wrong.
+     */
+    default long[] getAudioStats() {
+        return null;
+    }
 }

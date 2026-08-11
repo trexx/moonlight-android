@@ -26,6 +26,24 @@ public class NativeAAudioRenderer implements AudioRenderer {
     private static native void nativeEnqueue(long handle, short[] data, int length);
     private static native boolean nativeIsDead(long handle);
     private static native void nativeCleanup(long handle);
+    private static native long[] nativeGetStats(long handle);
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Underruns read as {@link MoonBridge#AUDIO_STAT_NA} in release builds. The figure is
+     * derived from the stream's own frame counter, which only the threads that own the stream may
+     * read, so it is reported in the session-end log rather than live; debug builds count it in
+     * the callback and report it here too.
+     *
+     * <p>{@code synchronized} against {@link #cleanup()}, which zeroes the handle: without it a
+     * caller could read a live handle and then pass a freed pointer into JNI. Both are rare - once
+     * a session and once a second - so the monitor is uncontended.
+     */
+    @Override
+    public synchronized long[] getAudioStats() {
+        return handle != 0 ? nativeGetStats(handle) : null;
+    }
 
     /**
      * {@inheritDoc}
@@ -94,9 +112,16 @@ public class NativeAAudioRenderer implements AudioRenderer {
     public void stop() {
     }
 
-    /** {@inheritDoc} Stops and closes the stream and frees the native context. Idempotent. */
+    /**
+     * {@inheritDoc} Stops and closes the stream and frees the native context. Idempotent.
+     *
+     * <p>{@code synchronized} against {@link #getAudioStats()}; see there. Deliberately not
+     * against {@link #playDecodedAudio} or {@link #isDead}, which run on the audio decode thread -
+     * moonlight-common-c joins that thread before calling ArCleanup, so there is no window where
+     * they overlap with this, and taking a lock per audio buffer would be real cost for none.
+     */
     @Override
-    public void cleanup() {
+    public synchronized void cleanup() {
         if (handle != 0) {
             nativeCleanup(handle);
             handle = 0;

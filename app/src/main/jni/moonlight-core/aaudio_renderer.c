@@ -53,6 +53,7 @@ typedef struct {
     _Atomic int32_t actualPerformanceMode;
     _Atomic int32_t actualSharingMode;
     _Atomic int32_t actualSampleRate;
+    _Atomic int32_t bufferSizeFrames;
 
     // Session totals, folded in whenever a stream is retired - replaced by recovery, or closed at
     // teardown. Written only from cold paths, never from the data callback.
@@ -359,6 +360,11 @@ static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sha
     atomic_store_explicit(&ctx->actualSampleRate, AAudioStream_getSampleRate(stream),
                           memory_order_relaxed);
 
+    // Cached so nativeGetStats() never has to touch the stream. nativeSetup() re-caches it after
+    // sizing the buffer down; on the recovery path this default is what the replacement gets.
+    atomic_store_explicit(&ctx->bufferSizeFrames, AAudioStream_getBufferSizeInFrames(stream),
+                          memory_order_relaxed);
+
     // Baseline for the derived silence figure in retireStream(). Safe to take here because no
     // callback can run until requestStart(), so readIndex cannot move between now and then.
     atomic_store_explicit(&ctx->readIndexAtStreamStart,
@@ -410,6 +416,8 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeSetup(
         targetBufferFrames = samplesPerFrame * 2;
     }
     AAudioStream_setBufferSizeInFrames(ctx->stream, targetBufferFrames);
+    atomic_store_explicit(&ctx->bufferSizeFrames, AAudioStream_getBufferSizeInFrames(ctx->stream),
+                          memory_order_relaxed);
 
     // The ring only needs to cover jitter between the decode thread and the callback. Keeping it
     // small is what bounds added latency, since a full ring makes the producer drop.
@@ -490,6 +498,85 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeEnqueue(
 
     // Release pairs with the acquire in dataCallback()
     atomic_store_explicit(&ctx->writeIndex, write + (uint32_t)length, memory_order_release);
+}
+
+// Mirrors of the normalised constants on MoonBridge. AAudio numbers its own performance modes
+// from 10, and AudioTrack numbers its from 0, so the raw platform value would mean nothing to a
+// caller that does not already know which backend produced it.
+#define STAT_NA                     (-1)
+#define STAT_BACKEND_AAUDIO         1
+#define STAT_PERF_MODE_NONE         0
+#define STAT_PERF_MODE_LOW_LATENCY  1
+#define STAT_PERF_MODE_POWER_SAVING 2
+#define STAT_SHARING_MODE_EXCLUSIVE 0
+#define STAT_SHARING_MODE_SHARED    1
+
+static jlong normalisedPerformanceMode(int32_t mode) {
+    switch (mode) {
+        case AAUDIO_PERFORMANCE_MODE_LOW_LATENCY:  return STAT_PERF_MODE_LOW_LATENCY;
+        case AAUDIO_PERFORMANCE_MODE_POWER_SAVING: return STAT_PERF_MODE_POWER_SAVING;
+        case AAUDIO_PERFORMANCE_MODE_NONE:         return STAT_PERF_MODE_NONE;
+        default:                                   return STAT_NA;
+    }
+}
+
+static jlong normalisedSharingMode(int32_t mode) {
+    switch (mode) {
+        case AAUDIO_SHARING_MODE_EXCLUSIVE: return STAT_SHARING_MODE_EXCLUSIVE;
+        case AAUDIO_SHARING_MODE_SHARED:    return STAT_SHARING_MODE_SHARED;
+        default:                            return STAT_NA;
+    }
+}
+
+/**
+ * Snapshot of the counters, for the performance overlay.
+ *
+ * One call rather than a getter each, because these are read together and only mean anything as a
+ * set. Deliberately touches nothing but atomic scalars in ctx: this runs on the UI thread roughly
+ * once a second, and ctx->stream is a plain pointer that recoverThread and nativeCleanup both
+ * close and clear, so dereferencing it from here would turn a rare race into a routine one. That
+ * is why underruns read as not-available in release builds - the figure is derived from
+ * getFramesWritten(), which only the threads that own the stream may call.
+ */
+JNIEXPORT jlongArray JNICALL
+Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeGetStats(
+        JNIEnv* env, jclass clazz, jlong handle) {
+    (void)clazz;
+
+    AAudioRenderer* ctx = (AAudioRenderer*)(intptr_t)handle;
+    if (ctx == NULL) {
+        return NULL;
+    }
+
+#ifdef LC_DEBUG
+    jlong underruns = (jlong)atomic_load_explicit(&ctx->underrunCallbacks, memory_order_relaxed);
+#else
+    jlong underruns = STAT_NA;
+#endif
+
+    // The counters are unsigned 32-bit, so they are widened into jlong rather than passed as
+    // signed ints, which would present values above 2^31 as negative during a long session. The
+    // buffer size is the value cached at open, not a fresh read off the stream, for the reason
+    // given above.
+    jlong values[] = {
+            STAT_BACKEND_AAUDIO,
+            normalisedPerformanceMode(
+                    atomic_load_explicit(&ctx->actualPerformanceMode, memory_order_relaxed)),
+            normalisedSharingMode(
+                    atomic_load_explicit(&ctx->actualSharingMode, memory_order_relaxed)),
+            (jlong)atomic_load_explicit(&ctx->bufferSizeFrames, memory_order_relaxed),
+            underruns,
+            (jlong)atomic_load_explicit(&ctx->droppedBuffers, memory_order_relaxed),
+            (jlong)atomic_load_explicit(&ctx->recoveryCount, memory_order_relaxed),
+    };
+
+    jsize count = (jsize)(sizeof(values) / sizeof(values[0]));
+    jlongArray result = (*env)->NewLongArray(env, count);
+    if (result != NULL) {
+        (*env)->SetLongArrayRegion(env, result, 0, count, values);
+    }
+
+    return result;
 }
 
 JNIEXPORT jboolean JNICALL

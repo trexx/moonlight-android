@@ -2357,6 +2357,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         videoDecryptFailed, audioDecryptFailed)).append('\n');
             }
         }
+        appendAudioStats(sb);
         if (lastTwo.framesWithHostProcessingLatency > 0) {
             sb.append(context.getString(R.string.perf_overlay_hostprocessinglatency,
                     (float)lastTwo.minHostProcessingLatency / 10,
@@ -2373,6 +2374,68 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Appends the audio output rows, if the active audio renderer reports any.
+     *
+     * <p>Lives here because this is where the overlay is built, not because audio is the video
+     * renderer's business - the numbers come through {@link MoonBridge}, the same way the RTP
+     * counters above do.
+     *
+     * <p>The configuration row is shown whenever there are stats at all. It is not a failure
+     * counter subject to the "only when non-zero" rule: whether the output path actually got the
+     * low latency mode it asked for is the question this row exists to answer, and answering it
+     * only in the failing case would mean absence had two meanings. The counters below it do
+     * follow that rule.
+     */
+    private void appendAudioStats(StringBuilder sb) {
+        long[] audioStats = MoonBridge.getAudioStats();
+        if (audioStats == null) {
+            // No renderer, or one that keeps no counters. Nothing to claim, so claim nothing.
+            return;
+        }
+
+        sb.append(context.getString(R.string.perf_overlay_audio,
+                audioBackendText(audioStats[MoonBridge.AUDIO_STAT_BACKEND]),
+                audioModeText(audioStats),
+                audioStats[MoonBridge.AUDIO_STAT_BUFFER_FRAMES])).append('\n');
+
+        long underruns = audioStats[MoonBridge.AUDIO_STAT_UNDERRUNS];
+        long dropped = audioStats[MoonBridge.AUDIO_STAT_DROPPED_BUFFERS];
+        long recoveries = audioStats[MoonBridge.AUDIO_STAT_RECOVERIES];
+
+        if (underruns > 0 || dropped > 0 || recoveries > 0) {
+            sb.append(context.getString(R.string.perf_overlay_audiofail,
+                    audioCountText(underruns), audioCountText(dropped),
+                    audioCountText(recoveries))).append('\n');
+        }
+    }
+
+    private String audioBackendText(long backend) {
+        return backend == MoonBridge.AUDIO_BACKEND_AAUDIO ? "AAudio" : "AudioTrack";
+    }
+
+    /** The granted performance mode, plus the sharing mode where the backend has one. */
+    private String audioModeText(long[] audioStats) {
+        String mode;
+        switch ((int)audioStats[MoonBridge.AUDIO_STAT_PERFORMANCE_MODE]) {
+            case MoonBridge.AUDIO_PERF_MODE_LOW_LATENCY:  mode = "low latency"; break;
+            case MoonBridge.AUDIO_PERF_MODE_POWER_SAVING: mode = "power saving"; break;
+            case MoonBridge.AUDIO_PERF_MODE_NONE:         mode = "none"; break;
+            default:                                      mode = "unknown"; break;
+        }
+
+        switch ((int)audioStats[MoonBridge.AUDIO_STAT_SHARING_MODE]) {
+            case MoonBridge.AUDIO_SHARING_MODE_EXCLUSIVE: return mode + " / exclusive";
+            case MoonBridge.AUDIO_SHARING_MODE_SHARED:    return mode + " / shared";
+            default:                                      return mode;
+        }
+    }
+
+    /** Renders a counter the active backend does not report as an em dash rather than as zero. */
+    private String audioCountText(long value) {
+        return value == MoonBridge.AUDIO_STAT_NA ? "—" : Long.toString(value);
     }
 
     /**

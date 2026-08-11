@@ -17,8 +17,11 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
 
     private final boolean enableAAudio;
 
-    private AudioRenderer renderer;
-    private NativeAAudioRenderer aaudioRenderer;
+    // Both are read from the UI thread by getAudioStats() and swapped from the audio decode thread
+    // when a dead AAudio stream is dropped, so neither may be cached in a register across the
+    // check that guards it.
+    private volatile AudioRenderer renderer;
+    private volatile NativeAAudioRenderer aaudioRenderer;
 
     // Retained so we can build an AudioTrack renderer later if the AAudio stream dies mid-session
     private MoonBridge.AudioConfiguration audioConfiguration;
@@ -125,6 +128,19 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         if (renderer != null) {
             renderer.stop();
         }
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Delegated to whichever renderer is currently backing the session, so the overlay follows
+     * a mid-session fallback from AAudio to AudioTrack rather than going blank.
+     */
+    @Override
+    public long[] getAudioStats() {
+        // Read once: the decode thread can swap this out underneath us in playDecodedAudio.
+        AudioRenderer current = renderer;
+        return current != null ? current.getAudioStats() : null;
     }
 
     /** {@inheritDoc} Releases the active renderer, whichever one the session ended up on. */
