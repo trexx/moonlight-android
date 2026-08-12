@@ -244,9 +244,21 @@ it is switched on.
       them: they distinguish *partial* starvation from *total* (samples ÷ callbacks approaching
       the full buffer means the ring was empty, not merely short), but not *contiguous* from
       *scattered*. Until something records that, the only way to tell is to watch the counters
-      move — enable the overlay and sample the audio row over a few minutes. On the Shield the
-      underrun counter froze at `147` and did not move across 70 s of polling, which is what
-      established that the silence was a startup transient and inaudible.
+      move — enable the overlay and read the audio row over a few minutes. On the Shield the
+      underrun counter froze at `147` and did not move across 70 s, which is what established
+      that the silence was a startup transient and inaudible.
+
+      **Do not sample it with `uiautomator dump`.** Reading the overlay text out of the view
+      hierarchy looks like the obvious way to get machine-readable samples, and it wrecks input:
+      the dump walks the hierarchy through the accessibility path, which synchronises against the
+      app's UI thread, and `Game` dispatches controller input on that same thread. At 1 Hz it
+      produced clearly late and dropped button presses on the Shield during active play — enough
+      to be mistaken for a regression in whatever is being tested. It is invisible on idle
+      content, which is what makes it a trap. The overlay *itself* is fine for input; it was the
+      polling. Read the row off the screen, or take the session-end summary instead.
+
+      The honest fix is a debug-only line logging the counters once a second from a cold path,
+      which would make this observable without a UI round-trip at all. Nothing does that yet.
 - [x] Setting on, **stereo**: audio plays, and stays in sync across a long session — 30+
       minutes — with no dropouts, crackle or drift. *(Verified on the Homatics Box R 4K.)*
 - [ ] Setting on, **5.1 or 7.1**: **every speaker produces sound.** Use Windows'
