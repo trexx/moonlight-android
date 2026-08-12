@@ -17,8 +17,9 @@ same case gets re-tested afterwards.
 
 | # | Device | Android | Host | Notes |
 |---|---|---|---|---|
-| A | *(fill in)* | | | primary Android TV box |
-| B | *(fill in)* | | | phone/tablet, for touch + on-screen keyboard |
+| A | Homatics Box R 4K Plus (Amlogic S905X4) | 14 / API 34 | *(fill in)* | `armeabi-v7a`; the box §3's original audio numbers came from |
+| B | NVIDIA Shield TV (`mdarcy`) | 11 / API 30 | Turk-PC, 4K60 HDR, HEVC | `arm64-v8a`; lowest supported API, so API-gated features stop here |
+| C | *(fill in)* | | | phone/tablet, for touch + on-screen keyboard |
 
 Record which environment each result came from — several of these behave differently on TV
 versus touch devices, and the audio work is Android TV specific.
@@ -148,7 +149,12 @@ it is switched on.
 > ```
 > Restore it afterwards. Note also that the AAudio startup line is easy to lose even with
 > logging on: the buffer is only 256 KiB and HDMI CEC chatter floods it within minutes, so
-> read it soon after the stream starts.
+> read it soon after the stream starts. On a long session, capture continuously
+> (`adb logcat -v time MoonlightAAudio:V '*:S' > audio.log &`) rather than relying on `-d`
+> afterwards, or the session-end summary can rotate out before you read it.
+>
+> The Shield TV does **not** ship `persist.log.tag=S` — `getprop` returns empty there and the
+> main buffer works as shipped, so this step is Homatics-only.
 
 - [X] **Setting off: renderer selection is unchanged.** AudioTrack is still chosen, and no
       AAudio stream is opened (`adb logcat -d -s MoonlightAAudio:V` is empty). Note this no
@@ -158,11 +164,16 @@ it is switched on.
       the AAudio startup line must name a performance mode; with it off, the AudioTrack line
       must do the same:
       ```bash
-      adb logcat -d -s MoonlightAAudio:V              # "... low latency / exclusive ..."
+      adb logcat -d -s MoonlightAAudio:V              # "... low latency / <sharing mode> ..."
       adb logcat -d | grep -a "Audio track configuration"
       ```
       A downgrade warns rather than failing, so the absence of a warning is the pass
       condition. This is the check that previously required `dumpsys media.metrics`.
+
+      Only the *performance* mode is required to be `low latency`. The sharing mode is
+      device-dependent and not a downgrade in itself — the Homatics grants `exclusive`, the
+      Shield refuses it and grants `shared`, and both are fine. `AAUDIO_SHARING_MODE_SHARED` is
+      the knowingly accepted fallback in `openStream()`, which is why it does not warn.
 
       **The second command needs a debug build.** `proguard-rules.pro` strips every
       `LimeLog.info` call from release, so the AudioTrack configuration line exists only in
@@ -179,6 +190,19 @@ it is switched on.
       wrong, and the overlay and session summary are reporting fiction. Baseline measured on
       the Homatics Box R 4K Plus: `LOW_LATENCY`, `EXCLUSIVE`, `burstFrames=384`,
       `bufferSizeFrames=768`.
+
+      **This check does not exist on the Shield TV.** API 30's `media.metrics` keeps no
+      `aaudio` records at all — only `audio.track`, `audio.thread`, `audio.device` and
+      friends — so there is no `performanceModeActual` to compare against and the grep
+      returns nothing. That is not a failure, and it is not the app's readback being wrong.
+      Use the platform's own log instead, which corroborates both fields independently:
+      ```bash
+      adb logcat -d -s AudioStreamBuilder:V AudioTrack:I | grep -aE "sharing|perfMode|FLAG_FAST"
+      ```
+      On the Shield that reads `perfMode = 12` (AAudio's `LOW_LATENCY`), `build() EXCLUSIVE
+      sharing mode not supported. Use SHARED.` and `AUDIO_OUTPUT_FLAG_FAST successful` —
+      agreeing with the app's `low latency / shared` on both counts, and confirming the fast
+      mixer path was actually granted.
 - [ ] **Session-end summary appears on every exit**, not just after a crash:
       ```bash
       adb logcat -d -s MoonlightAAudio:V | grep -a "session ended"
@@ -199,11 +223,30 @@ it is switched on.
 
       This is the same style of forced-failure proof §5 uses for the decrypt counter — the
       counters are worthless until they have been seen to move.
-- [ ] **Debug build only: counted and derived underruns agree.** Install the debug variant
-      (it sits alongside via the `.debug` suffix) and force starvation by dropping one buffer
-      in fifty in `nativeEnqueue`. The `AAudio underrun detail` line reports both figures;
-      they must match. Release builds report only the derived one, so this is what licenses
-      trusting it.
+- [x] **Debug build only: counted and derived underruns agree.** Install the debug variant
+      (it sits alongside via the `.debug` suffix). The `AAudio underrun detail` line reports
+      both figures; they must match. Verified on the Shield TV across two sessions:
+      `1982720 samples counted (1982720 derived)` and `67776 samples counted (67776 derived)`.
+
+      **This check is weaker than it looks, and does not license trusting the derived
+      figure.** The two are very nearly the same quantity: `readIndex` advances by `copied`
+      and `getFramesWritten()` advances by `requested`, so
+      `derived = Σrequested − Σcopied = Σ(requested − copied) = counted` algebraically. An
+      exact match is therefore close to a tautology. What it does prove is narrow but real:
+      that the framework's frame counter has not diverged from our own arithmetic, which
+      catches a missed `readIndexAtStreamStart` baseline or a stream whose frames went
+      unaccounted. It says nothing about whether the silence figure means what we think.
+      Forcing starvation (drop one buffer in fifty in `nativeEnqueue`) still confirms the
+      counters move, which is worth doing — it just is not independent corroboration.
+- [ ] **Distinguish a startup transient from ongoing starvation.** The session summary gives
+      totals only, so 0.7 s of silence at stream start and 20 s spread through the session
+      look the same in a bug report. Neither the callback count nor the sample count separates
+      them: they distinguish *partial* starvation from *total* (samples ÷ callbacks approaching
+      the full buffer means the ring was empty, not merely short), but not *contiguous* from
+      *scattered*. Until something records that, the only way to tell is to watch the counters
+      move — enable the overlay and sample the audio row over a few minutes. On the Shield the
+      underrun counter froze at `147` and did not move across 70 s of polling, which is what
+      established that the silence was a startup transient and inaudible.
 - [x] Setting on, **stereo**: audio plays, and stays in sync across a long session — 30+
       minutes — with no dropouts, crackle or drift. *(Verified on the Homatics Box R 4K.)*
 - [ ] Setting on, **5.1 or 7.1**: **every speaker produces sound.** Use Windows'
@@ -213,6 +256,41 @@ it is switched on.
       Audio must recover, or fall back to AudioTrack for the rest of the session — it must
       not go permanently silent, and the stream must not hang at "Waiting for audio stream
       establishment".
+- [!] **The recovered stream keeps the low-latency buffer size.** *(Failed on the Shield TV;
+      fixed in `619a6b16`. Re-test there, and check whether the Homatics is affected at all.)*
+
+      `nativeSetup()` sized the buffer down to two bursts, but `recoverThread()` reopens the
+      stream and the replacement inherited AAudio's default — 2048 frames against a 256-frame
+      burst, so **42.7 ms of queued audio where the target is 10.7 ms**. A 4x latency
+      regression on the one path the whole feature exists to make fast.
+
+      This was not an edge case on the Shield. Moonlight's own display mode switch at stream
+      start (59.94 → 60.000004 Hz, plus the HDR toggle) makes the box renegotiate HDMI, which
+      disconnects the audio stream **twice within two seconds of every session**, so every
+      session ran on the default buffer. Symptom to check for:
+      ```bash
+      adb logcat -d -s MoonlightAAudio:V | grep -aE "stream started|Recovered|session ended"
+      ```
+      The startup line said `512 frame buffer` while the overlay read `2048 frame buffer` a
+      few seconds later. That disagreement was the only visible evidence — before the fix
+      neither the recovery line nor the session summary named a buffer size at all, so in a
+      release build the regression was unobservable. Both now report it.
+
+      **The number to watch after the fix is `xruns`, not underruns.** A smaller buffer trades
+      scheduling headroom for latency, and underruns count the *ring* going empty (a producer
+      problem, unaffected by this). Pre-fix baselines, both of which ran at 2048 frames because
+      of the bug, so 512 has never yet run in steady state on this box:
+
+      | Session | Duration | xruns | Silence | Dropped | Recoveries |
+      |---|---|---|---|---|---|
+      | 1 | 12.1 min | 0 | 1982720 samples (20.7 s) | 3 | 2 |
+      | 2 | 11.4 min | 1 | 67776 samples (0.71 s) | 36 | 2 |
+
+      Session 2 is the healthy profile — its silence was entirely a startup transient and was
+      inaudible, confirmed both by polling the overlay and by the listener hearing no dropouts,
+      crackle or dead patches. **Session 1's 20.7 s is unexplained** and did not reproduce; same
+      build, same box, same host, and also inaudible. Worth watching for, since the totals
+      cannot say when it happened.
 - [ ] Setting on, **surround below Android 12L** (API 32) if such a device is available:
       must fall back to AudioTrack rather than opening a stream with an undefined layout.
 - [ ] Under load — packet loss, decoder pressure — audio does not stutter. Two independent
@@ -227,11 +305,33 @@ it is switched on.
 > ~4-minute session with zero underruns. The callback thread is `SCHED_FIFO`. These are the
 > numbers any future device gets compared against.
 >
+> **Shield TV baseline (API 30), which differs on every field worth naming.** AAudio grants
+> `LOW_LATENCY` but is refused `EXCLUSIVE` — `low latency / shared` — with a 256-frame burst
+> and a 512-frame buffer, about 10.7 ms at 48 kHz, and a 4096-sample ring. The callback thread
+> is `SCHED_FIFO` here too (`policy=1` in `/proc/<pid>/task/<tid>/stat`; `chrt` needs root and
+> will not tell you). So the Shield's target buffer is *smaller* than the Homatics' — but see
+> the recovery-buffer failure above, which meant it never held that size in practice.
+>
+> Two consequences of the Shield disconnecting its stream twice per session:
+>
+> - **"Absence is the healthy signal" does not hold on this box.** Two recoveries every session
+>   means `clean` is never true, so the session summary is permanently `WARN` and the overlay's
+>   failure row is permanently shown. A genuine problem is not distinguishable from the
+>   baseline by log level alone here — read the counters, not the priority.
+> - Expect ~0.7 s of silence and a few dozen dropped buffers at every stream start, before host
+>   audio begins flowing. That is the transient, not a defect.
+>
 > Still unproven: the benefit **relative to** a broken AudioTrack. The problem this targets
 > is AudioTrack's fast path being denied on certain Android TV devices, producing roughly
-> 0.5–1 s of delay, and this box does not exhibit that — its AudioTrack is granted
+> 0.5–1 s of delay, and the Homatics does not exhibit that — its AudioTrack is granted
 > `PERFORMANCE_MODE_LOW_LATENCY` too. So the feature is confirmed to work and to do no harm;
 > what remains unconfirmed is how much it wins where AudioTrack fails.
+>
+> The Shield has not been measured with the setting **off**, so its AudioTrack path is still
+> unknown — worth one session, since it is the only way to know whether AAudio buys anything
+> on the box most likely to need it. Its AAudio stream does get the fast mixer
+> (`AUDIO_OUTPUT_FLAG_FAST successful`), which suggests the platform is willing, but that says
+> nothing about what `AndroidAudioRenderer` is granted.
 >
 > That gap is now narrower than it was. Both paths report their granted mode, so on an
 > affected device (Google TV Streamer or similar) the comparison is a pair of log lines
