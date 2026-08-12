@@ -45,7 +45,7 @@ jobs:
       # connectedCheck is deliberately absent: it runs instrumented tests against a connected
       # device and the runner has none, so it can only fail or no-op.
       - name: Build Moonlight
-        uses: burrunan/gradle-cache-action@4b67497abd37a511d6c1dc6299bdd84ff39f7bf5 # v3
+        uses: burrunan/gradle-cache-action@404534c34a2faa40430357a3183522a845b04f3b # v3
         with:
           arguments: assembleRelease assembleDebug lintRelease lintDebug
 
