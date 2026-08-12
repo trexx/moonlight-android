@@ -160,9 +160,12 @@ it is switched on.
       AAudio stream is opened (`adb logcat -d -s MoonlightAAudio:V` is empty). Note this no
       longer means "no new logging" in general — the AudioTrack path reports its own granted
       configuration now, by design, since that is the path most users are on.
-- [ ] **Both paths report what was *granted*, not what was requested.** With the setting on,
-      the AAudio startup line must name a performance mode; with it off, the AudioTrack line
-      must do the same:
+- [x] **Both paths report what was *granted*, not what was requested.** *(Verified on the
+      Shield TV: AAudio reports `low latency / shared, 512 frame buffer`, AudioTrack reports
+      `attempt 1/4, 512 frame buffer granted (requested 1920 bytes), performance mode low
+      latency`. Neither warned, which is the pass condition.)* With the setting on, the AAudio
+      startup line must name a performance mode; with it off, the AudioTrack line must do the
+      same:
       ```bash
       adb logcat -d -s MoonlightAAudio:V              # "... low latency / <sharing mode> ..."
       adb logcat -d | grep -a "Audio track configuration"
@@ -299,28 +302,31 @@ it is switched on.
       | 1 | 2048 | 12.1 min | 0 | 1982720 samples (20.7 s) | 3 | 2 |
       | 2 | 2048 | 11.4 min | 1 | 67776 samples (0.71 s) | 36 | 2 |
       | 3 | **512** | 5.1 min | **0** | 59072 samples (0.62 s) | 110 | 1 |
+      | 4 | **512** | 76 s | **1** | 67648 samples (0.70 s) | 41 | 2 |
+      | 5 | **512** | 99 s | **0** | 62464 samples (0.65 s) | 43 | 2 |
 
-      **512 frames costs nothing measurable here.** Session 3 held it with zero xruns through
-      active gameplay, and its underrun count was identical (`118`) when read mid-session and at
-      teardown — frozen across roughly 3.5 minutes of real play, so there is no ongoing
-      starvation at the smaller size. It was also, unintentionally, a harsher test than planned:
-      the `uiautomator` polling warned about above was stalling the UI thread throughout.
+      **512 frames costs nothing measurable here.** Three sessions at the smaller size gave 0, 1
+      and 0 xruns against 0 and 1 at 2048 — no difference. Session 3 held it through active
+      gameplay with its underrun count identical (`118`) read mid-session and at teardown, so
+      there is no ongoing starvation either. Session 3 was also, unintentionally, the harshest of
+      the three: the `uiautomator` polling warned about above was stalling the UI thread
+      throughout it.
 
-      Two loose ends, neither blocking:
+      Startup silence is consistent across every session bar the first, at 0.62–0.71 s, which is
+      the host's audio not yet flowing rather than a defect. **Session 1's 20.7 s therefore stands
+      as an unexplained outlier** — it has not reproduced in four later sessions on the same
+      build, box and host, and was inaudible. Since totals cannot say *when* it happened, it stays
+      on the list rather than being written off.
 
-      - **Dropped buffers rose** (110, against 36 and 3) while recoveries *fell* to one, so it
-        does not scale with recovery windows and is not explained by buffer size either — the
-        ring is drained by the callback at the same rate regardless. Only 3 of the 110 arrived in
-        the last 3.5 minutes, so it is a startup effect, most likely the host's jitter buffer
-        flushing into a 2048-frame ring faster than it drains. 110 buffers is about 0.55 s of
-        audio discarded before playback settles. Worth two or three more sessions to see whether
-        110 is typical or an outlier.
-      - **Session 1's 20.7 s is unexplained** and did not reproduce in either later session;
-        same build, same box, same host, and inaudible. Since totals cannot say *when* it
-        happened, it stays on the list rather than being written off.
+      Session 3's **110 dropped buffers was likewise an outlier**, not a consequence of the
+      smaller buffer: sessions 4 and 5 gave 41 and 43, in line with the pre-fix 36, and drops are
+      a startup effect (only 3 of session 3's 110 arrived in its last 3.5 minutes). The likely
+      mechanism is the host's jitter buffer flushing into the 2048-frame ring faster than the
+      callback drains it. Note that AudioTrack discards **nothing** in the same situation, because
+      it blocks rather than drops — see the closing note.
 
-      All three sessions were inaudible to the listener — no dropouts, crackle or dead patches —
-      which is the check that matters and the one no counter can make.
+      Every session was inaudible to the listener — no dropouts, crackle or dead patches — which
+      is the check that matters and the one no counter can make.
 - [ ] Setting on, **surround below Android 12L** (API 32) if such a device is available:
       must fall back to AudioTrack rather than opening a stream with an undefined layout.
 - [ ] Under load — packet loss, decoder pressure — audio does not stutter. Two independent
@@ -358,11 +364,37 @@ it is switched on.
 > `PERFORMANCE_MODE_LOW_LATENCY` too. So the feature is confirmed to work and to do no harm;
 > what remains unconfirmed is how much it wins where AudioTrack fails.
 >
-> The Shield has not been measured with the setting **off**, so its AudioTrack path is still
-> unknown — worth one session, since it is the only way to know whether AAudio buys anything
-> on the box most likely to need it. Its AAudio stream does get the fast mixer
-> (`AUDIO_OUTPUT_FLAG_FAST successful`), which suggests the platform is willing, but that says
-> nothing about what `AndroidAudioRenderer` is granted.
+> **Measured on the Shield, and AAudio wins nothing there.** With the setting off, AudioTrack is
+> granted `PERFORMANCE_MODE_LOW_LATENCY` and a 512-frame buffer on **attempt 1 of 4** — the same
+> mode and the same buffer AAudio gets, with no downgrade warning. So on both supported devices
+> AudioTrack already gets the fast path, and this feature is insurance against hardware that
+> denies it rather than an improvement on hardware that does not.
+>
+> On the Shield specifically, AudioTrack is the better of the two:
+>
+> | | AAudio (512) | AudioTrack (512) |
+> |---|---|---|
+> | Performance mode | `low latency` | `low latency` |
+> | Buffer granted | 512 frames (10.7 ms) | 512 frames (10.7 ms) |
+> | Incoming audio discarded | 41–43 buffers per session | **0** |
+> | Stream rebuilds | 2 per session | **0** |
+> | Startup silence | 0.62–0.71 s | no equivalent counter |
+>
+> It discards nothing and never rebuilds: the HDMI renegotiation that disconnects the AAudio
+> stream twice per session does not disturb AudioTrack, which handles route changes internally.
+> The whole recovery path — and the buffer-size bug above — is a cost AAudio carries and this
+> path does not.
+>
+> `write blocked avg 4467 us, max 13399 us` is the **healthy** signature rather than a cost, and
+> should not be "optimised". Each `playDecodedAudio()` writes one 240-sample Opus frame, 5 ms of
+> audio, and a blocking write into a realtime sink must block for about the duration it writes
+> because the consumer drains in realtime. An average well *below* the frame duration would mean
+> the sink was running dry; near it, as here, means the pipeline is full and backpressured.
+> Nothing but audio runs on that thread, so a 13.4 ms worst-case stall costs nothing.
+>
+> Do **not** compare the two underrun counts. `AudioTrack.getUnderrunCount()` counts underrun
+> *occurrences* and coalesces consecutive ones; the AAudio counter counts *callbacks*. 14 against
+> 118 is not a 8x difference, it is two different denominators.
 >
 > That gap is now narrower than it was. Both paths report their granted mode, so on an
 > affected device (Google TV Streamer or similar) the comparison is a pair of log lines
