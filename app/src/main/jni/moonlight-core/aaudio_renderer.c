@@ -33,6 +33,13 @@ typedef struct {
     int32_t sampleRate;
     int32_t channelMask;
 
+    // Retained so the buffer can be resized again when recoverThread() reopens the stream; it
+    // arrives as a nativeSetup() argument, which is why the recovery path could not size the
+    // replacement before. Deliberately placed here: channelMask left four bytes of tail padding
+    // ahead of the 8-byte-aligned ring pointer, so this fills the hole rather than shifting any
+    // field the data callback touches.
+    int32_t samplesPerFrame;
+
     int16_t* ring;
     uint32_t ringCapacity; // In samples. Always a power of two.
     uint32_t ringMask;
@@ -260,11 +267,14 @@ static void* recoverThread(void* userData) {
     }
     else {
         // Naming the granted mode matters here: recovery can quietly land on a degraded stream,
-        // which would otherwise be indistinguishable from a clean one.
-        LOGI("Recovered AAudio stream after device disconnect: %s / %s",
+        // which would otherwise be indistinguishable from a clean one. The buffer size is named
+        // for the same reason, and because its absence is what hid the replacement stream running
+        // on AAudio's default buffer - a 4x latency regression that no log line reported.
+        LOGI("Recovered AAudio stream after device disconnect: %s / %s, %d frame buffer",
              performanceModeText(
                      atomic_load_explicit(&ctx->actualPerformanceMode, memory_order_relaxed)),
-             sharingModeText(atomic_load_explicit(&ctx->actualSharingMode, memory_order_relaxed)));
+             sharingModeText(atomic_load_explicit(&ctx->actualSharingMode, memory_order_relaxed)),
+             atomic_load_explicit(&ctx->bufferSizeFrames, memory_order_relaxed));
     }
 
     atomic_store_explicit(&ctx->recovering, false, memory_order_release);
@@ -302,6 +312,30 @@ static void errorCallback(AAudioStream* stream, void* userData, aaudio_result_t 
     }
 
     pthread_detach(thread);
+}
+
+// Sizes a freshly opened stream's buffer down to the low-latency target, and caches what was
+// granted.
+//
+// Called from openStream() so that every stream gets it, not just the first. recoverThread()
+// reopens the stream, and a replacement starts at AAudio's default buffer size - on the Shield TV
+// that is 2048 frames against a 256-frame burst, so 42.7 ms of queued audio where the target is
+// 10.7 ms. The HDMI renegotiation that Moonlight's own display mode switch triggers disconnects
+// the stream twice within two seconds of every stream start on that box, so the default is what
+// every session actually ran on, quietly undoing the latency win this file exists for.
+static void applyLowLatencyBufferSize(AAudioRenderer* ctx, AAudioStream* stream) {
+    // Two bursts is the usual low-latency target for a callback-driven stream.
+    int32_t targetBufferFrames = AAudioStream_getFramesPerBurst(stream) * 2;
+    if (targetBufferFrames < ctx->samplesPerFrame * 2) {
+        targetBufferFrames = ctx->samplesPerFrame * 2;
+    }
+
+    AAudioStream_setBufferSizeInFrames(stream, targetBufferFrames);
+
+    // Read back rather than assuming the request was taken - AAudio clamps it to the stream's
+    // capacity - and cache it so nativeGetStats() never has to touch the stream.
+    atomic_store_explicit(&ctx->bufferSizeFrames, AAudioStream_getBufferSizeInFrames(stream),
+                          memory_order_relaxed);
 }
 
 static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sharingMode) {
@@ -360,10 +394,8 @@ static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sha
     atomic_store_explicit(&ctx->actualSampleRate, AAudioStream_getSampleRate(stream),
                           memory_order_relaxed);
 
-    // Cached so nativeGetStats() never has to touch the stream. nativeSetup() re-caches it after
-    // sizing the buffer down; on the recovery path this default is what the replacement gets.
-    atomic_store_explicit(&ctx->bufferSizeFrames, AAudioStream_getBufferSizeInFrames(stream),
-                          memory_order_relaxed);
+    // Bring the buffer down to the low-latency target before anything starts playing through it.
+    applyLowLatencyBufferSize(ctx, stream);
 
     // Baseline for the derived silence figure in retireStream(). Safe to take here because no
     // callback can run until requestStart(), so readIndex cannot move between now and then.
@@ -399,6 +431,9 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeSetup(
     ctx->channelMask = channelMask;
     ctx->sampleRate = sampleRate;
 
+    // Must be set before openStream(), which sizes the buffer against it.
+    ctx->samplesPerFrame = samplesPerFrame;
+
     aaudio_result_t result = openStream(ctx, AAUDIO_SHARING_MODE_EXCLUSIVE);
     if (result != AAUDIO_OK) {
         result = openStream(ctx, AAUDIO_SHARING_MODE_SHARED);
@@ -408,16 +443,8 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeSetup(
         }
     }
 
+    // openStream() has already sized the stream buffer; this is only needed for the ring below.
     int32_t burstFrames = AAudioStream_getFramesPerBurst(ctx->stream);
-
-    // Two bursts is the usual low-latency target for a callback-driven stream.
-    int32_t targetBufferFrames = burstFrames * 2;
-    if (targetBufferFrames < samplesPerFrame * 2) {
-        targetBufferFrames = samplesPerFrame * 2;
-    }
-    AAudioStream_setBufferSizeInFrames(ctx->stream, targetBufferFrames);
-    atomic_store_explicit(&ctx->bufferSizeFrames, AAudioStream_getBufferSizeInFrames(ctx->stream),
-                          memory_order_relaxed);
 
     // The ring only needs to cover jitter between the decode thread and the callback. Keeping it
     // small is what bounds added latency, since a full ring makes the producer drop.
@@ -616,6 +643,13 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeCleanup(
     int32_t perfMode = atomic_load_explicit(&ctx->actualPerformanceMode, memory_order_relaxed);
     int32_t sharingMode = atomic_load_explicit(&ctx->actualSharingMode, memory_order_relaxed);
 
+    // The buffer size the session finished on, which is not necessarily the one it started with:
+    // recovery replaces the stream, and until applyLowLatencyBufferSize() moved onto that path the
+    // replacement silently inherited AAudio's much larger default. Reported here because this is
+    // the only surface that exists in a release build - the overlay is the debug-time equivalent,
+    // and without it the regression was unobservable in the field.
+    int32_t bufferFrames = atomic_load_explicit(&ctx->bufferSizeFrames, memory_order_relaxed);
+
     // Unconditional, unlike the overlay: this is the line that reaches a bug report, and it runs
     // on every session end rather than only when something crashed. The priority is computed so a
     // session with anything wrong with it is findable in a logcat dump without knowing what to
@@ -624,10 +658,10 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeCleanup(
                  (silence | dropped | recoveries | xruns) == 0;
 
     __android_log_print(clean ? ANDROID_LOG_INFO : ANDROID_LOG_WARN, LOG_TAG,
-                        "AAudio session ended: %s / %s, %llu frames written, %u xruns, "
-                        "%u silence samples, %u dropped buffers, %u recoveries",
+                        "AAudio session ended: %s / %s, %d frame buffer, %llu frames written, "
+                        "%u xruns, %u silence samples, %u dropped buffers, %u recoveries",
                         performanceModeText((aaudio_performance_mode_t)perfMode),
-                        sharingModeText((aaudio_sharing_mode_t)sharingMode),
+                        sharingModeText((aaudio_sharing_mode_t)sharingMode), bufferFrames,
                         (unsigned long long)framesWritten, xruns, silence, dropped, recoveries);
 
 #ifdef LC_DEBUG
