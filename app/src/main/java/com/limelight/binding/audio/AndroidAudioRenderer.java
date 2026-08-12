@@ -3,6 +3,7 @@ package com.limelight.binding.audio;
 import android.media.AudioAttributes;
 import android.media.AudioFormat;
 import android.media.AudioManager;
+import android.media.AudioTimestamp;
 import android.media.AudioTrack;
 
 import com.limelight.BuildConfig;
@@ -44,6 +45,25 @@ public class AndroidAudioRenderer implements AudioRenderer {
     private long writeBlockedTotalNs;
     private long writeBlockedMaxNs;
     private int writeCount;
+
+    // Debug builds only; see sampleOutputLatency(). End-to-end output latency is the figure that
+    // makes this path comparable with AAudio's: both are granted the same performance mode and the
+    // same buffer size on the supported hardware, so whatever separates them is upstream of the
+    // sink and does not show up in the configuration at all.
+    //
+    // Allocated once at setup rather than per sample - this is only ever touched from the audio
+    // decode thread, but that thread is a hot path and allocating on it would be a regression even
+    // in a debug build.
+    private AudioTimestamp outputTimestamp;
+    private int sampleRate;
+    private int channelCount;
+    private long framesWritten;
+    private int latencySampleCountdown;
+    private int latencySampleInterval;
+    private long latencyMinUs = Long.MAX_VALUE;
+    private long latencyMaxUs;
+    private long latencyTotalUs;
+    private int latencySamples;
 
     /** Names what {@link AudioTrack#getPerformanceMode} returned, which is not what was asked for. */
     private static String performanceModeText(int performanceMode) {
@@ -120,6 +140,21 @@ public class AndroidAudioRenderer implements AudioRenderer {
         }
 
         LimeLog.info("Audio channel config: "+String.format("0x%X", channelConfig));
+
+        // Retained for the latency measurement below, which needs both to turn a frame count into
+        // a duration. Cheap to keep either way, so they are not behind the debug guard.
+        this.sampleRate = sampleRate;
+        this.channelCount = audioConfiguration.channelCount;
+
+        if (BuildConfig.DEBUG) {
+            outputTimestamp = new AudioTimestamp();
+
+            // One sample a second. Buffers arrive at sampleRate/samplesPerFrame per second - 200/s
+            // for the 5 ms frames moonlight-common-c sends at 48 kHz - so derive the interval
+            // rather than hardcoding it, since a surround configuration changes the frame size.
+            latencySampleInterval = Math.max(1, sampleRate / samplesPerFrame);
+            latencySampleCountdown = latencySampleInterval;
+        }
 
         // 2 bytes per sample, since the format is fixed at 16-bit PCM
         bytesPerFrame = audioConfiguration.channelCount * samplesPerFrame * 2;
@@ -262,6 +297,15 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
             if (BuildConfig.DEBUG) {
                 recordWriteBlocked(System.nanoTime() - writeStartNs);
+
+                framesWritten += audioData.length / channelCount;
+
+                // Throttled to once a second: getTimestamp() is a real call into AudioFlinger, not
+                // a field read, so it has no business running per buffer even in a debug build.
+                if (--latencySampleCountdown <= 0) {
+                    latencySampleCountdown = latencySampleInterval;
+                    sampleOutputLatency();
+                }
             }
         }
         else {
@@ -283,6 +327,51 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
         if (blockedNs > writeBlockedMaxNs) {
             writeBlockedMaxNs = blockedNs;
+        }
+    }
+
+    /**
+     * Samples how long it will be before the audio just written is actually heard.
+     *
+     * <p>This is the only figure that distinguishes this path from the AAudio one on the supported
+     * hardware, where both are granted {@code PERFORMANCE_MODE_LOW_LATENCY} and the same buffer
+     * size. The buffer size alone is not the answer: it bounds what the sink holds, not what is
+     * queued in front of it.
+     *
+     * <p>Debug builds only, and only from the audio decode thread, so the plain fields need no
+     * synchronisation - the same argument as {@link #recordWriteBlocked}.
+     */
+    private void sampleOutputLatency() {
+        if (!track.getTimestamp(outputTimestamp)) {
+            // Unavailable until the track has actually presented something, so the first sample or
+            // two after start return nothing. Not an error, and not counted as a zero.
+            return;
+        }
+
+        // framePosition was presented at nanoTime, which is already in the past by the time we are
+        // told about it, so project the DAC forward to now. What is still ahead of it is the delay
+        // the next frame written will incur.
+        long elapsedNs = System.nanoTime() - outputTimestamp.nanoTime;
+        long presentedNow = outputTimestamp.framePosition + (elapsedNs * sampleRate / 1000000000L);
+        long queuedFrames = framesWritten - presentedNow;
+
+        if (queuedFrames < 0) {
+            // The projection overran what we have written, which means the track drained and the
+            // timestamp is stale. Discarded rather than clamped to zero: averaging in a zero would
+            // quietly drag the figure down and make the path look better than it is.
+            return;
+        }
+
+        long latencyUs = queuedFrames * 1000000L / sampleRate;
+
+        latencyTotalUs += latencyUs;
+        latencySamples++;
+
+        if (latencyUs < latencyMinUs) {
+            latencyMinUs = latencyUs;
+        }
+        if (latencyUs > latencyMaxUs) {
+            latencyMaxUs = latencyUs;
         }
     }
 
@@ -371,6 +460,14 @@ public class AndroidAudioRenderer implements AudioRenderer {
         if (BuildConfig.DEBUG && writeCount > 0) {
             summary += ", write blocked avg "+(writeBlockedTotalNs / writeCount / 1000)
                     +" us, max "+(writeBlockedMaxNs / 1000)+" us";
+        }
+
+        if (BuildConfig.DEBUG && latencySamples > 0) {
+            // Microseconds throughout, converted here only: an integer millisecond figure would
+            // round away the difference this measurement exists to detect.
+            summary += ", output latency min/avg/max "+(latencyMinUs / 1000.0f)+"/"
+                    +(latencyTotalUs / latencySamples / 1000.0f)+"/"+(latencyMaxUs / 1000.0f)
+                    +" ms over "+latencySamples+" samples";
         }
 
         if (grantedPerformanceMode == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY

@@ -20,6 +20,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define LOG_TAG "MoonlightAAudio"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -80,6 +81,26 @@ typedef struct {
     // they are the only instrumentation here that would run on the realtime callback thread.
     _Atomic uint32_t underrunSamples;
     _Atomic uint32_t underrunCallbacks;
+
+    // End-to-end output latency, sampled once a second from the audio decode thread. This is the
+    // figure that makes this path comparable with AudioTrack's, which is granted the same
+    // performance mode and the same buffer size on the supported hardware - so the difference
+    // between them, if any, is in what each queues in front of the sink rather than in the sink.
+    //
+    // The lock exists because sampling is the only thing here that reads ctx->stream from a thread
+    // that does not own it: the data callback must never call getTimestamp(), and nativeGetStats()
+    // deliberately never touches the stream at all, which leaves the decode thread - and
+    // recoverThread can close the stream underneath it. Sampling uses trylock and skips on
+    // contention, so a recovery in progress costs a dropped sample rather than a stalled decode
+    // thread. All of it sits inside this guard, so release keeps its lock-free hot path, its struct
+    // layout and its byte-identical callback.
+    pthread_mutex_t streamLock;
+    uint32_t latencySampleCountdown;
+    uint32_t latencySampleInterval;
+    uint32_t latencySamples;
+    uint64_t latencyTotalUs;
+    uint32_t latencyMinUs;
+    uint32_t latencyMaxUs;
 #endif
 } AAudioRenderer;
 
@@ -194,6 +215,73 @@ static aaudio_data_callback_result_t dataCallback(AAudioStream* stream, void* us
 
 static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sharingMode);
 
+#ifdef LC_DEBUG
+// Samples how long it will be before the audio just enqueued is actually heard.
+//
+// Called from the audio decode thread, throttled to once a second by nativeEnqueue(). Uses
+// trylock deliberately: a recovery holds the lock for as long as it takes to close a stream, and
+// blocking the decode thread on that would interrupt audio to measure it. A skipped sample costs
+// nothing - there are sixty more in the next minute.
+static void sampleOutputLatency(AAudioRenderer* ctx) {
+    if (pthread_mutex_trylock(&ctx->streamLock) != 0) {
+        return;
+    }
+
+    AAudioStream* stream = ctx->stream;
+    if (stream == NULL) {
+        pthread_mutex_unlock(&ctx->streamLock);
+        return;
+    }
+
+    int64_t framePosition;
+    int64_t timeNanos;
+    aaudio_result_t result =
+            AAudioStream_getTimestamp(stream, CLOCK_MONOTONIC, &framePosition, &timeNanos);
+    int64_t framesWritten = AAudioStream_getFramesWritten(stream);
+    int32_t rate = atomic_load_explicit(&ctx->actualSampleRate, memory_order_relaxed);
+
+    pthread_mutex_unlock(&ctx->streamLock);
+
+    // getTimestamp() reports no service until the stream has actually presented something, and
+    // returns an error rather than stale data on a disconnected stream. Either way there is
+    // nothing to record - and nothing wrong.
+    if (result != AAUDIO_OK || rate <= 0) {
+        return;
+    }
+
+    // framePosition was presented at timeNanos, which is already in the past by the time we read
+    // it, so project the DAC forward to now. Whatever is still ahead of it is the delay the next
+    // frame enqueued will incur.
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    int64_t nowNanos = (int64_t)now.tv_sec * 1000000000LL + now.tv_nsec;
+
+    int64_t presentedNow = framePosition + ((nowNanos - timeNanos) * rate / 1000000000LL);
+    int64_t queuedFrames = framesWritten - presentedNow;
+
+    // A negative result means the projection overran what the callback has produced, so the stream
+    // had drained and the timestamp is stale. Discarded rather than clamped: averaging in a zero
+    // would drag the figure down and make this path look better than it is.
+    if (queuedFrames < 0) {
+        return;
+    }
+
+    uint32_t latencyUs = (uint32_t)(queuedFrames * 1000000LL / rate);
+
+    // Plain arithmetic, not atomics: the decode thread is the only writer, and nativeCleanup only
+    // reads these after moonlight-common-c has joined that thread.
+    ctx->latencyTotalUs += latencyUs;
+    ctx->latencySamples++;
+
+    if (ctx->latencySamples == 1 || latencyUs < ctx->latencyMinUs) {
+        ctx->latencyMinUs = latencyUs;
+    }
+    if (latencyUs > ctx->latencyMaxUs) {
+        ctx->latencyMaxUs = latencyUs;
+    }
+}
+#endif
+
 // Folds a stream's contribution into the session totals, then stops and closes it.
 //
 // Both callers own the stream at this point, which is what makes the getters safe to call - and
@@ -204,6 +292,12 @@ static void retireStream(AAudioRenderer* ctx) {
     if (stream == NULL) {
         return;
     }
+
+#ifdef LC_DEBUG
+    // Held across the close so the latency sampler on the decode thread cannot be inside
+    // getTimestamp() on a stream that is going away. Nothing else contends for it.
+    pthread_mutex_lock(&ctx->streamLock);
+#endif
 
     // A negative return is an aaudio_result_t error code rather than a count, which is what a
     // disconnected stream gives us here.
@@ -234,6 +328,10 @@ static void retireStream(AAudioRenderer* ctx) {
     AAudioStream_requestStop(stream);
     AAudioStream_close(stream);
     ctx->stream = NULL;
+
+#ifdef LC_DEBUG
+    pthread_mutex_unlock(&ctx->streamLock);
+#endif
 }
 
 // Runs on a detached thread because AAudio forbids closing or stopping a stream from inside its
@@ -411,7 +509,19 @@ static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sha
              "will be no better than AudioTrack's.", performanceModeText(performanceMode));
     }
 
+    // Published under the lock for the same reason retireStream() clears it under the lock: the
+    // latency sampler reads this pointer from the decode thread, and recovery reaches here having
+    // just set it to NULL.
+#ifdef LC_DEBUG
+    pthread_mutex_lock(&ctx->streamLock);
+#endif
+
     ctx->stream = stream;
+
+#ifdef LC_DEBUG
+    pthread_mutex_unlock(&ctx->streamLock);
+#endif
+
     return AAUDIO_OK;
 }
 
@@ -434,10 +544,26 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeSetup(
     // Must be set before openStream(), which sizes the buffer against it.
     ctx->samplesPerFrame = samplesPerFrame;
 
+#ifdef LC_DEBUG
+    // Before openStream(), which publishes ctx->stream under this lock.
+    pthread_mutex_init(&ctx->streamLock, NULL);
+
+    // One sample a second. Buffers arrive at sampleRate/samplesPerFrame per second, so derive it
+    // rather than hardcoding 200 - a surround configuration changes the frame size.
+    ctx->latencySampleInterval = samplesPerFrame > 0 ? (uint32_t)(sampleRate / samplesPerFrame) : 1;
+    if (ctx->latencySampleInterval == 0) {
+        ctx->latencySampleInterval = 1;
+    }
+    ctx->latencySampleCountdown = ctx->latencySampleInterval;
+#endif
+
     aaudio_result_t result = openStream(ctx, AAUDIO_SHARING_MODE_EXCLUSIVE);
     if (result != AAUDIO_OK) {
         result = openStream(ctx, AAUDIO_SHARING_MODE_SHARED);
         if (result != AAUDIO_OK) {
+#ifdef LC_DEBUG
+            pthread_mutex_destroy(&ctx->streamLock);
+#endif
             free(ctx);
             return 0;
         }
@@ -459,6 +585,9 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeSetup(
     if (ctx->ring == NULL) {
         LOGE("Failed to allocate AAudio ring buffer");
         AAudioStream_close(ctx->stream);
+#ifdef LC_DEBUG
+        pthread_mutex_destroy(&ctx->streamLock);
+#endif
         free(ctx);
         return 0;
     }
@@ -467,6 +596,9 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeSetup(
     if (result != AAUDIO_OK) {
         LOGE("AAudioStream_requestStart failed: %s", resultText(result));
         AAudioStream_close(ctx->stream);
+#ifdef LC_DEBUG
+        pthread_mutex_destroy(&ctx->streamLock);
+#endif
         free(ctx->ring);
         free(ctx);
         return 0;
@@ -525,6 +657,15 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeEnqueue(
 
     // Release pairs with the acquire in dataCallback()
     atomic_store_explicit(&ctx->writeIndex, write + (uint32_t)length, memory_order_release);
+
+#ifdef LC_DEBUG
+    // After the publish, so the measurement never delays the audio it is measuring. Throttled to
+    // once a second because getTimestamp() is a real call into AAudio, not a field read.
+    if (--ctx->latencySampleCountdown == 0) {
+        ctx->latencySampleCountdown = ctx->latencySampleInterval;
+        sampleOutputLatency(ctx);
+    }
+#endif
 }
 
 // Mirrors of the normalised constants on MoonBridge. AAudio numbers its own performance modes
@@ -671,6 +812,19 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeCleanup(
     LOGI("AAudio underrun detail: %u callbacks underran, %u samples counted (%u derived)",
          atomic_load_explicit(&ctx->underrunCallbacks, memory_order_relaxed),
          atomic_load_explicit(&ctx->underrunSamples, memory_order_relaxed), silence);
+
+    // The figure to compare against AudioTrack's line of the same name. Read without the lock:
+    // moonlight-common-c joins the decode thread before ArCleanup, so the only writer is gone.
+    if (ctx->latencySamples > 0) {
+        LOGI("AAudio output latency min/avg/max %.2f/%.2f/%.2f ms over %u samples",
+             ctx->latencyMinUs / 1000.0, (double)ctx->latencyTotalUs / ctx->latencySamples / 1000.0,
+             ctx->latencyMaxUs / 1000.0, ctx->latencySamples);
+    }
+    else {
+        LOGW("AAudio output latency unavailable: getTimestamp() never returned a usable sample");
+    }
+
+    pthread_mutex_destroy(&ctx->streamLock);
 #endif
 
     free(ctx->ring);
