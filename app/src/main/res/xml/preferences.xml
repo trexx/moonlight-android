@@ -228,6 +228,11 @@
             android:summary="@string/summary_enable_hdr"
             android:defaultValue="false" />
         <CheckBoxPreference
+            android:key="checkbox_enable_intra_refresh"
+            android:title="@string/title_enable_intra_refresh"
+            android:summary="@string/summary_enable_intra_refresh"
+            android:defaultValue="false" />
+        <CheckBoxPreference
             android:key="checkbox_full_range"
             android:title="@string/title_full_range"
             android:summary="@string/summary_full_range"

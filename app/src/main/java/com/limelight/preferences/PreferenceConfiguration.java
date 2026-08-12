@@ -70,6 +70,7 @@ public class PreferenceConfiguration {
     static final String ENCRYPTION_PREF_STRING = "list_encryption";
     private static final String LEGACY_DISABLE_FRAME_DROP_PREF_STRING = "checkbox_disable_frame_drop";
     private static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
+    private static final String ENABLE_INTRA_REFRESH_PREF_STRING = "checkbox_enable_intra_refresh";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
     private static final String WIRED_PAD_AUDIO_STRING = "checkbox_wired_pad_audio";
@@ -104,6 +105,7 @@ public class PreferenceConfiguration {
     static final String DEFAULT_ENCRYPTION = "audio";
 
     private static final boolean DEFAULT_ENABLE_HDR = false;
+    private static final boolean DEFAULT_ENABLE_INTRA_REFRESH = false;
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
     private static final boolean DEFAULT_BIND_ALL_USB = false;
     // Off: claiming a cabled pad replaces a working kernel driver, which is the user's call
@@ -148,6 +150,7 @@ public class PreferenceConfiguration {
     public ScaleMode scaleMode;
     public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
     public boolean enableHdr;
+    public boolean enableIntraRefresh;
     public boolean enablePerfOverlay;
     public boolean enableLatencyToast;
     public boolean bindAllUsb;
@@ -630,6 +633,7 @@ public class PreferenceConfiguration {
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
         config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
+        config.enableIntraRefresh = prefs.getBoolean(ENABLE_INTRA_REFRESH_PREF_STRING, DEFAULT_ENABLE_INTRA_REFRESH);
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.wiredPadAudio = prefs.getBoolean(WIRED_PAD_AUDIO_STRING, DEFAULT_WIRED_PAD_AUDIO);

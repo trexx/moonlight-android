@@ -110,6 +110,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean refFrameInvalidationAvc, refFrameInvalidationHevc, refFrameInvalidationAv1;
     private byte optimalSlicesPerFrame;
     private boolean refFrameInvalidationActive;
+    private boolean intraRefresh;
 
     private int initialWidth, initialHeight;
     private int videoFormat;
@@ -491,6 +492,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (refFrameInvalidationAv1) {
                 LimeLog.info("Decoder "+av1Decoder.getName()+" will use reference frame invalidation for AV1");
             }
+        }
+
+        // Opting in makes the host encode a rolling intra refresh wave instead of periodic IDR
+        // frames, trading the bitrate spike and visible hitch of an IDR for recovery spread over
+        // many frames. Only Sunshine on NVENC honours it, and it can shimmer on static content,
+        // so it stays a user setting rather than something we infer from the decoder.
+        intraRefresh = prefs.enableIntraRefresh;
+        if (intraRefresh) {
+            LimeLog.info("Intra refresh requested");
         }
 
         // Use the larger of the two slices per frame preferences
@@ -2623,9 +2633,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * {@inheritDoc}
      *
      * <p>Advertises the latency features this decoder can handle: slices per frame, reference
-     * frame invalidation (recovering from packet loss without a full IDR frame) and direct
-     * submit. Note that this can be called before {@link #setup}, so it reports capabilities for
-     * every codec rather than only the one in use — which is why the constructor resolves them.
+     * frame invalidation (recovering from packet loss without a full IDR frame), direct submit
+     * and intra refresh. Note that this can be called before {@link #setup}, so it reports
+     * capabilities for every codec rather than only the one in use — which is why the constructor
+     * resolves them. Intra refresh is the odd one out: it is a user setting rather than a decoder
+     * property, since it asks the *host* to encode differently.
      */
     @Override
     public int getCapabilities() {
@@ -2648,6 +2660,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Enable direct submit on supported hardware
         if (directSubmit) {
             capabilities |= MoonBridge.CAPABILITY_DIRECT_SUBMIT;
+        }
+
+        // Ask the host for intra refresh instead of periodic IDR frames
+        if (intraRefresh) {
+            capabilities |= MoonBridge.CAPABILITY_INTRA_REFRESH;
         }
 
         return capabilities;

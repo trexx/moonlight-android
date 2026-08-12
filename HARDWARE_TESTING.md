@@ -1447,6 +1447,62 @@ non-debuggable release build, which is what makes this the only performance meth
 
 ---
 
+## 16. Loss recovery (carried patches 0003–0005)
+
+All three need deliberate packet loss to mean anything. Stream over Wi-Fi at a distance, or
+shape the link — the point is to force the FEC queue to give up on whole frames, not merely
+to drop the odd packet.
+
+### IDR request on FEC-detected loss (patch 0003)
+
+This only reaches the patched branch on a client streaming **without** reference frame
+invalidation, which means an **Amlogic box** — the Shield TV keeps RFI and never takes it.
+Confirm which side you are on first: absence of `will use reference frame invalidation for
+HEVC` in logcat for the chosen decoder is the check.
+
+- [ ] **`Reached consecutive drop limit` stops appearing** on ordinary loss. That line was
+      the old recovery mechanism firing, 120 frames after the loss; seeing it now means the
+      patch is not doing its job. This is the single most diagnostic line for the fix.
+- [ ] **Recovery is roughly a frame interval plus a round trip**, not the 2 s at 60 FPS / 4 s
+      at 30 FPS it was. Time it against a moving scene rather than a menu.
+- [ ] **`Waiting for IDR frame` is followed promptly by a recovered picture**, rather than
+      repeating while the video stays frozen.
+- [ ] **No regression on the Shield TV.** RFI is on there, so the RFI request path is what
+      should still run — `Sending RFI request for unrecoverable frame` — and behaviour should
+      be identical to before the patch.
+- [ ] **Fire TV Cube keeps its fast path.** `Enabling HEVC RFI on confirmed-safe Amlogic
+      device` must still appear, since that device is the exception to the Amlogic rule and
+      should therefore also *not* take the new branch.
+
+### Atomics (patch 0004)
+
+No behaviour change is expected; this is a regression check on the teardown path, which the
+patch touches on every connection.
+
+- [ ] **Connect and disconnect ten times in a row** without a hang or crash.
+- [ ] **Background the app mid-stream** (Home, or a PiP transition) and return. `onStop()` is
+      one of three entry points into the interrupt path and fires on ordinary backgrounding.
+- [ ] **Disconnect during the handshake**, before the stream starts — this is the case where
+      `interruptConnection()` races a `startConnection()` that holds the monitor.
+- [ ] Verify on **armeabi-v7a**, not only arm64. 32-bit codegen is where this would show.
+
+### Intra refresh (patch 0005)
+
+Needs **Sunshine on an NVIDIA GPU**; AMD and Intel hosts parse the attribute and ignore it.
+
+- [ ] **Default off is unchanged.** With the setting off, the stream behaves exactly as
+      before. This is the one that matters — the feature is opt-in precisely so the default
+      path stays untouched.
+- [ ] **Toggling it on starts a stream at all**, and the host log shows intra refresh enabled.
+- [ ] **Watch static and low-complexity scenes** — menus, pause screens, a stationary camera —
+      for shimmer or creeping corruption. This is the known failure mode reported by the Xbox
+      client, and the reason the setting is experimental.
+- [ ] **Recovery after loss is smoother**, without the bitrate spike and visible hitch a
+      keyframe produces. If it is not, the feature is not earning the risk.
+- [ ] **An AMD or Intel Sunshine host still streams normally** with the setting on.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -1469,3 +1525,4 @@ non-debuggable release build, which is what makes this the only performance meth
 | §11 Steam type | A Valve Steam Controller, and a HORIPAD for Steam for the negative case |
 | §12 both items | A USB-driven pad *and* an Android-enumerated pad, connected together |
 | §13 motion | A pad with a gyro (Switch Pro, DualSense, DualShock 4) + a host game that requests it |
+| §16 intra refresh | Sunshine host on an NVIDIA GPU |

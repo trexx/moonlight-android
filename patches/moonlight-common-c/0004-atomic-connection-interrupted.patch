@@ -1,0 +1,115 @@
+Use atomic variables for ConnectionInterrupted and LBQ currentSize
+
+Carried from upstream https://github.com/moonlight-stream/moonlight-common-c/pull/100
+(open as of 2026-08-12). Drop this patch and bump the submodule once it merges.
+
+These are the two variables clang's -fsanitize=thread flags in moonlight-common-c.
+Both are plain C objects touched from more than one thread: C volatile orders nothing
+and provides no atomicity, so these are formal data races that the compiler is free to
+reorder or fold, whatever the underlying ARM load/store happens to do.
+
+Upstream is held up only by MSVC, which still needs /experimental:c11atomics for C11
+atomics. That has no bearing on this fork - NDK clang supports stdatomic.h on both ABIs
+we ship - so the fix costs us nothing to carry ahead of upstream.
+
+Worth having here rather than waiting, because this fork hits the race routinely instead
+of rarely. NvConnection.stop() calls interruptConnection() deliberately outside the
+synchronized (MoonBridge.class) block, so it can unblock a startConnection() that is
+holding the monitor; that is a concurrent write to ConnectionInterrupted against
+moonlight-common-c's own reader threads, by design. Game.stopConnection() reaches it from
+three separate entry points, one of which is onStop(), which PiP makes fire on ordinary
+backgrounding rather than only on user disconnect. armeabi-v7a is a shipping ABI for us
+and is where 32-bit codegen is most likely to make the difference visible.
+
+Deviates from the PR in one place: upstream writes ATOMIC_VAR_INIT(false), which was
+deprecated in C17 and removed in C23, and which NDK clang warns about. A plain "= false"
+initialiser is equivalent for an object with static storage duration. Re-add the macro
+only if upstream's merged version is taken verbatim.
+
+diff --git a/src/Connection.c b/src/Connection.c
+index d2e82929..cbc81c2a 100644
+--- a/src/Connection.c
++++ b/src/Connection.c
+@@ -1,5 +1,7 @@
+ #include "Limelight-internal.h"
+
++#include <stdatomic.h>
++
+ static int stage = STAGE_NONE;
+ static ConnListenerConnectionTerminated originalTerminationCallback;
+ static bool alreadyTerminated;
+@@ -17,7 +19,7 @@ CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
+ DECODER_RENDERER_CALLBACKS VideoCallbacks;
+ AUDIO_RENDERER_CALLBACKS AudioCallbacks;
+ int NegotiatedVideoFormat;
+-volatile bool ConnectionInterrupted;
++volatile atomic_bool ConnectionInterrupted = false;
+ bool HighQualitySurroundSupported;
+ bool HighQualitySurroundEnabled;
+ OPUS_MULTISTREAM_CONFIGURATION NormalQualityOpusConfig;
+diff --git a/src/Limelight-internal.h b/src/Limelight-internal.h
+index dfd47582..a8699461 100644
+--- a/src/Limelight-internal.h
++++ b/src/Limelight-internal.h
+@@ -24,7 +24,7 @@ extern CONNECTION_LISTENER_CALLBACKS ListenerCallbacks;
+ extern DECODER_RENDERER_CALLBACKS VideoCallbacks;
+ extern AUDIO_RENDERER_CALLBACKS AudioCallbacks;
+ extern int NegotiatedVideoFormat;
+-extern volatile bool ConnectionInterrupted;
++extern volatile atomic_bool ConnectionInterrupted;
+ extern bool HighQualitySurroundSupported;
+ extern bool HighQualitySurroundEnabled;
+ extern OPUS_MULTISTREAM_CONFIGURATION NormalQualityOpusConfig;
+diff --git a/src/LinkedBlockingQueue.c b/src/LinkedBlockingQueue.c
+index 5d7f9a75..699b1dde 100644
+--- a/src/LinkedBlockingQueue.c
++++ b/src/LinkedBlockingQueue.c
+@@ -116,7 +116,7 @@ int LbqOfferQueueItem(PLINKED_BLOCKING_QUEUE queueHead, void* data, PLINKED_BLOC
+         queueHead->tail = entry;
+     }
+
+-    queueHead->currentSize++;
++    atomic_fetch_add(&queueHead->currentSize, 1);
+     queueHead->lifetimeSize++;
+
+     PltUnlockMutex(&queueHead->mutex);
+@@ -180,7 +180,7 @@ int LbqPollQueueElement(PLINKED_BLOCKING_QUEUE queueHead, void** data) {
+
+     entry = queueHead->head;
+     queueHead->head = entry->flink;
+-    queueHead->currentSize--;
++    atomic_fetch_add(&queueHead->currentSize, -1);
+     if (queueHead->head == NULL) {
+         LC_ASSERT(queueHead->currentSize == 0);
+         queueHead->tail = NULL;
+@@ -231,7 +231,7 @@ int LbqWaitForQueueElement(PLINKED_BLOCKING_QUEUE queueHead, void** data) {
+
+     entry = queueHead->head;
+     queueHead->head = entry->flink;
+-    queueHead->currentSize--;
++    atomic_fetch_add(&queueHead->currentSize, -1);
+     if (queueHead->head == NULL) {
+         LC_ASSERT(queueHead->currentSize == 0);
+         queueHead->tail = NULL;
+diff --git a/src/LinkedBlockingQueue.h b/src/LinkedBlockingQueue.h
+index 426f43d2..2b1204f6 100644
+--- a/src/LinkedBlockingQueue.h
++++ b/src/LinkedBlockingQueue.h
+@@ -3,6 +3,8 @@
+ #include "Platform.h"
+ #include "PlatformThreads.h"
+
++#include <stdatomic.h>
++
+ #define LBQ_SUCCESS 0
+ #define LBQ_INTERRUPTED 1
+ #define LBQ_BOUND_EXCEEDED 2
+@@ -21,7 +23,7 @@ typedef struct _LINKED_BLOCKING_QUEUE {
+     PLINKED_BLOCKING_QUEUE_ENTRY head;
+     PLINKED_BLOCKING_QUEUE_ENTRY tail;
+     int sizeBound;
+-    int currentSize;
++    atomic_int currentSize;
+     int lifetimeSize;
+     bool shutdown;
+     bool draining;

@@ -1,0 +1,56 @@
+Add an opt-in intra refresh capability
+
+Carried from upstream https://github.com/moonlight-stream/moonlight-common-c/pull/97
+(open as of 2026-08-12). Drop this patch and bump the submodule once it merges.
+
+Sunshine has had the server half of this since LizardByte/Sunshine#3415 merged on
+2024-12-23; only the client half is missing. rtsp.cpp try_emplace()s
+"x-ss-video[0].intraRefresh" with a default of "0" and video.h carries it through to
+nvenc_base.cpp as enableIntraRefresh, so the encoder emits a rolling intra refresh wave
+instead of periodic IDR frames. That trades the bitrate spike and the visible hitch of a
+full IDR for recovery spread over many frames, which matters most on the loss-prone paths
+this fork already cares about.
+
+Opt-in by design, and off unless the renderer sets CAPABILITY_INTRA_REFRESH: the Xbox
+client reports visible corruption on static and low-complexity content, and Sunshine
+honours the flag only on NVENC, so it is inert on AMD and Intel hosts. The client-side
+setting that drives the bit is default-off for the same reason.
+
+0x80 is free - Limelight.h uses 0x1 through 0x40 for the existing renderer capabilities
+and CAPABILITY_SLICES_PER_FRAME() lives in bits 24 and up. The attribute is added inside
+the existing IS_SUNSHINE() block in getAttributesList(), so GameStream hosts never see it,
+and emitting "0" when opted out matches the default Sunshine already assumes.
+
+diff --git a/src/Limelight.h b/src/Limelight.h
+index b2bb5509..e1758b23 100644
+--- a/src/Limelight.h
++++ b/src/Limelight.h
+@@ -272,6 +272,10 @@ typedef struct _DECODE_UNIT {
+ // supports reference frame invalidation for AV1 streams. This flag is only valid on video renderers.
+ #define CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1 0x40
+
++// If set in the video renderer capabilities field, this flag specifies that the renderer
++// needs to opt-in to intra refresh, some clients (like the Xbox client with NVEnc) needs it
++#define CAPABILITY_INTRA_REFRESH 0x80
++
+ // If set in the video renderer capabilities field, this macro specifies that the renderer
+ // supports slicing to increase decoding performance. The parameter specifies the desired
+ // number of slices per frame. This capability is only valid on video renderers.
+diff --git a/src/SdpGenerator.c b/src/SdpGenerator.c
+index a2f9789f..1aedad31 100644
+--- a/src/SdpGenerator.c
++++ b/src/SdpGenerator.c
+@@ -309,6 +309,13 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
+         else {
+             err |= addAttributeString(&optionHead, "x-ss-video[0].chromaSamplingType", "0");
+         }
++
++        // Add intra-refresh if opted in
++        if (VideoCallbacks.capabilities & CAPABILITY_INTRA_REFRESH){
++            err |= addAttributeString(&optionHead, "x-ss-video[0].intraRefresh", "1");
++        } else {
++            err |= addAttributeString(&optionHead, "x-ss-video[0].intraRefresh", "0");
++        }
+     }
+
+     snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.width);
