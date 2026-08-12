@@ -268,8 +268,9 @@ it is switched on.
       Audio must recover, or fall back to AudioTrack for the rest of the session — it must
       not go permanently silent, and the stream must not hang at "Waiting for audio stream
       establishment".
-- [!] **The recovered stream keeps the low-latency buffer size.** *(Failed on the Shield TV;
-      fixed in `619a6b16`. Re-test there, and check whether the Homatics is affected at all.)*
+- [x] **The recovered stream keeps the low-latency buffer size.** *(Failed on the Shield TV,
+      fixed in `619a6b16`, re-verified there. Still unchecked on the Homatics — it may never
+      have been affected, since the bug only bites if the stream actually disconnects.)*
 
       `nativeSetup()` sized the buffer down to two bursts, but `recoverThread()` reopens the
       stream and the replacement inherited AAudio's default — 2048 frames against a 256-frame
@@ -288,21 +289,38 @@ it is switched on.
       neither the recovery line nor the session summary named a buffer size at all, so in a
       release build the regression was unobservable. Both now report it.
 
-      **The number to watch after the fix is `xruns`, not underruns.** A smaller buffer trades
-      scheduling headroom for latency, and underruns count the *ring* going empty (a producer
-      problem, unaffected by this). Pre-fix baselines, both of which ran at 2048 frames because
-      of the bug, so 512 has never yet run in steady state on this box:
+      **The number to watch is `xruns`, not underruns.** A smaller buffer trades scheduling
+      headroom for latency, and underruns count the *ring* going empty (a producer problem,
+      unaffected by buffer size). Sessions 1 and 2 ran at 2048 frames because of the bug, so
+      session 3 is the first time 512 has held for a whole session on this box:
 
-      | Session | Duration | xruns | Silence | Dropped | Recoveries |
-      |---|---|---|---|---|---|
-      | 1 | 12.1 min | 0 | 1982720 samples (20.7 s) | 3 | 2 |
-      | 2 | 11.4 min | 1 | 67776 samples (0.71 s) | 36 | 2 |
+      | Session | Buffer | Duration | xruns | Silence | Dropped | Recoveries |
+      |---|---|---|---|---|---|---|
+      | 1 | 2048 | 12.1 min | 0 | 1982720 samples (20.7 s) | 3 | 2 |
+      | 2 | 2048 | 11.4 min | 1 | 67776 samples (0.71 s) | 36 | 2 |
+      | 3 | **512** | 5.1 min | **0** | 59072 samples (0.62 s) | 110 | 1 |
 
-      Session 2 is the healthy profile — its silence was entirely a startup transient and was
-      inaudible, confirmed both by polling the overlay and by the listener hearing no dropouts,
-      crackle or dead patches. **Session 1's 20.7 s is unexplained** and did not reproduce; same
-      build, same box, same host, and also inaudible. Worth watching for, since the totals
-      cannot say when it happened.
+      **512 frames costs nothing measurable here.** Session 3 held it with zero xruns through
+      active gameplay, and its underrun count was identical (`118`) when read mid-session and at
+      teardown — frozen across roughly 3.5 minutes of real play, so there is no ongoing
+      starvation at the smaller size. It was also, unintentionally, a harsher test than planned:
+      the `uiautomator` polling warned about above was stalling the UI thread throughout.
+
+      Two loose ends, neither blocking:
+
+      - **Dropped buffers rose** (110, against 36 and 3) while recoveries *fell* to one, so it
+        does not scale with recovery windows and is not explained by buffer size either — the
+        ring is drained by the callback at the same rate regardless. Only 3 of the 110 arrived in
+        the last 3.5 minutes, so it is a startup effect, most likely the host's jitter buffer
+        flushing into a 2048-frame ring faster than it drains. 110 buffers is about 0.55 s of
+        audio discarded before playback settles. Worth two or three more sessions to see whether
+        110 is typical or an outlier.
+      - **Session 1's 20.7 s is unexplained** and did not reproduce in either later session;
+        same build, same box, same host, and inaudible. Since totals cannot say *when* it
+        happened, it stays on the list rather than being written off.
+
+      All three sessions were inaudible to the listener — no dropouts, crackle or dead patches —
+      which is the check that matters and the one no counter can make.
 - [ ] Setting on, **surround below Android 12L** (API 32) if such a device is available:
       must fall back to AudioTrack rather than opening a stream with an undefined layout.
 - [ ] Under load — packet loss, decoder pressure — audio does not stutter. Two independent
@@ -321,8 +339,9 @@ it is switched on.
 > `LOW_LATENCY` but is refused `EXCLUSIVE` — `low latency / shared` — with a 256-frame burst
 > and a 512-frame buffer, about 10.7 ms at 48 kHz, and a 4096-sample ring. The callback thread
 > is `SCHED_FIFO` here too (`policy=1` in `/proc/<pid>/task/<tid>/stat`; `chrt` needs root and
-> will not tell you). So the Shield's target buffer is *smaller* than the Homatics' — but see
-> the recovery-buffer failure above, which meant it never held that size in practice.
+> will not tell you). So the Shield's target buffer is *smaller* than the Homatics' 768, and
+> since `619a6b16` it actually holds that size for a whole session, with zero xruns — this box
+> is the better of the two for audio output latency, not the worse.
 >
 > Two consequences of the Shield disconnecting its stream twice per session:
 >
