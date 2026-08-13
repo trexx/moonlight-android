@@ -468,8 +468,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         optimalSlicesPerFrame = (byte)Math.max(avcOptimalSlicesPerFrame, hevcOptimalSlicesPerFrame);
         LimeLog.info("Requesting "+optimalSlicesPerFrame+" slices per frame");
 
+        // All three codecs, not just AVC and HEVC: whichever one is actually streaming is the
+        // one whose RFI needs withdrawing, and leaving AV1 set means this backs off everything
+        // except the codec that just crashed.
         if (consecutiveCrashCount % 2 == 1) {
-            refFrameInvalidationAvc = refFrameInvalidationHevc = false;
+            refFrameInvalidationAvc = refFrameInvalidationHevc = refFrameInvalidationAv1 = false;
             LimeLog.warning("Disabling RFI due to previous crash");
         }
     }
