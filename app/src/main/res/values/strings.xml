@@ -189,8 +189,8 @@
     <string name="category_audio_settings">Audio Settings</string>
     <string name="title_audio_config_list">Surround sound configuration</string>
     <string name="summary_audio_config_list">Enable 5.1 or 7.1 surround sound for home-theater systems</string>
-    <string name="title_checkbox_enable_aaudio">Low latency audio output (Experimental)</string>
-    <string name="summary_checkbox_enable_aaudio">Use AAudio instead of AudioTrack. Try this if audio lags noticeably behind video on an Android TV device. Has no effect when audio effects are enabled, and falls back automatically if it can\'t be used.</string>
+    <string name="title_checkbox_enable_aaudio">Low latency audio output</string>
+    <string name="summary_checkbox_enable_aaudio">Uses AAudio instead of AudioTrack. Some Android TV devices refuse AudioTrack\'s fast path and play audio far behind the video; where that happens, this cuts audio delay from around 170 ms to around 20 ms.\n\nTo tell whether yours is affected, open a game\'s menus and listen to the click as the highlight moves. If it arrives noticeably late, turn this on.\n\nFalls back to AudioTrack on its own if the stream can\'t be opened, and for surround sound below Android 12L. Stereo is well tested; surround is less so.</string>
 
     <string name="category_gamepad_settings">Gamepad Settings</string>
     <string name="title_checkbox_multi_controller">Automatic gamepad presence detection</string>

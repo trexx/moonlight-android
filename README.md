@@ -145,6 +145,13 @@ is *predictable*: AudioTrack delivers whatever the platform decides, which on on
 device is 170 ms. Since the setting is off by default, that is also what that device ships
 with. `HARDWARE_TESTING.md` §3 has the full measurements and method.
 
+**To tell whether your device is affected, open a game's menus and listen to the click as
+the highlight moves.** If it arrives noticeably late, turn the setting on. This is more
+sensitive than watching for lip-sync error: the sound is user-initiated, so you have an
+exact expectation of when it should arrive, where lip-sync only lets you compare two
+streams against each other and tolerates far more error before it reads as wrong. It is
+also how the 170 ms above was confirmed by ear before it was trusted.
+
 The renderer is written specifically for this fork rather than ported from an existing
 implementation. It uses a lock-free single-producer/single-consumer ring buffer — the
 realtime callback touches nothing but `memcpy`/`memset`, with no locks, allocation or
