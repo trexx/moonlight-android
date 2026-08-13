@@ -33,6 +33,13 @@ typedef struct {
     int32_t sampleRate;
     int32_t channelMask;
 
+    // Retained so the buffer can be sized again when recoverThread() reopens the stream; it
+    // arrives as a nativeSetup() argument, which is why the recovery path could not size the
+    // replacement before. Deliberately placed here: channelMask left four bytes of tail padding
+    // ahead of the 8-byte-aligned ring pointer, so this fills the hole rather than shifting any
+    // field the data callback touches.
+    int32_t samplesPerFrame;
+
     int16_t* ring;
     uint32_t ringCapacity; // In samples. Always a power of two.
     uint32_t ringMask;
@@ -154,7 +161,11 @@ static void* recoverThread(void* userData) {
         atomic_store_explicit(&ctx->dead, true, memory_order_release);
     }
     else {
-        LOGI("Recovered AAudio stream after device disconnect");
+        // The buffer size is named because its absence is what hid this path running on AAudio's
+        // default: the replacement stream is sized by openStream() now, and without reporting it
+        // a 4x latency regression here looked identical to a clean recovery.
+        LOGI("Recovered AAudio stream after device disconnect: %d frame buffer",
+             AAudioStream_getBufferSizeInFrames(ctx->stream));
     }
 
     atomic_store_explicit(&ctx->recovering, false, memory_order_release);
@@ -188,6 +199,24 @@ static void errorCallback(AAudioStream* stream, void* userData, aaudio_result_t 
     }
 
     pthread_detach(thread);
+}
+
+// Sizes a freshly opened stream's buffer down to the low-latency target.
+//
+// Called from openStream() so that every stream gets it, not just the first. recoverThread()
+// reopens the stream, and a replacement starts at AAudio's default buffer size - on the Shield TV
+// that is 2048 frames against a 256-frame burst, so 42.7 ms of queued audio where the target is
+// 10.7 ms. The HDMI renegotiation that Moonlight's own display mode switch triggers disconnects
+// the stream twice within two seconds of every stream start on that box, so the default is what
+// every session actually ran on, quietly undoing the latency win this file exists for.
+static void applyLowLatencyBufferSize(AAudioRenderer* ctx, AAudioStream* stream) {
+    // Two bursts is the usual low-latency target for a callback-driven stream.
+    int32_t targetBufferFrames = AAudioStream_getFramesPerBurst(stream) * 2;
+    if (targetBufferFrames < ctx->samplesPerFrame * 2) {
+        targetBufferFrames = ctx->samplesPerFrame * 2;
+    }
+
+    AAudioStream_setBufferSizeInFrames(stream, targetBufferFrames);
 }
 
 static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sharingMode) {
@@ -234,6 +263,9 @@ static aaudio_result_t openStream(AAudioRenderer* ctx, aaudio_sharing_mode_t sha
         return result;
     }
 
+    // Bring the buffer down to the low-latency target before anything starts playing through it.
+    applyLowLatencyBufferSize(ctx, stream);
+
     ctx->stream = stream;
     return AAUDIO_OK;
 }
@@ -254,6 +286,9 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeSetup(
     ctx->channelMask = channelMask;
     ctx->sampleRate = sampleRate;
 
+    // Must be set before openStream(), which sizes the buffer against it.
+    ctx->samplesPerFrame = samplesPerFrame;
+
     aaudio_result_t result = openStream(ctx, AAUDIO_SHARING_MODE_EXCLUSIVE);
     if (result != AAUDIO_OK) {
         result = openStream(ctx, AAUDIO_SHARING_MODE_SHARED);
@@ -263,14 +298,8 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeSetup(
         }
     }
 
+    // openStream() has already sized the stream buffer; this is only needed for the ring below.
     int32_t burstFrames = AAudioStream_getFramesPerBurst(ctx->stream);
-
-    // Two bursts is the usual low-latency target for a callback-driven stream.
-    int32_t targetBufferFrames = burstFrames * 2;
-    if (targetBufferFrames < samplesPerFrame * 2) {
-        targetBufferFrames = samplesPerFrame * 2;
-    }
-    AAudioStream_setBufferSizeInFrames(ctx->stream, targetBufferFrames);
 
     // The ring only needs to cover jitter between the decode thread and the callback. Keeping it
     // small is what bounds added latency, since a full ring makes the producer drop.
