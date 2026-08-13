@@ -275,17 +275,28 @@ public class AndroidAudioRenderer implements AudioRenderer {
      * {@inheritDoc}
      *
      * <p>{@link AudioTrack#write(short[], int, int)} blocks once the track's buffer is full, so
-     * the pending-duration check above it is what keeps a slow or stalled output from turning
-     * into unbounded latency.
+     * the pending-duration check below keeps a slow or stalled output from backing moonlight-common-c's
+     * receive queue up without limit. It bounds that queue, not the total output latency - see there.
      */
 
     @Override
     public void playDecodedAudio(short[] audioData) {
         // Only queue up to 40 ms of pending audio data in addition to what AudioTrack is buffering for us.
         if (MoonBridge.getPendingAudioDuration() < 40) {
-            // This will block until the write is completed. That can cause a backlog
-            // of pending audio data, so we do the above check to be able to bound
-            // latency at 40 ms in that situation.
+            // This will block until the write is completed. That can cause a backlog of pending
+            // audio data, so the check above bounds it at 40 ms.
+            //
+            // What that bounds is LiGetPendingAudioDuration(), which is moonlight-common-c's own
+            // receive queue - packets that arrived but have not reached us yet. It says nothing
+            // about what is already inside AudioTrack and the HAL below it, and that is where the
+            // latency actually lives: on a device that is denied the fast path, the sink alone
+            // holds around 170 ms, measured. Dropping incoming buffers cannot recover any of it,
+            // since the backlog is downstream of this point - flushing the track would glitch and
+            // then refill to the same depth, because that depth is the buffer the platform granted.
+            //
+            // So this is not a latency bound, and there is no client-side policy that would make
+            // it one. A deep sink is reported instead: the downgrade warning in setup() names it,
+            // and the session summary carries the measured figure.
             //
             // The timing either side is compiled out of release builds: BuildConfig.DEBUG is a
             // compile-time constant, so the ternary folds to 0 and the block below disappears.

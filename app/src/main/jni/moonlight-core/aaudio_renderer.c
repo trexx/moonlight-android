@@ -637,7 +637,9 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeEnqueue(
 
     // Only the consumer may advance readIndex, so we can't discard the oldest data here without
     // breaking the single-writer invariant. Dropping the incoming buffer instead is sufficient:
-    // the ring's capacity is what bounds latency, and it can never grow past that.
+    // the ring's capacity bounds what the ring itself can add, and it can never grow past that.
+    // That is this stage only - the stream buffer and the HAL below it are where the rest of the
+    // output latency sits, and nothing dropped here reaches them.
     if ((uint32_t)length > freeSamples) {
         atomic_fetch_add_explicit(&ctx->droppedBuffers, 1, memory_order_relaxed);
         return;
