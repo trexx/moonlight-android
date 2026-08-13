@@ -387,9 +387,25 @@ it is switched on.
 > | Homatics | AAudio | `low latency` / **exclusive** | 768 (16 ms) | **22.6 ms** |
 >
 > Measured with the `output latency` figures added in `61783b62`; two sessions per path on the
-> Shield, one per path on the Homatics, each 3–6 minutes with 191–355 samples. The Homatics pair
-> ran back to back under identical conditions (AV1, 120 Mbit, 1080p), so the 147 ms is a
-> controlled comparison rather than two unrelated numbers.
+> Shield and three per path on the Homatics, interleaved back to back under identical conditions
+> (AV1, 120 Mbit, 1080p), so this is a controlled comparison rather than unrelated numbers. The
+> table gives the longest session of each set; the full spread:
+>
+> | Device | Path | Session averages | Samples | Between-session spread |
+> |---|---|---|---|---|
+> | Shield | AudioTrack | 24.46, 23.94 | 340, 273 | 0.5 ms |
+> | Shield | AAudio | 20.95, 22.45 | 340, 355 | 1.5 ms |
+> | Homatics | AudioTrack | 169.60, 166.34, 152.40 | 191, 9, 40 | **17.2 ms** |
+> | Homatics | AAudio | 22.63, 23.69, 24.58 | 312, 91, 99 | **2.0 ms** |
+>
+> Weight the short sessions lightly — 9 samples is barely a measurement — but the picture does not
+> depend on them: the *lowest* AudioTrack reading on the Homatics is still 6.4x the *highest*
+> AAudio reading, and the sets do not come close to overlapping on either device.
+>
+> The spreads are themselves a result. **AudioTrack varies by 17 ms between sessions on the
+> Homatics; AAudio varies by 2.** Combined with the cross-device figures, the case for this path
+> is consistency as much as speed: it lands within a couple of milliseconds of 23 ms on every box
+> and every session measured, and AudioTrack does not.
 >
 > **The Homatics figures were confirmed by ear**, using in-game menu UI sounds as described in
 > the checklist above: plainly late with the setting off, correct with it on. That matters more
