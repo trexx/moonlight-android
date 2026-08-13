@@ -264,6 +264,19 @@ it is switched on.
       which would make this observable without a UI round-trip at all. Nothing does that yet.
 - [x] Setting on, **stereo**: audio plays, and stays in sync across a long session — 30+
       minutes — with no dropouts, crackle or drift. *(Verified on the Homatics Box R 4K.)*
+- [x] **Listen for output latency using in-game menu UI sounds.** *(Verified on the Homatics:
+      clearly late with the setting off, correct with it on.)* This is the cheapest and most
+      sensitive test available, and it needs no tooling:
+
+      Browse a game's menus and listen to the click as the highlight moves. The sound is
+      **user-initiated**, so you have an exact internal expectation of when it should arrive —
+      unlike lip-sync, which only lets you compare two streams against each other and needs a
+      much larger error before it reads as wrong. Roughly 170 ms is unmistakable this way.
+
+      Worth trusting: it agreed with the instrumentation. The Homatics measured 169.6 ms of
+      output latency with AAudio off and sounded plainly late; with AAudio on it measured
+      22.6 ms and sounded correct. A number that predicts a felt experience is the only kind
+      worth keeping, and this is the check that establishes it.
 - [ ] Setting on, **5.1 or 7.1**: **every speaker produces sound.** Use Windows'
       per-speaker test (Sound → Speakers → Configure → Test). This is the exact check that
       exposed the silent-surround-channels bug in ClassicOldSong #567.
@@ -377,6 +390,11 @@ it is switched on.
 > Shield, one per path on the Homatics, each 3–6 minutes with 191–355 samples. The Homatics pair
 > ran back to back under identical conditions (AV1, 120 Mbit, 1080p), so the 147 ms is a
 > controlled comparison rather than two unrelated numbers.
+>
+> **The Homatics figures were confirmed by ear**, using in-game menu UI sounds as described in
+> the checklist above: plainly late with the setting off, correct with it on. That matters more
+> than the measurement itself. A latency number nobody can hear is an argument; one that predicts
+> what a listener reports is a result.
 >
 > **Read the AAudio rows first: 21.7 and 22.6 ms.** Near-identical across two different SoCs,
 > ABIs, API levels and sharing modes. Then the AudioTrack rows: 24.2 and 169.6 ms. The value of
