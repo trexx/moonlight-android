@@ -272,8 +272,9 @@ it is switched on.
       not go permanently silent, and the stream must not hang at "Waiting for audio stream
       establishment".
 - [x] **The recovered stream keeps the low-latency buffer size.** *(Failed on the Shield TV,
-      fixed in `619a6b16`, re-verified there. Still unchecked on the Homatics — it may never
-      have been affected, since the bug only bites if the stream actually disconnects.)*
+      fixed in `619a6b16`, re-verified there. **The Homatics was never affected** — it logs
+      `0 recoveries`, so its stream is never rebuilt and never inherited the default buffer. The
+      fix is Shield-specific, though correct on both.)*
 
       `nativeSetup()` sized the buffer down to two bursts, but `recoverThread()` reopens the
       stream and the replacement inherited AAudio's default — 2048 frames against a 256-frame
@@ -346,8 +347,9 @@ it is switched on.
 > and a 512-frame buffer, about 10.7 ms at 48 kHz, and a 4096-sample ring. The callback thread
 > is `SCHED_FIFO` here too (`policy=1` in `/proc/<pid>/task/<tid>/stat`; `chrt` needs root and
 > will not tell you). So the Shield's target buffer is *smaller* than the Homatics' 768, and
-> since `619a6b16` it actually holds that size for a whole session, with zero xruns — this box
-> is the better of the two for audio output latency, not the worse.
+> since `619a6b16` it actually holds that size for a whole session, with zero xruns. That
+> smaller buffer does not translate into lower measured latency, though — the two boxes land
+> within 1 ms of each other on AAudio; see the table below.
 >
 > Two consequences of the Shield disconnecting its stream twice per session:
 >
@@ -358,43 +360,74 @@ it is switched on.
 > - Expect ~0.7 s of silence and a few dozen dropped buffers at every stream start, before host
 >   audio begins flowing. That is the transient, not a defect.
 >
-> Still unproven: the benefit **relative to** a broken AudioTrack. The problem this targets
-> is AudioTrack's fast path being denied on certain Android TV devices, producing roughly
-> 0.5–1 s of delay, and the Homatics does not exhibit that — its AudioTrack is granted
-> `PERFORMANCE_MODE_LOW_LATENCY` too. So the feature is confirmed to work and to do no harm;
-> what remains unconfirmed is how much it wins where AudioTrack fails.
+> **The benefit is now measured, and on the Homatics it is 147 ms.** This section previously
+> claimed the Homatics' AudioTrack was granted `PERFORMANCE_MODE_LOW_LATENCY` too, and that the
+> feature's benefit was therefore unproven. **Both claims were wrong.** The first was never
+> measured — it predates the granted-configuration readback and was an assumption; the readback
+> disproves it outright. The Homatics is precisely the affected hardware this feature exists for.
 >
-> **Measured on the Shield, and AAudio wins nothing there.** With the setting off, AudioTrack is
-> granted `PERFORMANCE_MODE_LOW_LATENCY` and a 512-frame buffer on **attempt 1 of 4** — the same
-> mode and the same buffer AAudio gets, with no downgrade warning. So on both supported devices
-> AudioTrack already gets the fast path, and this feature is insurance against hardware that
-> denies it rather than an improvement on hardware that does not.
+> | Device | Path | Mode granted | Buffer | **Output latency avg** |
+> |---|---|---|---|---|
+> | Shield | AudioTrack | `low latency` | 512 (10.7 ms) | 24.2 ms |
+> | Shield | AAudio | `low latency` / shared | 512 (10.7 ms) | 21.7 ms |
+> | Homatics | AudioTrack | **`none`** | **1924 (40 ms)** | **169.6 ms** |
+> | Homatics | AAudio | `low latency` / **exclusive** | 768 (16 ms) | **22.6 ms** |
 >
-> On the Shield specifically, AudioTrack is the better of the two:
+> Measured with the `output latency` figures added in `61783b62`; two sessions per path on the
+> Shield, one per path on the Homatics, each 3–6 minutes with 191–355 samples. The Homatics pair
+> ran back to back under identical conditions (AV1, 120 Mbit, 1080p), so the 147 ms is a
+> controlled comparison rather than two unrelated numbers.
+>
+> **Read the AAudio rows first: 21.7 and 22.6 ms.** Near-identical across two different SoCs,
+> ABIs, API levels and sharing modes. Then the AudioTrack rows: 24.2 and 169.6 ms. The value of
+> this path is not only that it is faster — on the Shield it is barely faster — it is that it is
+> *predictable*. AudioTrack delivers whatever the platform decides, and on one of the two
+> supported devices that is 170 ms.
+>
+> On the Homatics, `AUDIO_OUTPUT_FLAG_FAST` is denied (`AudioFlinger: mismatch between requested
+> flags (00000004) and output flags (00000002)`), which lands it on Android's deep-buffer output
+> path — designed for power efficiency, and routinely 100–200 ms. The renderer's downgrade
+> warning fires correctly, which is how this was caught at all.
+>
+> **`DEFAULT_ENABLE_AAUDIO` is `false`, so the Homatics ships with ~170 ms of audio latency by
+> default**, fixable only by a setting most users will never find. Since both paths now report
+> their granted mode, detecting the downgrade and switching automatically is possible rather than
+> hypothetical. Not implemented; recorded here as the obvious consequence of the measurement.
+>
+> **On the Shield the picture is much closer, and AAudio costs more than it saves.** AudioTrack
+> gets `low latency` and a 512-frame buffer on attempt 1 of 4 there, so the two paths differ by
+> 2.5 ms — real (the distributions do not overlap across two sessions each) but small, and
+> confined to the typical case: the maxima are within 0.5 ms of each other. Against that:
 >
 > | | AAudio (512) | AudioTrack (512) |
 > |---|---|---|
-> | Performance mode | `low latency` | `low latency` |
-> | Buffer granted | 512 frames (10.7 ms) | 512 frames (10.7 ms) |
-> | Incoming audio discarded | 41–43 buffers per session | **0** |
-> | Stream rebuilds | 2 per session | **0** |
+> | Output latency avg | 21.7 ms | 24.2 ms |
+> | Incoming audio discarded | 41–55 buffers per session | 0–4 |
+> | Stream rebuilds | 2 per session | 0 |
 > | Startup silence | 0.62–0.71 s | no equivalent counter |
 >
-> It discards nothing and never rebuilds: the HDMI renegotiation that disconnects the AAudio
-> stream twice per session does not disturb AudioTrack, which handles route changes internally.
-> The whole recovery path — and the buffer-size bug above — is a cost AAudio carries and this
-> path does not.
+> The HDMI renegotiation that disconnects the AAudio stream twice per session does not disturb
+> AudioTrack, which handles route changes internally. So the recovery path — and the buffer-size
+> bug above — is a cost AAudio carries only on the Shield, in exchange for 2.5 ms. **Keep the
+> feature for the Homatics, not for this box.**
 >
-> `write blocked avg 4467 us, max 13399 us` is the **healthy** signature rather than a cost, and
-> should not be "optimised". Each `playDecodedAudio()` writes one 240-sample Opus frame, 5 ms of
-> audio, and a blocking write into a realtime sink must block for about the duration it writes
-> because the consumer drains in realtime. An average well *below* the frame duration would mean
-> the sink was running dry; near it, as here, means the pipeline is full and backpressured.
-> Nothing but audio runs on that thread, so a 13.4 ms worst-case stall costs nothing.
+> **Write-blocking is a latency signal, and it reads backwards from the obvious.** An earlier
+> revision of this file claimed an average well below the frame duration would mean the sink was
+> running dry. The Homatics disproves it: `write blocked avg 819 us` against a 5 ms Opus frame,
+> while the sink held 170 ms. A blocking write only blocks when the buffer is full, so:
+>
+> - **Near the frame duration** (Shield, 3440–4666 us against 5 ms) — the sink is shallow and
+>   backpressured. Healthy, and not something to "optimise".
+> - **Far below it** (Homatics, 819 us) — the buffer is so deep it never fills, so nothing ever
+>   pushes back. That is the deep-buffer path, and it is a *warning sign*, not a clean bill.
+>
+> Note also that the 40 ms bound in `playDecodedAudio()` does not bound any of this.
+> `getPendingAudioDuration()` reports moonlight-common-c's own queue, not what is sitting inside
+> AudioTrack, so 170 ms sailed straight past a 40 ms guard.
 >
 > Do **not** compare the two underrun counts. `AudioTrack.getUnderrunCount()` counts underrun
 > *occurrences* and coalesces consecutive ones; the AAudio counter counts *callbacks*. 14 against
-> 118 is not a 8x difference, it is two different denominators.
+> 118 is not an 8x difference, it is two different denominators.
 >
 > That gap is now narrower than it was. Both paths report their granted mode, so on an
 > affected device (Google TV Streamer or similar) the comparison is a pair of log lines

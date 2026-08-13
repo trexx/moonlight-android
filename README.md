@@ -131,6 +131,20 @@ It is **off by default** and degrades safely: it falls back to AudioTrack when a
 stream is requested below Android 12L, if the stream fails to open, or if it dies
 mid-session and cannot be recovered. With the setting off, the audio path is unchanged.
 
+**One of this fork's two target devices turns out to be affected, and the difference is
+147 ms.** On the Homatics Box R 4K Plus, AudioTrack is denied the fast path and lands on
+Android's deep-buffer output: `PERFORMANCE_MODE_NONE`, a 1924-frame buffer, and a measured
+**169.6 ms** of output latency. AAudio on the same box, same stream, back to back, is
+granted `LOW_LATENCY` and `EXCLUSIVE` and measures **22.6 ms**. The Shield TV is not
+affected — its AudioTrack gets the fast path, and the two paths there differ by 2.5 ms
+(24.2 against 21.7 ms).
+
+Read those AAudio figures together — 21.7 ms and 22.6 ms across two different SoCs, ABIs,
+API levels and sharing modes. The point of this path is less that it is faster than that it
+is *predictable*: AudioTrack delivers whatever the platform decides, which on one supported
+device is 170 ms. Since the setting is off by default, that is also what that device ships
+with. `HARDWARE_TESTING.md` §3 has the full measurements and method.
+
 The renderer is written specifically for this fork rather than ported from an existing
 implementation. It uses a lock-free single-producer/single-consumer ring buffer — the
 realtime callback touches nothing but `memcpy`/`memset`, with no locks, allocation or
