@@ -84,4 +84,8 @@ private:
     // button event, the other via a controller completing pairing - and the app can too.
     std::mutex pairingMutex;
     std::array<std::unique_ptr<Controller>, MT_WCID_COUNT> controllers;
+    // MAC address of the controller occupying each slot, parallel to 'controllers' above and
+    // guarded by the same mutex. Only meaningful where 'controllers' holds a live entry; it is
+    // what lets handleControllerConnect() recognise a retransmitted association request.
+    std::array<Bytes, MT_WCID_COUNT> clientAddresses;
 };
