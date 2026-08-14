@@ -22,6 +22,7 @@
 
 #include "dongle.h"
 #include "../utils/log.h"
+#include "../utils/jni.h"
 
 Dongle::Dongle(
     std::unique_ptr<UsbDevice> usbDevice,
@@ -75,13 +76,19 @@ void Dongle::stop() {
 Dongle::~Dongle()
 {
     stop();
-    JNIEnv *env = nullptr;
-    jint r;
-    r = jvm->AttachCurrentThread(&env, nullptr);
-    if(r != JNI_OK || env == nullptr) {
+
+    // Reached from destroyDriver() on the app's own thread, which is a Java thread and therefore
+    // already attached. stop() has joined the read threads by now, so they have detached
+    // themselves.
+    JNIEnv *env = getAttachedEnv(jvm);
+    if (env == nullptr) {
         return;
     }
-    env->DeleteGlobalRef(jthis);
+
+    if (jthis != nullptr) {
+        env->DeleteGlobalRef(jthis);
+        jthis = nullptr;
+    }
 }
 
 void Dongle::handleControllerConnect(Bytes address)
@@ -129,19 +136,19 @@ void Dongle::handleControllerConnect(Bytes address)
 }
 
 void Dongle::notifyJavaControllerAdd(int id, Controller *controller, short vid, short pid) {
-    JNIEnv *env = nullptr;
-    jint r = jvm->AttachCurrentThread(&env, nullptr);
-    if (r != JNI_OK || env == nullptr) {
+    // Called from the read thread, which readBulkPackets() keeps attached. Detaching here would
+    // detach that thread out from under its own loop.
+    JNIEnv *env = getAttachedEnv(jvm);
+    if (env == nullptr) {
         Log::error("cannot get jnienv from javavm");
         return;
     }
     jclass clazz = env->GetObjectClass(jthis);
     jmethodID method = env->GetMethodID(clazz, "addNewController", "(IJSS)V");
     env->CallVoidMethod(jthis, method, id, (jlong) controller, vid, pid);
-    r = jvm->DetachCurrentThread();
-    if (r != JNI_OK ) {
-        Log::error("jvm cannot DetachCurrentThread");
-    }
+    // Freed explicitly: without the detach that used to do it, local references accumulate for
+    // the life of the thread. Pairing is rare, but the read thread is not short-lived.
+    env->DeleteLocalRef(clazz);
 }
 
 void Dongle::handleControllerDisconnect(uint8_t wcid)
@@ -178,19 +185,16 @@ void Dongle::handleControllerDisconnect(uint8_t wcid)
 }
 
 void Dongle::notifyJavaControllerRemove(int id) {
-    JNIEnv *env = nullptr;
-    jint r = jvm->AttachCurrentThread(&env, nullptr);
-    if (r != JNI_OK || env == nullptr) {
+    // See notifyJavaControllerAdd() on why this neither attaches nor detaches.
+    JNIEnv *env = getAttachedEnv(jvm);
+    if (env == nullptr) {
         Log::error("cannot get jnienv from javavm");
         return;
     }
     jclass clazz = env->GetObjectClass(jthis);
     jmethodID method = env->GetMethodID(clazz, "removeController", "(I)V");
     env->CallVoidMethod(jthis, method, id);
-    r = jvm->DetachCurrentThread();
-    if (r != JNI_OK ) {
-        Log::error("jvm cannot DetachCurrentThread");
-    }
+    env->DeleteLocalRef(clazz);
 }
 
 void Dongle::handleControllerPair(Bytes address, const Bytes &packet)
@@ -379,6 +383,18 @@ void Dongle::readBulkPackets(uint8_t endpoint)
 {
     FixedBytes<USB_MAX_BULK_TRANSFER_SIZE> buffer;
 
+    // Attach once for the life of the thread rather than around each callback. Every JNI call the
+    // driver makes happens below this point - input reports at up to ~125 Hz per pad, four pads on
+    // the adapter - and the attach/detach pair was the expensive part of each one. Nothing beneath
+    // this may detach; see utils/jni.h.
+    JNIEnv *env = nullptr;
+    if (jvm == nullptr || jvm->AttachCurrentThread(&env, nullptr) != JNI_OK)
+    {
+        Log::error("Failed to attach read thread to the JVM");
+
+        return;
+    }
+
     while (!stopThreads)
     {
         int transferred = usbDevice->bulkRead(endpoint, buffer);
@@ -396,4 +412,6 @@ void Dongle::readBulkPackets(uint8_t endpoint)
             handleBulkData(data);
         }
     }
+
+    jvm->DetachCurrentThread();
 }

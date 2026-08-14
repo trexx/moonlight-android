@@ -56,6 +56,23 @@ clean copy. Differences from the baseline commit:
   `Mt76::associateClient()` allocates from a free-slot bitmask without comparing the requesting
   MAC, so a controller retransmitting its association request took a second WCID and appeared
   twice. Ported from xone `030f16c`, which fixes the same defect in `xone_dongle_add_client`.
+* **Added** `utils/jni.h`, and reworked how the port's JNI callbacks obtain a `JNIEnv`. The read
+  threads in `Dongle::readBulkPackets()` now attach once for their lifetime; the callbacks use
+  `getAttachedEnv()` instead of an `AttachCurrentThread`/`DetachCurrentThread` pair each. That pair
+  ran on every input report — up to ~125 Hz per pad, four pads per adapter — along with a
+  `GetObjectClass` and a string-keyed `GetMethodID`. `Controller` now caches its class as a global
+  reference and its method IDs in `registerJavaContext()`, which for that reason takes a `JNIEnv`.
+  **Nothing on a callback path may call `DetachCurrentThread`**, and local references must now be
+  released explicitly — the detach used to do it implicitly.
+* **Changed** `Controller::statusReceived()` to forward battery state to Java via a new
+  `updateBattery` callback, rather than only logging it. It previously returned early on
+  `BATT_TYPE_CHARGING`, which suppressed the very state most worth reporting.
+
+  Note the enum in `gip.h` is misleading and is **deliberately left alone** so the file stays
+  byte-identical to upstream and directly refreshable. `BATT_TYPE_CHARGING` (0) does not mean
+  charging: GIP's status message carries no charge direction at all. xone reads the same wire
+  values as `NONE`/`STANDARD`/`KIT` and treats 0 as "no battery fitted", which is the coherent
+  reading and the one `statusReceived()` follows.
 * **Fixed** the status message length test in `GipDevice::handlePacket()`. It required exactly
   `sizeof(StatusData)`, but MS-GIPUSB Table 26 allows payloads of `0x04` *or* `0x23`–`0x37`, and
   §3.1.5.5.2.2 requires the extended form on all new devices — whose status messages were therefore

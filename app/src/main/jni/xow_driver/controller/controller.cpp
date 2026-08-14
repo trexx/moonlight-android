@@ -18,6 +18,7 @@
 
 #include "controller.h"
 #include "../utils/log.h"
+#include "../utils/jni.h"
 #include "gip.h"
 
 #include <cstdlib>
@@ -71,20 +72,53 @@ Controller::~Controller()
     {
         Log::error("Failed to turn off controller");
     }
-    if(jvm) {
-        JNIEnv *env = nullptr;
-        jint r;
-        r = jvm->AttachCurrentThread(&env, nullptr);
-        if(r != JNI_OK || env == nullptr) {
-            return;
-        }
+    // Both destruction paths run on an already-attached thread - the read thread via
+    // handleControllerDisconnect(), the app thread via Dongle::stop() - so this no longer attaches.
+    // It never detached either, so attaching here used to leave the caller's thread attached.
+    JNIEnv *env = getAttachedEnv(jvm);
+    if (env == nullptr) {
+        return;
+    }
+
+    if (jthis != nullptr) {
         env->DeleteGlobalRef(jthis);
+        jthis = nullptr;
+    }
+
+    if (jclazz != nullptr) {
+        env->DeleteGlobalRef(jclazz);
+        jclazz = nullptr;
     }
 }
 
-void Controller::registerJavaContext(JavaVM *vm, jobject thiz) {
+void Controller::registerJavaContext(JavaVM *vm, JNIEnv *env, jobject thiz) {
     this->jvm = vm;
     this->jthis = thiz;
+
+    jclass clazz = env->GetObjectClass(thiz);
+    if (clazz == nullptr) {
+        Log::error("Failed to resolve controller class");
+
+        return;
+    }
+
+    // Promote to a global reference: the local one dies when this JNI call returns, and the
+    // method IDs below are only valid for as long as the class stays loaded.
+    this->jclazz = static_cast<jclass>(env->NewGlobalRef(clazz));
+    env->DeleteLocalRef(clazz);
+
+    if (this->jclazz == nullptr) {
+        Log::error("Failed to retain controller class");
+
+        return;
+    }
+
+    this->updateInputMethod = env->GetMethodID(this->jclazz, "updateInput", "(ISSSSSS)V");
+    this->updateBatteryMethod = env->GetMethodID(this->jclazz, "updateBattery", "(BB)V");
+
+    if (this->updateInputMethod == nullptr || this->updateBatteryMethod == nullptr) {
+        Log::error("Failed to resolve controller callbacks");
+    }
 }
 
 void Controller::deviceAnnounced(uint8_t id, const AnnounceData *announce)
@@ -110,20 +144,38 @@ void Controller::deviceAnnounced(uint8_t id, const AnnounceData *announce)
 
 void Controller::statusReceived(uint8_t id, const StatusData *status)
 {
-    const std::string levels[] = { "empty", "low", "medium", "full" };
+    const std::string levels[] = { "low", "normal", "high", "full" };
 
     uint8_t type = status->batteryType;
     uint8_t level = status->batteryLevel;
 
-    // Controller is charging or level hasn't changed
-    if (type == BATT_TYPE_CHARGING || level == batteryLevel)
+    // Nothing has moved since the last report
+    if (type == batteryType && level == batteryLevel)
     {
         return;
     }
 
-    Log::info("Battery level: %s", levels[level].c_str());
-
+    batteryType = type;
     batteryLevel = level;
+
+    // BATT_TYPE_CHARGING is a misnomer inherited from xow: type 0 means the pad has no battery
+    // and is running off the cable, not that it is charging. GIP's status message says nothing
+    // about charge direction at all. xone reads the same wire values as NONE/STANDARD/KIT and
+    // maps type 0 to "not charging" with an unknown level, which is the coherent reading and the
+    // one followed here. gip.h keeps upstream's names so it stays refreshable - see UPSTREAM.md.
+    //
+    // This case used to return early, which is why battery never reached the host even though the
+    // level was already tracked: the state that most needs reporting was the one being dropped.
+    if (type == BATT_TYPE_CHARGING)
+    {
+        Log::info("Battery: none (powered externally)");
+    }
+    else
+    {
+        Log::info("Battery level: %s", levels[level].c_str());
+    }
+
+    notifyJavaBattery(type, level);
 }
 
 void Controller::serialNumberReceived(const SerialData *serial)
@@ -180,23 +232,36 @@ void Controller::inputReceived(const InputData *input)
         updateButtonStatus(input);
     }
 
-    if(jthis == nullptr) {
+    if(jthis == nullptr || updateInputMethod == nullptr) {
         return;
     }
-    JNIEnv *env = nullptr;
-    jint r = jvm->AttachCurrentThread(&env, nullptr);
-    if (r != JNI_OK || env == nullptr) {
-        Log::error("cannot get jnienv from javavm");
+
+    // The read thread is attached for its whole life, so this is a thread-local lookup rather
+    // than the attach/detach pair this used to do on every report. Nothing here may detach.
+    JNIEnv *env = getAttachedEnv(jvm);
+    if (env == nullptr) {
         return;
     }
-    jclass clazz = env->GetObjectClass(jthis);
-    jmethodID method = env->GetMethodID(clazz, "updateInput", "(ISSSSSS)V");
-    env->CallVoidMethod(jthis, method, buttonStatus, triggerLeft, triggerRight,
+
+    env->CallVoidMethod(jthis, updateInputMethod, buttonStatus, triggerLeft, triggerRight,
                         stickLeftX, stickLeftY, stickRightX, stickRightY);
-    r = jvm->DetachCurrentThread();
-    if (r != JNI_OK ) {
-        Log::error("inputReceived jvm cannot DetachCurrentThread");
+}
+
+void Controller::notifyJavaBattery(uint8_t type, uint8_t level)
+{
+    if (jthis == nullptr || updateBatteryMethod == nullptr) {
+        return;
     }
+
+    JNIEnv *env = getAttachedEnv(jvm);
+    if (env == nullptr) {
+        return;
+    }
+
+    // Raw GIP values: the mapping onto Moonlight's battery constants lives on the Java side,
+    // where those constants are defined.
+    env->CallVoidMethod(jthis, updateBatteryMethod, static_cast<jbyte>(type),
+                        static_cast<jbyte>(level));
 }
 
 void Controller::initInput(const AnnounceData *announce)

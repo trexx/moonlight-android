@@ -93,5 +93,5 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_registerNative(JN
         Log::error("GetJavaVM failed");
     }
     auto *controller = (Controller *) handle;
-    controller->registerJavaContext(jvm, env->NewGlobalRef(thiz));
+    controller->registerJavaContext(jvm, env, env->NewGlobalRef(thiz));
 }
