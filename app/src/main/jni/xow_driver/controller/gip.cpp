@@ -96,9 +96,14 @@ bool GipDevice::handlePacket(const Bytes &packet)
         );
     }
 
+    // Newer controllers send a larger status packet
+    // MS-GIPUSB Table 26 allows three status payload sizes: 0x01 (legacy, deprecated), 0x04, and
+    // 0x23-0x37 (extended). Section 3.1.5.5.2.2 says all new GIP devices MUST use the extended
+    // form, so testing for exactly 0x04 dropped their status messages whole - no battery, no fault
+    // events. The leading four bytes are the same in both, so parse those and ignore the tail.
     else if (
         frame->command == CMD_STATUS &&
-        frame->length == sizeof(StatusData) &&
+        frame->length >= sizeof(StatusData) &&
         data.size() >= sizeof(StatusData)
     ) {
         statusReceived(

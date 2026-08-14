@@ -56,6 +56,10 @@ clean copy. Differences from the baseline commit:
   `Mt76::associateClient()` allocates from a free-slot bitmask without comparing the requesting
   MAC, so a controller retransmitting its association request took a second WCID and appeared
   twice. Ported from xone `030f16c`, which fixes the same defect in `xone_dongle_add_client`.
+* **Fixed** the status message length test in `GipDevice::handlePacket()`. It required exactly
+  `sizeof(StatusData)`, but MS-GIPUSB Table 26 allows payloads of `0x04` *or* `0x23`–`0x37`, and
+  §3.1.5.5.2.2 requires the extended form on all new devices — whose status messages were therefore
+  dropped whole. Now `>=`, matching the `CMD_INPUT` branch that already handled larger packets.
 
 Files that are byte-identical to upstream (for example `controller/gip.h` and
 `utils/bytes.h`) can be refreshed directly; the rest need a manual three-way merge.
