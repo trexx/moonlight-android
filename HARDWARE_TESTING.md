@@ -388,6 +388,55 @@ and methods are resolved once at registration.
 
 ---
 
+## 8. GIP metadata (diagnostic)
+
+The driver now reassembles fragmented GIP messages and asks each controller for its metadata.
+**Nothing acts on the answer yet** — it is logged so that later decisions can be made from what
+the hardware reports rather than from what the driver assumes.
+
+This touches the packet parser every controller input flows through, so the regression checks
+matter more than the new output. Fragmented messages take a separate branch and the unfragmented
+path is unchanged, but that is the thing to confirm.
+
+**When the request is sent matters as much as what it parses.** The handshake at the top of
+`gip.h` puts Identify immediately after the announce, before power mode. Asked later — once the
+pad has powered on and started its data classes — the pad answers with its metadata in full and
+then stops sending input (`0x20`) and status (`0x03`) for the rest of the connection.
+
+The failure reads as anything but a handshake bug: protocol-control messages keep arriving, so
+the guide button still works and the pad still shows as connected, while every stick, button,
+trigger and the battery are dead. Confirming a pad connects is therefore not enough — press
+something other than the Xbox button.
+
+- [x] **All controller input still works** — buttons, sticks, triggers, guide, rumble. This is the
+      regression check, and it caught a real one, though not the parser mistake it was written to
+      guard against: the reassembly was correct and the request was simply sent too late.
+      *Verified on the NVIDIA Shield TV, Xbox One pad (PID `02dd`) on adapter `045e:02fe`. Input
+      reports reaching the driver: 1 in 39 s with the request sent last, 1621 in 53 s with it
+      removed entirely, 326 in 38 s with it moved ahead of power mode — the last of those with
+      metadata and `Battery: medium, not charging` both arriving as well.*
+- [ ] **`Metadata received: N bytes` appears** in logcat shortly after a pad connects, followed by
+      one or more `Metadata <element>` lines. Clear `persist.log.tag` on the Homatics first, and
+      restore `S` after.
+- [ ] **Record the `audio formats` line verbatim** for each pad tested, in the table below. Two
+      bytes per entry. This is the specific thing the controller-audio question needs: if a pad
+      reports a 48 kHz format, Moonlight's decoded audio would need no resampling to reach it.
+- [ ] **Sanity-check the element parse before trusting anything in that table.** The same Shield
+      run reported `Metadata commands: 2 item(s): 17 00`, and a `firmware versions` dump whose
+      bytes visibly ran on into the elements printed after it — so the offsets or item widths in
+      `IdentifyData` are wrong for at least that pad. Until that is settled an `audio formats`
+      line may be reading the wrong bytes entirely, and a 48 kHz answer cannot be believed.
+- [ ] **No `Malformed chunk`, `Truncated chunk` or `Chunk overruns` lines** in normal operation.
+      Occasional ones during pairing are worth noting rather than ignoring.
+- [ ] **Nothing regresses if metadata never arrives.** A pad that does not answer should still work
+      exactly as before — the request failing is logged and otherwise ignored.
+
+| Pad | Firmware | `audio formats` bytes | Notes |
+|---|---|---|---|
+| *(fill in)* | | | |
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -403,3 +452,4 @@ and methods are resolved once at registration.
 | §6 refresh rate | Display running a fractional mode (59.94/29.97/23.976 Hz) |
 | §7 battery, extended status | Xbox Series X\|S pad, plus a play-and-charge kit or USB cable |
 | §7 JNI input path | Four pads on one adapter, for a sustained session |
+| §8 metadata | Any adapter pad; ideally several generations, since what they report is the point |

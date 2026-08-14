@@ -78,10 +78,26 @@ clean copy. Differences from the baseline commit:
   byte-identical to upstream and directly refreshable. `BATT_TYPE_CHARGING` (0) does not mean
   charging — Table 30 defines 0 as battery absent or bus powered — so xone's reading of the same
   wire values as `NONE`/`STANDARD`/`KIT` is the correct one, and the one followed here.
+* **Added** GIP fragment reassembly and the metadata request, in `controller/gip.{h,cpp}` and
+  `Controller::identifyReceived()`. Upstream xow has neither: `handlePacket()` treated every packet
+  as complete and never looked at the Fragment or InitFrag flags, so a fragmented message was
+  misread and dropped. Metadata (MS-GIPUSB 3.1.5.5.3) always arrives fragmented, which is why it
+  could not be asked for before.
+
+  Ported from xone, which calls fragments "chunks": `gip_decode_varint`, `gip_init_chunk_buffer`,
+  `gip_process_pkt_chunked`, `gip_acknowledge_pkt` and `gip_handle_pkt_identify` in
+  `bus/protocol.c`, plus `struct gip_pkt_identify`. Kernel specifics are replaced — `kzalloc`
+  becomes a `std::vector`, `gip_client` becomes `GipDevice`, `gip_dbg` becomes `Log`. xone is
+  GPL-2.0, the same licence as xow, so this is licence-compatible.
+
+  The unfragmented path is deliberately left byte-for-byte as it was: fragmented messages take a
+  separate branch, so input, status and announce parsing is unchanged. What metadata reports is
+  currently only logged.
 * **Fixed** the status message length test in `GipDevice::handlePacket()`. It required exactly
   `sizeof(StatusData)`, but MS-GIPUSB Table 26 allows payloads of `0x04` *or* `0x23`–`0x37`, and
   §3.1.5.5.2.2 requires the extended form on all new devices — whose status messages were therefore
   dropped whole. Now `>=`, matching the `CMD_INPUT` branch that already handled larger packets.
 
-Files that are byte-identical to upstream (for example `controller/gip.h` and
-`utils/bytes.h`) can be refreshed directly; the rest need a manual three-way merge.
+Files that are byte-identical to upstream (for example `utils/bytes.h` and `utils/buffer.h`) can be
+refreshed directly; the rest need a manual three-way merge. `controller/gip.h` **was** in that list
+and no longer is — the fragment reassembly below had to add state to `GipDevice`.

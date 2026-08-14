@@ -24,6 +24,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <string>
 #include <utility>
 #include <linux/input.h>
 
@@ -45,6 +47,14 @@
 // Motor levels are a percentage, not a raw byte: MS-GIPUSB v20240916 section 3.1.5.6.1
 // (Direct Motor Command) specifies every level field as "Percentage, 0 - 100% (0x00 to 0x64),
 // of PWM for motor". Anything above 0x64 is out of spec.
+// Metadata element item widths. These are the sizes of the structures each element is an array
+// of, per MS-GIPUSB 2.2.2.4 and xone's reading of it: a command descriptor is 23 bytes, a firmware
+// version is two 16-bit halves, an audio format is a 2-byte pair and an interface is a GUID.
+#define METADATA_COMMAND_LENGTH 23
+#define METADATA_VERSION_LENGTH 4
+#define METADATA_AUDIO_FORMAT_LENGTH 2
+#define METADATA_GUID_LENGTH 16
+
 #define RUMBLE_MAX_POWER 100
 #define RUMBLE_DELAY std::chrono::milliseconds(10)
 
@@ -302,6 +312,22 @@ void Controller::initInput(const AnnounceData *announce)
     ledMode.mode = LED_ON;
     ledMode.brightness = 0x14;
 
+    // Diagnostic only for now: nothing below acts on what comes back. It is asked for because the
+    // answer is the prerequisite for anything that needs to know what a given pad supports rather
+    // than assuming - audio formats above all. Failing is not fatal; the driver has always run
+    // without it.
+    //
+    // It goes first, before power mode, which is where the handshake at the top of gip.h puts it.
+    // That order is load-bearing rather than cosmetic: asked afterwards - once the pad has powered
+    // on and started its data classes - the pad answers with its metadata and then stops sending
+    // input (0x20) and status (0x03) for the rest of the connection. Protocol-control messages such
+    // as the guide button keep arriving, so the pad looks connected and only the sticks, buttons,
+    // triggers and battery are dead.
+    if (!requestIdentify())
+    {
+        Log::error("Failed to request metadata");
+    }
+
     if (!setPowerMode(DEVICE_ID_CONTROLLER, POWER_ON))
     {
         Log::error("Failed to set initial power mode");
@@ -324,6 +350,129 @@ void Controller::initInput(const AnnounceData *announce)
     }
 
     rumbleThread = std::thread(&Controller::processRumble, this);
+}
+
+/*
+ * Logs what the controller reports it can do. Each offset points at a count byte followed by that
+ * many fixed-size items, so an element is only read once its count has been bounds-checked against
+ * the payload actually received.
+ */
+/*
+ * Locates one metadata element. Each offset points at a count byte followed by that many
+ * fixed-size items; a zero offset means the device has none. Returns the item block, or nullptr
+ * if the element is absent or would run past what actually arrived.
+ */
+static const uint8_t *findInfoElement(const uint8_t *payload, size_t length, uint16_t offset,
+                                      size_t itemLength, uint8_t &count)
+{
+    count = 0;
+
+    if (offset == 0 || offset >= length)
+    {
+        return nullptr;
+    }
+
+    count = payload[offset];
+
+    if (count == 0 || offset + 1 + static_cast<size_t>(count) * itemLength > length)
+    {
+        count = 0;
+
+        return nullptr;
+    }
+
+    return payload + offset + 1;
+}
+
+/*
+ * Logs an element as raw bytes, for the ones whose contents this driver does not interpret.
+ */
+static void logInfoElement(const char *name, const uint8_t *payload, size_t length,
+                           uint16_t offset, size_t itemLength)
+{
+    uint8_t count;
+    const uint8_t *items = findInfoElement(payload, length, offset, itemLength, count);
+
+    if (items == nullptr)
+    {
+        return;
+    }
+
+    std::string hex;
+
+    for (size_t i = 0; i < static_cast<size_t>(count) * itemLength; i++)
+    {
+        char byte[4];
+
+        snprintf(byte, sizeof(byte), "%02x ", items[i]);
+        hex += byte;
+    }
+
+    Log::info("Metadata %s: %u item(s): %s", name, count, hex.c_str());
+}
+
+/*
+ * Logs the client command descriptors, which say which data-class messages the device actually
+ * speaks. Worth decoding rather than dumping: this is the element that answers "can this pad do
+ * audio at all", and a pad that lists only 0x20 and 0x09 has input and rumble and nothing else.
+ */
+static void logCommandDescriptors(const uint8_t *payload, size_t length, uint16_t offset)
+{
+    uint8_t count;
+    const uint8_t *items = findInfoElement(payload, length, offset,
+                                           METADATA_COMMAND_LENGTH, count);
+
+    if (items == nullptr)
+    {
+        return;
+    }
+
+    std::string list;
+
+    for (uint8_t i = 0; i < count; i++)
+    {
+        const uint8_t *item = items + static_cast<size_t>(i) * METADATA_COMMAND_LENGTH;
+        char entry[32];
+
+        // Layout per xone's gip_command_descriptor: marker, unknown, command, length
+        snprintf(entry, sizeof(entry), "%02x(len %u) ", item[2], item[3]);
+        list += entry;
+    }
+
+    Log::info("Metadata commands: %u item(s): %s", count, list.c_str());
+}
+
+void Controller::identifyReceived(const IdentifyData *identify,
+                                  const uint8_t *payload, size_t length)
+{
+    Log::info("Metadata received: %zu bytes", length);
+
+    // Item widths are xone's, which are the sizes of the structs it maps each element onto:
+    // gip_command_descriptor is 23 bytes and gip_firmware_version is 4. The 1 and 8 used here
+    // before were guesses, and the firmware element overran into the ones logged after it.
+    logCommandDescriptors(payload, length, identify->clientCommandsOffset);
+    logInfoElement("firmware versions", payload, length,
+                   identify->firmwareVersionsOffset, METADATA_VERSION_LENGTH);
+    logInfoElement("audio formats", payload, length,
+                   identify->audioFormatsOffset, METADATA_AUDIO_FORMAT_LENGTH);
+    logInfoElement("capabilities out", payload, length, identify->capabilitiesOutOffset, 1);
+    logInfoElement("capabilities in", payload, length, identify->capabilitiesInOffset, 1);
+    logInfoElement("interfaces", payload, length, identify->interfacesOffset, METADATA_GUID_LENGTH);
+
+    // Retained rather than only logged: whether a pad has a usable audio format is the one thing
+    // a caller needs to know before offering to send it audio, and metadata is the only place
+    // that says so. An empty list means the device declared none.
+    uint8_t formats;
+    const uint8_t *items = findInfoElement(payload, length, identify->audioFormatsOffset,
+                                           METADATA_AUDIO_FORMAT_LENGTH, formats);
+
+    audioFormats.clear();
+
+    if (items != nullptr)
+    {
+        audioFormats.assign(items,
+                            items + static_cast<size_t>(formats) * METADATA_AUDIO_FORMAT_LENGTH);
+    }
 }
 
 void Controller::processRumble()

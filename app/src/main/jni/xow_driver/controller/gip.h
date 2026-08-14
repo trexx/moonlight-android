@@ -18,8 +18,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 struct Frame;
 class Bytes;
@@ -158,6 +160,27 @@ protected:
         char serialNumber[14];
     } __attribute__((packed));
 
+    /*
+     * Metadata response header (MS-GIPUSB 2.2.2.4, "Device Metadata Object"), the reply to a
+     * metadata request. Every field after the opening blob is a byte offset into the payload
+     * that follows it - zero meaning "this device has none" - and each of those points at a
+     * count byte followed by that many fixed-size items.
+     *
+     * Offsets are relative to the end of 'unknown', not to the start of the message.
+     */
+    struct IdentifyData
+    {
+        uint8_t unknown[16];
+        uint16_t clientCommandsOffset;
+        uint16_t firmwareVersionsOffset;
+        uint16_t audioFormatsOffset;
+        uint16_t capabilitiesOutOffset;
+        uint16_t capabilitiesInOffset;
+        uint16_t classesOffset;
+        uint16_t interfacesOffset;
+        uint16_t hidDescriptorOffset;
+    } __attribute__((packed));
+
     struct InputData
     {
         struct
@@ -196,16 +219,39 @@ protected:
     virtual void serialNumberReceived(const SerialData *serial) = 0;
     virtual void inputReceived(const InputData *input) = 0;
 
+    /*
+     * The reassembled metadata response. 'payload' points at the bytes the offsets in 'identify'
+     * are relative to, and is valid only for the duration of the call.
+     *
+     * Not pure virtual: a device that never asks for metadata has no reason to implement it.
+     */
+    virtual void identifyReceived(const IdentifyData *identify,
+                                  const uint8_t *payload, size_t length) {}
+
     bool setPowerMode(uint8_t id, PowerMode mode);
     bool performRumble(RumbleData rumble);
     bool setLedMode(LedModeData mode);
     bool requestSerialNumber();
+    bool requestIdentify();
 
 private:
     bool acknowledgePacket(Frame frame);
+    bool acknowledgeChunk(const Frame &frame, uint32_t received, uint32_t remaining);
+    bool handleChunk(const Frame &frame, uint32_t length, uint32_t offset, const Bytes &data);
+    void dispatchChunked(uint8_t command, const uint8_t *data, size_t length);
     uint8_t getSequence(bool accessory = false);
 
     uint8_t sequence = 0x01;
     uint8_t accessorySequence = 0x01;
     SendPacket sendPacket;
+
+    /*
+     * Reassembly state for the one fragmented transfer a device may have in flight. Fragmented
+     * messages are rare - metadata and security only - so this is allocated when one starts and
+     * released when it completes, rather than kept around.
+     */
+    std::vector<uint8_t> chunkBuffer;
+    uint32_t chunkLength = 0;
+    uint8_t chunkCommand = 0;
+    bool chunkActive = false;
 };

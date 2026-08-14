@@ -27,6 +27,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <vector>
 
 /*
  * Forwards gamepad events to virtual input device
@@ -55,8 +56,14 @@ private:
     void guideButtonPressed(const GuideButtonData *button) override;
     void serialNumberReceived(const SerialData *serial) override;
     void inputReceived(const InputData *input) override;
+    void identifyReceived(const IdentifyData *identify,
+                          const uint8_t *payload, size_t length) override;
 
     void updateButtonStatus(const InputData *input);
+
+    // Audio formats the pad declared in its metadata, two bytes per entry, empty if it declared
+    // none. Written once when metadata arrives and read afterwards; see identifyReceived().
+    std::vector<uint8_t> audioFormats;
 
     /* Device initialization */
     void initInput(const AnnounceData *announce);
