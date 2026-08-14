@@ -82,6 +82,15 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /** {@inheritDoc} */
+    @Override
+    public void reportControllerBattery(int controllerId, byte batteryState, byte batteryPercentage) {
+        // Call through to the client's listener
+        if (listener != null) {
+            listener.reportControllerBattery(controllerId, batteryState, batteryPercentage);
+        }
+    }
+
     /** {@inheritDoc} Also drops the controller from our own list before forwarding. */
     @Override
     public void deviceRemoved(AbstractController controller) {

@@ -31,6 +31,15 @@ public interface UsbDriverListener {
      */
     void reportControllerMotion(int controllerId, byte motionType, float motionX, float motionY, float motionZ);
 
+    /**
+     * Reports a change in the controller's battery. Sent only when the level actually moves, not
+     * on a timer, so implementations should not expect a steady cadence.
+     *
+     * @param batteryState      one of {@code MoonBridge.LI_BATTERY_STATE_*}
+     * @param batteryPercentage 0 to 100, or {@code MoonBridge.LI_BATTERY_PERCENTAGE_UNKNOWN}
+     */
+    void reportControllerBattery(int controllerId, byte batteryState, byte batteryPercentage);
+
     /** The controller is gone and its host slot should be released. */
     void deviceRemoved(AbstractController controller);
 
