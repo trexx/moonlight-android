@@ -176,9 +176,25 @@ that announces no audio client only repeats the result above.
 
 ## Known limitations
 
-- **No rate adaptation.** The pad's `flow_rate` is read and logged but not acted on; sends are a
-  fixed 1536 bytes. xone does the same, so this matches the reference implementation rather than
-  falling short of it, but a long session could drift. The logged value is the evidence if it does.
+- **No rate adaptation, which is the anti-pop mechanism.** Each upstream Audio Capture message
+  carries a flow rate — "the number of bytes of render data the host SHOULD send in each message"
+  (MS-GIPUSB Table 69) — and §3.2.5.1.5 is explicit that modulating the render size against it "is
+  the mechanism GIP devices use to eliminate pops and clicks in audio". A render-only device still
+  sends capture messages purely to drive it.
+
+  We send a fixed 1536 bytes and ignore it. xone does the same, so this is not worse than the
+  reference, but it is declining a mechanism the protocol provides rather than merely risking
+  drift. Implementing it means draining the ring by the requested count instead of a constant —
+  not difficult, and the obvious next step if pops are heard.
+
+  Note the device is *expected* to nudge the value about: ±1 sample per channel per ms, which over
+  an 8 ms packet is ±32 bytes. Movement inside that band is the protocol working. Only a request
+  sitting well outside it is logged.
+
+  **The units are unverified for this transport.** The spec's worked examples are per-1 ms USB
+  messages (192 bytes for 48 kHz stereo); we send one 8 ms message of 1536. xone initialises its
+  expected rate to the whole 8 ms buffer, so it assumes whole-buffer units, but what a
+  dongle-attached pad actually reports has not been observed. The log answers it.
 - **Stereo 48 kHz only.** Samples are forwarded verbatim with no downmix, so a surround stream
   disables the feature rather than sending something wrong.
 - **Integrated jacks only.** A headset on the old stereo-headset *adapter* is a GIP accessory with

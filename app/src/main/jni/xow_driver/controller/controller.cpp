@@ -72,6 +72,13 @@
 // turning into permanent lag.
 #define AUDIO_BUFFER_MAX_BYTES (AUDIO_PACKET_BYTES * 4)
 
+// How far the pad's requested flow rate may sit from our packet size before it is worth saying so.
+//
+// MS-GIPUSB 3.2.5.1.5 has the device modulate this by "+/- one sample per channel per 1 ms" to
+// absorb clock drift, which over an 8 ms packet is 8 samples per channel: 8 * 2 channels * 2 bytes.
+// Anything inside that band is the protocol working, not a fault, and logging it would be noise.
+#define AUDIO_FLOW_RATE_TOLERANCE (8 * 2 * 2)
+
 // Scales a 16-bit magnitude, which is what moonlight-common-c and the Android input APIs both
 // deal in, onto the protocol's 0 - 100 range.
 #define RUMBLE_SCALE(magnitude) \
@@ -552,17 +559,27 @@ void Controller::waitForMetadata()
 
 void Controller::audioSamplesReceived(const AudioSamplesData *samples)
 {
-    // The pad modulates this to pull our send rate towards its own clock. We send a fixed size -
-    // as xone does - so this is recorded rather than acted on, and a value that settles away from
-    // AUDIO_PACKET_BYTES is the evidence that a session's audio is slipping.
-    if (samples->flowRate != audioFlowRate)
+    // How many bytes of render data the pad wants in each message (MS-GIPUSB Table 69). It nudges
+    // this up and down to absorb the difference between its clock and ours, and per 3.2.5.1.5 that
+    // is "the mechanism GIP devices use to eliminate pops and clicks in audio".
+    //
+    // We send a fixed AUDIO_PACKET_BYTES regardless, as xone does, so we are declining that
+    // mechanism rather than implementing it - see AUDIO.md. Small movement is therefore expected
+    // and says nothing; only a request that sits well outside the band the spec describes is worth
+    // reporting, and it would mean the pad is asking for a rate we never give it.
+    if (samples->flowRate == audioFlowRate)
     {
-        audioFlowRate = samples->flowRate;
+        return;
+    }
 
-        if (audioFlowRate != AUDIO_PACKET_BYTES)
-        {
-            Log::debug("Audio flow rate now %u, expected %u", audioFlowRate, AUDIO_PACKET_BYTES);
-        }
+    audioFlowRate = samples->flowRate;
+
+    int delta = static_cast<int>(audioFlowRate) - AUDIO_PACKET_BYTES;
+
+    if (delta > AUDIO_FLOW_RATE_TOLERANCE || delta < -AUDIO_FLOW_RATE_TOLERANCE)
+    {
+        Log::debug("Audio flow rate %u is outside the expected band around %u",
+                   audioFlowRate, AUDIO_PACKET_BYTES);
     }
 }
 

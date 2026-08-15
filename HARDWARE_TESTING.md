@@ -519,9 +519,20 @@ The first two items are the ones that decide whether this ships at all.
       and does not wedge or leak its sender thread.
 - [ ] **Rumble and input still work on a pad that is streaming audio.** Both share the link and
       the GIP command path, and audio is much the larger traffic.
-- [ ] **No pops, clicks or drift over a long session.** There is no rate adaptation — sends are a
-      fixed 1536 bytes — so if anything is heard, check the logged `Audio flow rate now N` lines
-      against 1536. A value that settles away from it is the pad asking for a rate we do not give.
+- [ ] **No pops, clicks or drift over a long session.** Sends are a fixed 1536 bytes and the pad's
+      requested flow rate is ignored — and per MS-GIPUSB 3.2.5.1.5 honouring it *is* the mechanism
+      that eliminates pops and clicks, so this is the item most likely to fail. If anything is
+      heard, that is the fix to reach for.
+- [ ] **Record what flow rate the pad actually asks for**, in the table below — it is unverified
+      for this transport. The spec's examples are per-1 ms USB message (192 bytes for 48 kHz
+      stereo) while we send one 8 ms message of 1536, and xone assumes the whole-buffer figure.
+      Only values well outside ±32 bytes of 1536 are logged, since the device is expected to nudge
+      it within that band; to see every value, lower `AUDIO_FLOW_RATE_TOLERANCE` to 0 in a debug
+      build.
+
+| Pad | Nominal flow rate reported | Range observed | Pops/clicks? |
+|---|---|---|---|
+| *(fill in)* | | | |
 - [ ] **A surround stream hides the menu entry** rather than offering something that would send
       6-channel audio to a stereo device.
 
