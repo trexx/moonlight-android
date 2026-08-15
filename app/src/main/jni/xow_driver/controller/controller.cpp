@@ -48,6 +48,10 @@
 #define RUMBLE_MAX_POWER 100
 #define RUMBLE_DELAY std::chrono::milliseconds(10)
 
+// Power level from the status byte's top two bits (MS-GIPUSB Table 30). Only "powering off or
+// resetting" is acted on; 01 is unused, 10 is full power and 11 is reserved.
+#define POWER_LEVEL_OFF 0x00
+
 // Scales a 16-bit magnitude, which is what moonlight-common-c and the Android input APIs both
 // deal in, onto the protocol's 0 - 100 range.
 #define RUMBLE_SCALE(magnitude) \
@@ -114,7 +118,7 @@ void Controller::registerJavaContext(JavaVM *vm, JNIEnv *env, jobject thiz) {
     }
 
     this->updateInputMethod = env->GetMethodID(this->jclazz, "updateInput", "(ISSSSSS)V");
-    this->updateBatteryMethod = env->GetMethodID(this->jclazz, "updateBattery", "(BB)V");
+    this->updateBatteryMethod = env->GetMethodID(this->jclazz, "updateBattery", "(BBB)V");
 
     if (this->updateInputMethod == nullptr || this->updateBatteryMethod == nullptr) {
         Log::error("Failed to resolve controller callbacks");
@@ -144,38 +148,53 @@ void Controller::deviceAnnounced(uint8_t id, const AnnounceData *announce)
 
 void Controller::statusReceived(uint8_t id, const StatusData *status)
 {
-    const std::string levels[] = { "low", "normal", "high", "full" };
+    const std::string levels[] = { "critically low", "low", "medium", "full" };
+    const std::string charges[] = { "not charging", "charging", "charge error", "reserved" };
 
     uint8_t type = status->batteryType;
     uint8_t level = status->batteryLevel;
 
+    // MS-GIPUSB Table 30 packs four fields into this byte: battery level in 1:0, battery type in
+    // 3:2, charge state in 5:4 and power level in 7:6. xow's struct names only the low two and
+    // lumps the top nibble into connectionInfo, which is why the charge state looked absent - the
+    // protocol does report it, this driver was simply throwing it away.
+    uint8_t charge = status->connectionInfo & 0x03;
+    uint8_t power = (status->connectionInfo >> 2) & 0x03;
+
     // Nothing has moved since the last report
-    if (type == batteryType && level == batteryLevel)
+    if (type == batteryType && level == batteryLevel &&
+        charge == batteryCharge && power == powerLevel)
     {
         return;
     }
 
     batteryType = type;
     batteryLevel = level;
+    batteryCharge = charge;
+    powerLevel = power;
 
-    // BATT_TYPE_CHARGING is a misnomer inherited from xow: type 0 means the pad has no battery
-    // and is running off the cable, not that it is charging. GIP's status message says nothing
-    // about charge direction at all. xone reads the same wire values as NONE/STANDARD/KIT and
-    // maps type 0 to "not charging" with an unknown level, which is the coherent reading and the
-    // one followed here. gip.h keeps upstream's names so it stays refreshable - see UPSTREAM.md.
-    //
-    // This case used to return early, which is why battery never reached the host even though the
-    // level was already tracked: the state that most needs reporting was the one being dropped.
+    // Type 0 is "battery absent", not "charging" - BATT_TYPE_CHARGING is a misnomer inherited
+    // from xow, whose name is left alone so gip.h stays refreshable (see UPSTREAM.md). Table 30
+    // is explicit: 00 absent or bus powered, 01 standard/alkaline, 10 rechargeable. A pad with no
+    // battery has no meaningful level, which is why this case used to return early - and why
+    // battery never reached the host at all, since the state most worth reporting was dropped.
     if (type == BATT_TYPE_CHARGING)
     {
-        Log::info("Battery: none (powered externally)");
+        Log::info("Battery: absent, running on external power");
     }
     else
     {
-        Log::info("Battery level: %s", levels[level].c_str());
+        Log::info("Battery: %s, %s", levels[level].c_str(), charges[charge].c_str());
     }
 
-    notifyJavaBattery(type, level);
+    // 00 means the pad is powering off or resetting, which is worth seeing in a log next to a
+    // disconnect that would otherwise look unexplained.
+    if (power == POWER_LEVEL_OFF)
+    {
+        Log::info("Controller is powering off or resetting");
+    }
+
+    notifyJavaBattery(type, level, charge);
 }
 
 void Controller::serialNumberReceived(const SerialData *serial)
@@ -247,7 +266,7 @@ void Controller::inputReceived(const InputData *input)
                         stickLeftX, stickLeftY, stickRightX, stickRightY);
 }
 
-void Controller::notifyJavaBattery(uint8_t type, uint8_t level)
+void Controller::notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge)
 {
     if (jthis == nullptr || updateBatteryMethod == nullptr) {
         return;
@@ -261,7 +280,7 @@ void Controller::notifyJavaBattery(uint8_t type, uint8_t level)
     // Raw GIP values: the mapping onto Moonlight's battery constants lives on the Java side,
     // where those constants are defined.
     env->CallVoidMethod(jthis, updateBatteryMethod, static_cast<jbyte>(type),
-                        static_cast<jbyte>(level));
+                        static_cast<jbyte>(level), static_cast<jbyte>(charge));
 }
 
 void Controller::initInput(const AnnounceData *announce)

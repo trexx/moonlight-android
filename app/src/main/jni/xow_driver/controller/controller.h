@@ -71,12 +71,14 @@ private:
     std::condition_variable rumbleCondition;
     Buffer<RumbleData> rumbleBuffer;
 
-    void notifyJavaBattery(uint8_t type, uint8_t level);
+    void notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge);
 
-    // Last reported battery state, so only changes are forwarded. 0xff is "nothing seen yet",
-    // which no GIP value collides with - type is 2 bits and level is 2 bits.
+    // Last reported status fields, so only changes are forwarded. 0xff is "nothing seen yet",
+    // which no GIP value collides with - each of these is two bits wide.
     uint8_t batteryType = 0xff;
     uint8_t batteryLevel = 0xff;
+    uint8_t batteryCharge = 0xff;
+    uint8_t powerLevel = 0xff;
     uint16_t rumbleLeft, rumbleRight, rumbleTriggerLeft, rumbleTriggerRight;
 
     uint32_t buttonStatus = 0;

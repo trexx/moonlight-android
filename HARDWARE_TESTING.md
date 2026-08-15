@@ -362,9 +362,13 @@ Battery was parsed natively and thrown away; there was also no callback on `UsbD
 to carry it. Both are now in place and `LI_CCAP_BATTERY_STATE` is advertised.
 
 - [ ] **Battery level appears host-side** and tracks a real discharge over a session.
-- [ ] **A pad on a USB cable or play-and-charge kit** reports "not charging" with an unknown
-      percentage rather than a wrong number. GIP carries no charge direction, so charging is
-      never reported — confirm nothing claims otherwise.
+- [ ] **Charging is reported while a play-and-charge kit is charging.** The charge state is bits
+      5:4 of the status byte (MS-GIPUSB Table 30), decoded now rather than discarded.
+- [ ] **A pad with no battery at all**, running off a plain USB cable, reports "not charging"
+      with an unknown percentage rather than a wrong number.
+- [ ] **The reported percentage tracks reality.** The four levels map to 10/25/50/100, which are
+      the spec's own figures rather than invented midpoints — level 01 is defined as
+      "approximately 25% charge remaining".
 - [ ] **Test on a Series X|S pad specifically.** Those are the ones expected to send the extended
       status message that was previously dropped whole; if battery works there, that fix is
       confirmed too.

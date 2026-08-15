@@ -68,11 +68,16 @@ clean copy. Differences from the baseline commit:
   `updateBattery` callback, rather than only logging it. It previously returned early on
   `BATT_TYPE_CHARGING`, which suppressed the very state most worth reporting.
 
-  Note the enum in `gip.h` is misleading and is **deliberately left alone** so the file stays
+  The status byte packs four fields (MS-GIPUSB Table 30): battery level in bits 1:0, battery type
+  in 3:2, **charge state in 5:4** and power level in 7:6. Upstream's struct names only the low two
+  and lumps the top nibble into `connectionInfo`; `statusReceived()` now decodes the rest, so
+  charging is reported rather than assumed absent, and a pad announcing that it is powering off
+  says so in the log next to the disconnect it explains.
+
+  The enum in `gip.h` is misleading and is **deliberately left alone** so the file stays
   byte-identical to upstream and directly refreshable. `BATT_TYPE_CHARGING` (0) does not mean
-  charging: GIP's status message carries no charge direction at all. xone reads the same wire
-  values as `NONE`/`STANDARD`/`KIT` and treats 0 as "no battery fitted", which is the coherent
-  reading and the one `statusReceived()` follows.
+  charging — Table 30 defines 0 as battery absent or bus powered — so xone's reading of the same
+  wire values as `NONE`/`STANDARD`/`KIT` is the correct one, and the one followed here.
 * **Fixed** the status message length test in `GipDevice::handlePacket()`. It required exactly
   `sizeof(StatusData)`, but MS-GIPUSB Table 26 allows payloads of `0x04` *or* `0x23`–`0x37`, and
   §3.1.5.5.2.2 requires the extended form on all new devices — whose status messages were therefore
