@@ -121,7 +121,11 @@ public class ProConController extends AbstractController {
             byte[] buffer = new byte[PACKET_SIZE];
             ByteBuffer bufferView = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN);
 
-            while (!Thread.currentThread().isInterrupted() && !stopped) {
+            // Resolved once rather than on both loop conditions below: this loop turns over at
+            // roughly 120 Hz and the thread it runs on obviously does not change.
+            final Thread readThread = Thread.currentThread();
+
+            while (!readThread.isInterrupted() && !stopped) {
                 int res;
                 do {
                     long lastMillis = SystemClock.uptimeMillis();
@@ -137,7 +141,7 @@ public class ProConController extends AbstractController {
                         ProConController.this.stop();
                         break;
                     }
-                } while (res == -1 && !Thread.currentThread().isInterrupted() && !stopped);
+                } while (res == -1 && !readThread.isInterrupted() && !stopped);
 
                 if (res == -1 || stopped) {
                     break;

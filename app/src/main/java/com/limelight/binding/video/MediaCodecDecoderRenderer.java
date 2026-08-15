@@ -135,7 +135,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private static final int CR_RECOVERY_TYPE_FLUSH = 1;
     private static final int CR_RECOVERY_TYPE_RESTART = 2;
     private static final int CR_RECOVERY_TYPE_RESET = 3;
-    private AtomicInteger codecRecoveryType = new AtomicInteger(CR_RECOVERY_TYPE_NONE);
+    private final AtomicInteger codecRecoveryType = new AtomicInteger(CR_RECOVERY_TYPE_NONE);
     private final Object codecRecoveryMonitor = new Object();
 
     // Each thread that touches the MediaCodec object or any associated buffers must have a flag
@@ -162,15 +162,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Stats for the current one-second window, the previous one (what the overlay displays), and
     // the whole session (what the post-stream summary displays)
-    private VideoStats activeWindowVideoStats;
-    private VideoStats lastWindowVideoStats;
-    private VideoStats globalVideoStats;
+    private final VideoStats activeWindowVideoStats = new VideoStats();
+    private final VideoStats lastWindowVideoStats = new VideoStats();
+    private final VideoStats globalVideoStats = new VideoStats();
     private final TrafficStatsHelper trafficStats = new TrafficStatsHelper();
 
     private long lastTimestampUs;
     private int lastFrameNumber;
     // The stream's frame rate, not the display's, despite the name
     private int refreshRate;
+    // 80% of one stream frame interval, precomputed in setup() because doFrame() needs it on every
+    // vsync. Safe to cache where the vsync offset is not: this derives from the stream rate, which
+    // is fixed for the session, rather than from the display, which is not. 0 means "no rate known
+    // yet", which presents on every vsync - the same effect the division had before it could throw.
+    private long minPresentIntervalNanos;
     private volatile Display vsyncDisplay;
     private volatile int rendererTid;
     private PerformanceHintManager.Session perfHintSession;
@@ -185,6 +190,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long lastRenderedFrameTimeNanos;
     private HandlerThread choreographerHandlerThread;
     private Handler choreographerHandler;
+    // Choreographer.getInstance() is a ThreadLocal lookup, and doFrame() needs it on every vsync to
+    // request the next callback. Resolved once on the Choreographer thread and only ever read from
+    // that same thread, so it needs no volatile. Unlike the display handle above it, this is not a
+    // property of the display configuration and cannot go stale across a mode change.
+    private Choreographer choreographer;
 
     private int numSpsIn;
     private int numPpsIn;
@@ -397,10 +407,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.consecutiveCrashCount = consecutiveCrashCount;
         this.glRenderer = glRenderer;
         this.perfListener = perfListener;
-
-        this.activeWindowVideoStats = new VideoStats();
-        this.lastWindowVideoStats = new VideoStats();
-        this.globalVideoStats = new VideoStats();
 
         avcDecoder = findAvcDecoder();
         if (avcDecoder != null) {
@@ -834,6 +840,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         this.initialHeight = height;
         this.videoFormat = format;
         this.refreshRate = redrawRate;
+        // Guard the zero explicitly rather than letting doFrame() divide by it. recordPresentedFrame()
+        // already treats a zero rate as reachable, and a rate that never arrives should present every
+        // vsync rather than throw once per frame.
+        this.minPresentIntervalNanos = redrawRate > 0 ? 800000000L / redrawRate : 0;
 
         return initializeDecoder(false);
     }
@@ -1154,9 +1164,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Don't render unless a new frame is due. This prevents microstutter when streaming
         // at a frame rate that doesn't match the display (such as 60 FPS on 120 Hz).
+        //
+        // The threshold is keyed to the stream rate, not the display's, which is what makes this
+        // correct under a variable refresh rate: it throttles to the stream when the display runs
+        // faster, and passes every vsync when the display drops below the stream.
         long actualFrameTimeDeltaNs = frameTimeNanos - lastRenderedFrameTimeNanos;
-        long expectedFrameTimeDeltaNs = 800000000 / refreshRate; // within 80% of the next frame
-        if (actualFrameTimeDeltaNs >= expectedFrameTimeDeltaNs) {
+        if (actualFrameTimeDeltaNs >= minPresentIntervalNanos) {
             // Render up to one frame when in frame pacing mode.
             //
             // NB: Since the queue limit is 2, we won't starve the decoder of output buffers
@@ -1189,13 +1202,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // Tell the scheduler how long this frame actually took, so it can size clocks to our
         // deadline. Reported before requesting the next callback so it reflects render work
         // only. A non-positive duration is rejected by the API, so floor it at 1 ns.
+        //
+        // The SDK_INT check is redundant at runtime - createPerformanceHintSession() returns early
+        // below API 31, so a non-null session already implies the API level - but it is NOT dead
+        // code and must stay. Lint's NewApi rule cannot infer the API level from the null check
+        // and fails the release build without it, which is what CI gates on.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
             long workDurationNanos = System.nanoTime() - workStartNanos;
             perfHintSession.reportActualWorkDuration(Math.max(1, workDurationNanos));
         }
 
         // Request another callback for next frame
-        Choreographer.getInstance().postFrameCallback(this);
+        choreographer.postFrameCallback(this);
     }
 
     /**
@@ -1286,7 +1304,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             @Override
             public void run() {
                 createPerformanceHintSession();
-                Choreographer.getInstance().postFrameCallback(MediaCodecDecoderRenderer.this);
+                choreographer = Choreographer.getInstance();
+                choreographer.postFrameCallback(MediaCodecDecoderRenderer.this);
             }
         });
     }
@@ -1315,11 +1334,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Publish our TID so the ADPF hint session can include this thread
                 rendererTid = Process.myTid();
 
+                // Read the pacing mode once. Game writes prefConfig.framePacing before
+                // startConnection() and never again, so these are fixed for the session - unlike
+                // anything derived from the display, which is not. Reading the field per frame
+                // meant two getfields each time round a loop that runs once per decoded frame.
+                final boolean balancedPacing =
+                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_BALANCED;
+                final boolean neverDropFrames =
+                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
+                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS;
+
                 // In every pacing mode except BALANCED this thread does the presenting, so
                 // the hint session has to be created here. It used to be created only from
                 // startChoreographerThread(), which returns early unless pacing is BALANCED -
                 // meaning ADPF was dead code under the default 'latency' pacing.
-                if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                if (!balancedPacing) {
                     createPerformanceHintSession();
                 }
 
@@ -1341,7 +1370,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             numFramesOut++;
 
                             // Render the latest frame now if frame pacing isn't in balanced mode
-                            if (prefs.framePacing != PreferenceConfiguration.FRAME_PACING_BALANCED) {
+                            if (!balancedPacing) {
                                 // Get the last output buffer in the queue
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
@@ -1352,8 +1381,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     presentationTimeUs = info.presentationTimeUs;
                                 }
 
-                                if (prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
-                                        prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
+                                if (neverDropFrames) {
                                     // In max smoothness or cap FPS mode, we want to never drop frames
                                     // Use a PTS that will cause this frame to never be dropped
                                     videoDecoder.releaseOutputBuffer(lastIndex, 0);
@@ -1366,6 +1394,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                                 activeWindowVideoStats.totalFramesRendered++;
 
+                                // Redundant at runtime but required by lint's NewApi rule - see
+                                // the matching report in doFrame().
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
                                     perfHintSession.reportActualWorkDuration(
                                             Math.max(1, System.nanoTime() - workStartNanos));
@@ -2005,18 +2035,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * unit arrived through.
      */
     private void updateFrameTracking(int frameNumber, int frameType) {
+        final VideoStats activeWindow = activeWindowVideoStats;
+
         if (lastFrameNumber == 0) {
-            activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
+            activeWindow.measurementStartTimestamp = SystemClock.uptimeMillis();
         } else if (frameNumber != lastFrameNumber && frameNumber != lastFrameNumber + 1) {
             // We can receive the same "frame" multiple times if it's an IDR frame.
             // In that case, each frame start NALU is submitted independently.
-            activeWindowVideoStats.framesLost += frameNumber - lastFrameNumber - 1;
-            activeWindowVideoStats.totalFrames += frameNumber - lastFrameNumber - 1;
-            activeWindowVideoStats.frameLossEvents++;
+            activeWindow.framesLost += frameNumber - lastFrameNumber - 1;
+            activeWindow.totalFrames += frameNumber - lastFrameNumber - 1;
+            activeWindow.frameLossEvents++;
         }
 
+        boolean frameAdvanced = lastFrameNumber != frameNumber;
+
         // Reset CSD data for each IDR frame
-        if (lastFrameNumber != frameNumber && frameType == MoonBridge.FRAME_TYPE_IDR) {
+        if (frameAdvanced && frameType == MoonBridge.FRAME_TYPE_IDR) {
             vpsBuffers.clear();
             spsBuffers.clear();
             ppsBuffers.clear();
@@ -2024,8 +2058,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         lastFrameNumber = frameNumber;
 
+        // Only consider flipping the window when the frame number has actually moved on. This
+        // runs per decode unit, and an IDR frame arrives as several - VPS, SPS, PPS and then the
+        // picture data - so the clock was being read four or five times over for one frame's
+        // worth of statistics. The window is a whole second, so evaluating its boundary a frame
+        // late changes nothing it measures.
+        if (!frameAdvanced) {
+            return;
+        }
+
         // Flip stats windows roughly every second
-        if (SystemClock.uptimeMillis() >= activeWindowVideoStats.measurementStartTimestamp + 1000) {
+        if (SystemClock.uptimeMillis() >= activeWindow.measurementStartTimestamp + 1000) {
             // Cache the overlay's visibility for the per-frame paths. They need it 60 times a
             // second and this is the only place already asking, so they read a field rather than
             // making an interface call. Visibility rather than the preference: the game menu's
@@ -2043,7 +2086,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // window opened and would drift by however long the thread hop took.
                 final VideoStats lastTwo = new VideoStats();
                 lastTwo.add(lastWindowVideoStats);
-                lastTwo.add(activeWindowVideoStats);
+                lastTwo.add(activeWindow);
 
                 final VideoStatsFps fps = lastTwo.getFps();
                 final String decoder;
@@ -2066,12 +2109,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 });
             }
 
-            globalVideoStats.add(activeWindowVideoStats);
-            lastWindowVideoStats.copy(activeWindowVideoStats);
-            activeWindowVideoStats.clear();
-            activeWindowVideoStats.measurementStartTimestamp = SystemClock.uptimeMillis();
+            globalVideoStats.add(activeWindow);
+            lastWindowVideoStats.copy(activeWindow);
+            activeWindow.clear();
+            activeWindow.measurementStartTimestamp = SystemClock.uptimeMillis();
         }
-
     }
 
     /**
@@ -2079,25 +2121,27 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * from {@link #updateFrameTracking} because the parameter set handling runs between them.
      */
     private void updateFrameCounters(char frameHostProcessingLatency, long receiveTimeUs, long enqueueTimeUs) {
-        if (frameHostProcessingLatency != 0) {
-            if (activeWindowVideoStats.minHostProcessingLatency != 0) {
-                activeWindowVideoStats.minHostProcessingLatency = (char) Math.min(activeWindowVideoStats.minHostProcessingLatency, frameHostProcessingLatency);
-            } else {
-                activeWindowVideoStats.minHostProcessingLatency = frameHostProcessingLatency;
-            }
-            activeWindowVideoStats.framesWithHostProcessingLatency += 1;
-        }
-        activeWindowVideoStats.maxHostProcessingLatency = (char) Math.max(activeWindowVideoStats.maxHostProcessingLatency, frameHostProcessingLatency);
-        activeWindowVideoStats.totalHostProcessingLatency += frameHostProcessingLatency;
+        final VideoStats activeWindow = activeWindowVideoStats;
 
-        activeWindowVideoStats.totalFramesReceived++;
-        activeWindowVideoStats.totalFrames++;
+        if (frameHostProcessingLatency != 0) {
+            if (activeWindow.minHostProcessingLatency != 0) {
+                activeWindow.minHostProcessingLatency = (char) Math.min(activeWindow.minHostProcessingLatency, frameHostProcessingLatency);
+            } else {
+                activeWindow.minHostProcessingLatency = frameHostProcessingLatency;
+            }
+            activeWindow.framesWithHostProcessingLatency += 1;
+        }
+        activeWindow.maxHostProcessingLatency = (char) Math.max(activeWindow.maxHostProcessingLatency, frameHostProcessingLatency);
+        activeWindow.totalHostProcessingLatency += frameHostProcessingLatency;
+
+        activeWindow.totalFramesReceived++;
+        activeWindow.totalFrames++;
 
         if (!FRAME_RENDER_TIME_ONLY) {
             // Count time from first packet received to enqueue time as receive time
             // We will count DU queue time as part of decoding, because it is directly
             // caused by a slow decoder.
-            activeWindowVideoStats.totalTimeMs += (enqueueTimeUs - receiveTimeUs) / 1000;
+            activeWindow.totalTimeMs += (enqueueTimeUs - receiveTimeUs) / 1000;
         }
     }
 
