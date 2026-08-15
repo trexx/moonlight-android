@@ -119,8 +119,10 @@ Robolectric:
 - `StickCalibration` — split from `ProConController`, which needs a USB device.
 - `KeyMapper` — was already pure.
 
-`LimeLog` wraps `java.util.logging`, not `android.util.Log`, so it is safe to call from code
-under test.
+`LimeLog` is backed by `android.util.Log`, so it is **not** safe to call from code under test: JVM
+tests run against a stubbed `android.jar` whose methods throw `RuntimeException` unless
+`testOptions.unitTests.returnDefaultValues` is set, and it is not set here. Keep the logic you
+extract for testing free of `LimeLog` calls, as `VideoStats` and `KeyMapper` are.
 
 **Assertions are disabled in tests** (`enableAssertions = false`), matching Android runtime
 behaviour. Do not write a test that depends on an `assert` firing.
