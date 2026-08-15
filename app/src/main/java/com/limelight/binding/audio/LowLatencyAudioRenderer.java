@@ -80,6 +80,13 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         return renderer.setup(audioConfiguration, sampleRate, samplesPerFrame);
     }
 
+    // isDead() crosses JNI, and playDecodedAudio() runs per audio packet - roughly 200 times a
+    // second at a 5 ms frame. Polling on every packet spends a round trip to catch something that
+    // only happens on a route change, so poll every 32nd instead: about 160 ms, which is far
+    // faster than a listener notices silence and a thirty-second of the JNI traffic.
+    private static final int DEAD_STREAM_POLL_INTERVAL = 32;
+    private int deadStreamPollCountdown;
+
     /**
      * {@inheritDoc}
      *
@@ -90,20 +97,28 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     public void playDecodedAudio(short[] audioData) {
         // A route change we couldn't recover from leaves the AAudio stream unusable. Rather than
         // going permanently silent, drop it and let the rest of the session run on AudioTrack.
-        if (aaudioRenderer != null && aaudioRenderer.isDead()) {
-            LimeLog.warning("AAudio stream died, switching to AudioTrack for the rest of the session");
-            aaudioRenderer.cleanup();
-            aaudioRenderer = null;
+        //
+        // The countdown is reset whenever the poll runs, not only when it finds a dead stream -
+        // otherwise the first poll would leave it negative and every subsequent packet would poll
+        // again, which is the cost this is here to avoid.
+        if (aaudioRenderer != null && --deadStreamPollCountdown <= 0) {
+            deadStreamPollCountdown = DEAD_STREAM_POLL_INTERVAL;
 
-            AudioRenderer fallback = new AndroidAudioRenderer();
-            if (fallback.setup(audioConfiguration, sampleRate, samplesPerFrame) != 0) {
-                LimeLog.severe("Unable to start AudioTrack fallback");
-                renderer = null;
-                return;
+            if (aaudioRenderer.isDead()) {
+                LimeLog.warning("AAudio stream died, switching to AudioTrack for the rest of the session");
+                aaudioRenderer.cleanup();
+                aaudioRenderer = null;
+
+                AudioRenderer fallback = new AndroidAudioRenderer();
+                if (fallback.setup(audioConfiguration, sampleRate, samplesPerFrame) != 0) {
+                    LimeLog.severe("Unable to start AudioTrack fallback");
+                    renderer = null;
+                    return;
+                }
+
+                fallback.start();
+                renderer = fallback;
             }
-
-            fallback.start();
-            renderer = fallback;
         }
 
         if (renderer != null) {

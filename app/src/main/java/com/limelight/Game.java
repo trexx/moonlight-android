@@ -1469,6 +1469,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      * @param view the view the event landed on, or null for events delivered to the activity
      * @return true if the event was consumed
      */
+    /**
+     * @return true if the device that produced this event reports joystick axes, whatever the
+     *         event's own source says. A DualShock touchpad arrives as a separate source on a
+     *         device that is otherwise a gamepad, which is what this distinguishes.
+     */
+    private static boolean isFromJoystickDevice(MotionEvent event) {
+        InputDevice device = event.getDevice();
+        return device != null && (device.getSources() & InputDevice.SOURCE_CLASS_JOYSTICK) != 0;
+    }
+
     private boolean handleMotionEvent(View view, MotionEvent event) {
         // Pass through mouse/touch/joystick input if we're not grabbing
         if (!grabbedInput) {
@@ -1476,13 +1486,17 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
 
         int eventSource = event.getSource();
-        int deviceSources = event.getDevice() != null ? event.getDevice().getSources() : 0;
         if ((eventSource & InputDevice.SOURCE_CLASS_JOYSTICK) != 0) {
             if (controllerHandler.handleMotionEvent(event)) {
                 return true;
             }
         }
-        else if ((deviceSources & InputDevice.SOURCE_CLASS_JOYSTICK) != 0 && controllerHandler.tryHandleTouchpadEvent(event)) {
+        // MotionEvent.getDevice() is a locked cache lookup in InputManagerGlobal, and this method
+        // runs per motion event - at the report rate of whatever produced it, which for a mouse in
+        // relative mode is far above the frame rate. It used to be called twice, unconditionally,
+        // to compute a value only this branch reads, so on the joystick path above it was resolved
+        // and thrown away. Resolve it once, here, where it is actually needed.
+        else if (isFromJoystickDevice(event) && controllerHandler.tryHandleTouchpadEvent(event)) {
             return true;
         }
         else if ((eventSource & InputDevice.SOURCE_CLASS_POINTER) != 0 ||
