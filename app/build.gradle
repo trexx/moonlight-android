@@ -2,6 +2,9 @@ import org.gradle.api.tasks.PathSensitivity
 
 plugins {
     id 'com.android.application'
+    // Coverage for the JVM unit tests only. This instruments the test JVM's copy of the
+    // classes; it does not touch the APK. See the jacoco block below.
+    id 'jacoco'
 }
 
 android {
@@ -62,7 +65,8 @@ android {
 
             // Gradle turns assertions on for test JVMs by default. Android disables them at
             // runtime, so leaving them on would let a test fail on a constraint that never
-            // holds in production. Tests should see the same semantics the app does.
+            // holds in production - VideoStats.add() has such an assert. Tests should see the
+            // same semantics the app does.
             enableAssertions = false
 
             testLogging {
@@ -166,6 +170,41 @@ tasks.withType(Test).configureEach {
     inputs.dir('src/main/res/xml')
             .withPropertyName('preferenceXml')
             .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
+// 0.8.15 is the first release that understands class file major version 69, which is what the
+// JDK 25 toolchain above emits. Older versions fail instrumentation outright.
+jacoco {
+    toolVersion = '0.8.15'
+}
+
+// Reports coverage of the debug unit tests. Deliberately not wired into `check`, and with no
+// minimum threshold: the baseline is near zero, so a threshold would either be set so low it
+// asserts nothing or would fail every build. Add one via jacocoTestCoverageVerification once
+// the covered set has stabilised.
+tasks.register('jacocoTestReport', JacocoReport) {
+    dependsOn 'testDebugUnitTest'
+    group = 'verification'
+    description = 'Generates a coverage report for the debug unit tests.'
+
+    // Named exactly rather than found by scanning the build directory. A fileTree over
+    // layout.buildDirectory makes Gradle treat every task that writes anywhere under app/build
+    // as an undeclared dependency of this one, which fails validation as soon as this task
+    // shares a build with assembleRelease.
+    executionData.from layout.buildDirectory.file('jacoco/testDebugUnitTest.exec')
+    sourceDirectories.from files('src/main/java')
+    classDirectories.from fileTree(
+            dir: layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes'),
+            // Generated types only. Everything hand-written stays in the denominator, including
+            // the Activities that no JVM test can reach - the report is meant to show where the
+            // gaps are, not to flatter the percentage.
+            excludes: ['**/R.class', '**/R$*.class', '**/BuildConfig.class']
+    )
+
+    reports {
+        xml.required = true
+        html.required = true
+    }
 }
 
 // Upstream fixes we depend on that have not merged yet are carried as patches against the
