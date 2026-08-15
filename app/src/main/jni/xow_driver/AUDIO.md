@@ -1,7 +1,8 @@
 # Audio to the controller's headphone jack
 
-Assessment only. **Nothing here is implemented.** Written up so the research does not have to be
-done twice, and because the format question that gated it has now been answered.
+**Implemented.** This was the assessment that preceded it; the design notes are kept because they
+explain *why* the implementation looks the way it does. What shipped, and what is still open, is at
+the bottom.
 
 ## The idea
 
@@ -86,6 +87,20 @@ packet is ignored rather than misread.
 Still open: whether the pad wants mono or stereo, which its metadata reports as a two-byte entry
 per supported format. That decides only the packet size above, not the shape of the work.
 
+## What shipped
+
+- `handlePacket()` decodes an extended payload length on the unfragmented path too, and
+  `encodeVarint()`/`encodeHeader()` build downstream headers at the required even length.
+- `GipDevice::setAudioFormat()` negotiates 48 kHz stereo; `sendAudioSamples()` emits `0x60` packets
+  with their own sequence counter, audio being a separate data class.
+- `Controller` gains a bounded ring and a sender thread per pad, both existing only while that pad
+  has audio on. It self-clocks: audio arrives from the host in real time, so waiting for a packet's
+  worth of samples paces the sends without a timer.
+- `PadAudioSink` fans out to at most **two** pads, and an empty target list *is* the fallback to
+  local output, so a pad disconnecting needs no special case.
+- Control is the in-game menu only — no preference. Which pad has headphones on it is a
+  per-session choice, and it means audio starts off every session.
+
 ## Measured against real hardware, and it does not work yet
 
 An implementation of the protocol half below was built and tested. It does not produce sound, and
@@ -159,5 +174,19 @@ that announces no audio client only repeats the result above.
    enough to matter. Take numbers from the end-of-stream summary rather than the overlay, per
    `CLAUDE.md`.
 
-`HARDWARE_TESTING.md` §8 still has a table for what each pad reports; filling it in for more than
-one generation is worth doing, since the format above is confirmed for one pad rather than all.
+## Known limitations
+
+- **No rate adaptation.** The pad's `flow_rate` is read and logged but not acted on; sends are a
+  fixed 1536 bytes. xone does the same, so this matches the reference implementation rather than
+  falling short of it, but a long session could drift. The logged value is the evidence if it does.
+- **Stereo 48 kHz only.** Samples are forwarded verbatim with no downmix, so a surround stream
+  disables the feature rather than sending something wrong.
+- **Integrated jacks only.** A headset on the old stereo-headset *adapter* is a GIP accessory with
+  device id > 0, and `handlePacket()` discards accessory packets outright.
+- **No microphone.** There is no mic support anywhere in this client, so the capture direction is
+  negotiated but never read.
+
+## Still to measure
+
+Whether audio costs input latency, since both share the 2.4 GHz link — the one result that decides
+whether this is worth using. `HARDWARE_TESTING.md` §9 has the checks.

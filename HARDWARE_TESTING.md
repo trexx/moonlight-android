@@ -493,6 +493,40 @@ silences the pad completely, input included.
 
 ---
 
+## 9. Audio to the controller's headphone jack
+
+Off until switched on from the in-game menu, **Controller headphone audio**, which only appears
+when an adapter is running, a pad is paired, and the stream's audio is 48 kHz stereo. Up to two
+pads at once; while any pad is on, the TV gets nothing.
+
+The first two items are the ones that decide whether this ships at all.
+
+- [ ] **No pad enabled: nothing changes.** Audio behaves exactly as before, no new logging, and
+      the menu entry is the only visible difference. This is what makes the feature safe to have.
+- [ ] **Input latency, audio off vs one pad vs two pads.** Audio puts ~192 KB/s per pad onto the
+      same 2.4 GHz link the controller input uses. xone gives audio its own hardware queue, which
+      *suggests* the radio prioritises input, but that is inference. **If input latency worsens
+      measurably, this feature is not worth using** — record the numbers either way. Take them
+      from the end-of-stream summary, not the overlay, and compare like with like.
+- [ ] **Audio is audible in the pad's headphones**, at the right pitch and speed. Wrong pitch
+      means the negotiated format and what is being sent disagree.
+- [ ] **Two pads at once**, both correct. A third shows "Off (two controllers already)" and
+      refuses rather than silently doing nothing.
+- [ ] **Toggling mid-game** moves audio between the TV and a pad promptly, both directions,
+      repeatedly. The toggle runs off the main thread — watch for any UI stall regardless, since
+      disabling joins a sender thread that may be inside a USB write with a one-second timeout.
+- [ ] **A pad powering off mid-session** returns audio to the TV, does not silence the stream,
+      and does not wedge or leak its sender thread.
+- [ ] **Rumble and input still work on a pad that is streaming audio.** Both share the link and
+      the GIP command path, and audio is much the larger traffic.
+- [ ] **No pops, clicks or drift over a long session.** There is no rate adaptation — sends are a
+      fixed 1536 bytes — so if anything is heard, check the logged `Audio flow rate now N` lines
+      against 1536. A value that settles away from it is the pad asking for a rate we do not give.
+- [ ] **A surround stream hides the menu entry** rather than offering something that would send
+      6-channel audio to a stereo device.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -511,3 +545,4 @@ silences the pad completely, input included.
 | §8 metadata | Any adapter pad; ideally several generations, since what they report is the point |
 | §9 v2 security | A pad that uses the ECDH handshake — none has been available to test against |
 | §9 multi-pad | Four pads on one adapter, to confirm per-pad sequence pools |
+| §9 pad audio | Two adapter pads with integrated 3.5 mm jacks, and wired headphones for each |
