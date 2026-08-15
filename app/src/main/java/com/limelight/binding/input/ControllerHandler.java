@@ -136,7 +136,11 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             // FIXME: Paddles?
     );
 
-    private final Vector2d inputVector = new Vector2d();
+    // Scratch vector for the mouse emulation maths. Safe to share across every controller because
+    // mouseEmulationRunnable is only ever posted to mainThreadHandler, so all of its users run on
+    // the main thread one after another. The stick processing cannot share it - see
+    // GenericControllerContext.stickVector.
+    private final Vector2d mouseEmulationVector = new Vector2d();
 
     private final SparseArray<InputDeviceContext> inputDeviceContexts = new SparseArray<>();
     private final SparseArray<UsbDeviceContext> usbDeviceContexts = new SparseArray<>();
@@ -1593,13 +1597,13 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     }
 
     /**
-     * @return the shared scratch vector, loaded with the given values. Reused rather than
+     * @return the context's own scratch vector, loaded with the given values. Reused rather than
      *         allocated because this runs for every axis event.
      */
-    private Vector2d populateCachedVector(float x, float y) {
-        // Reinitialize our cached Vector2d object
-        inputVector.initialize(x, y);
-        return inputVector;
+    private static Vector2d populateCachedVector(GenericControllerContext context, float x, float y) {
+        // Reinitialize the context's cached Vector2d object
+        context.stickVector.initialize(x, y);
+        return context.stickVector;
     }
 
     /**
@@ -1651,7 +1655,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                                float rsY, float lt, float rt, float hatX, float hatY) {
 
         if (context.leftStickXAxis != -1 && context.leftStickYAxis != -1) {
-            Vector2d leftStickVector = populateCachedVector(lsX, lsY);
+            Vector2d leftStickVector = populateCachedVector(context, lsX, lsY);
 
             handleDeadZone(leftStickVector, context.leftStickDeadzoneRadius);
 
@@ -1660,7 +1664,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         if (context.rightStickXAxis != -1 && context.rightStickYAxis != -1) {
-            Vector2d rightStickVector = populateCachedVector(rsX, rsY);
+            Vector2d rightStickVector = populateCachedVector(context, rsX, rsY);
 
             handleDeadZone(rightStickVector, context.rightStickDeadzoneRadius);
 
@@ -1921,9 +1925,12 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         return true;
     }
 
-    /** @return cursor movement in pixels for a stick deflection, in mouse emulation mode */
+    /**
+     * @return cursor movement in pixels for a stick deflection, in mouse emulation mode. The
+     *         returned vector is the shared main-thread scratch, valid only until the next call.
+     */
     private Vector2d convertRawStickAxisToPixelMovement(short stickX, short stickY) {
-        Vector2d vector = new Vector2d();
+        Vector2d vector = mouseEmulationVector;
         vector.initialize(stickX, stickY);
         vector.scalarMultiply(1 / 32766.0f);
         vector.scalarMultiply(4);
@@ -2873,14 +2880,14 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return;
         }
 
-        Vector2d leftStickVector = populateCachedVector(leftStickX, leftStickY);
+        Vector2d leftStickVector = populateCachedVector(context, leftStickX, leftStickY);
 
         handleDeadZone(leftStickVector, context.leftStickDeadzoneRadius);
 
         context.leftStickX = (short) (leftStickVector.getX() * 0x7FFE);
         context.leftStickY = (short) (-leftStickVector.getY() * 0x7FFE);
 
-        Vector2d rightStickVector = populateCachedVector(rightStickX, rightStickY);
+        Vector2d rightStickVector = populateCachedVector(context, rightStickX, rightStickY);
 
         handleDeadZone(rightStickVector, context.rightStickDeadzoneRadius);
 
@@ -2950,6 +2957,17 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     class GenericControllerContext implements GameInputDevice {
         public int id;
         public boolean external;
+
+        // Scratch vector for this controller's stick processing, reused rather than allocated
+        // because it is touched on every axis event. One per context rather than one per
+        // ControllerHandler because the two callers of populateCachedVector() run on different
+        // threads: handleAxisSet() on the main thread for Android-enumerated pads, and
+        // reportControllerState() on the reader thread of whichever USB driver owns the device -
+        // UsbDriverService forwards straight through with no Handler hop. A single shared vector
+        // let two pads interleave writes to the same x/y/magnitude fields, so one pad's deadzone
+        // maths could be applied to the other's stick values. A context belongs to exactly one
+        // device, and therefore to exactly one thread.
+        public final Vector2d stickVector = new Vector2d();
 
         public int vendorId;
         public int productId;

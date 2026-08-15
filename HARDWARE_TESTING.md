@@ -264,11 +264,30 @@ log rather than assuming, per the commands above.
 
 ---
 
+## 6. Input path: two-controller checks
+
+Both items below are invisible with a single controller connected — that is the whole reason
+they went unnoticed. Each needs a USB-driven pad (Switch Pro, or an Xbox pad on our own
+driver) **and** an Android-enumerated pad connected at the same time.
+
+- [ ] **Two pads, both sticks independent.** The scratch vector used for deadzone maths was
+      shared across every controller while being written from two threads — the main thread for
+      Android-enumerated pads, and the USB driver's reader thread for ours. The symptom is one
+      pad's deflection perturbing the other's: hold the left stick hard over on pad A and work
+      pad B's sticks, watching for A's reported position twitching. It is now one scratch vector
+      per controller, so this should be clean.
+- [ ] **Mouse emulation with two pads.** Enable mouse emulation on both and use them together.
+      The mouse-emulation maths still shares one vector, which is safe only because that path
+      runs entirely on the main thread — this is the check that says so.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
 |---|---|
 | §2 in full | Nintendo Switch Pro Controller + USB cable |
+| §6 both items | A USB-driven pad *and* an Android-enumerated pad, connected together |
 | §3 latency claim | Google TV Streamer, or another device with the AudioTrack fast-path bug |
 | §3 surround | 5.1 or 7.1 output on the host |
 | §4 pads | Xbox Series S/X pad, 8BitDo pad, PowerA Pro |
