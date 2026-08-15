@@ -100,25 +100,14 @@ public class MoonBridge {
 
     public static final int LI_ERR_UNSUPPORTED = -5501;
 
-    public static final byte LI_TOUCH_EVENT_HOVER       = 0x00;
+    // Only the event types a controller touchpad can produce. Limelight.h also defines HOVER,
+    // BUTTON_ONLY and HOVER_LEAVE, which belong to the screen-touch and pen paths this fork does
+    // not have — neither supported device has a touchscreen or accepts a stylus.
     public static final byte LI_TOUCH_EVENT_DOWN        = 0x01;
     public static final byte LI_TOUCH_EVENT_UP          = 0x02;
     public static final byte LI_TOUCH_EVENT_MOVE        = 0x03;
     public static final byte LI_TOUCH_EVENT_CANCEL      = 0x04;
-    public static final byte LI_TOUCH_EVENT_BUTTON_ONLY = 0x05;
-    public static final byte LI_TOUCH_EVENT_HOVER_LEAVE = 0x06;
     public static final byte LI_TOUCH_EVENT_CANCEL_ALL  = 0x07;
-
-    public static final byte LI_TOOL_TYPE_UNKNOWN = 0x00;
-    public static final byte LI_TOOL_TYPE_PEN = 0x01;
-    public static final byte LI_TOOL_TYPE_ERASER = 0x02;
-
-    public static final byte LI_PEN_BUTTON_PRIMARY = 0x01;
-    public static final byte LI_PEN_BUTTON_SECONDARY = 0x02;
-    public static final byte LI_PEN_BUTTON_TERTIARY = 0x04;
-
-    public static final byte LI_TILT_UNKNOWN = (byte)0xFF;
-    public static final short LI_ROT_UNKNOWN = (short)0xFFFF;
 
     public static final byte LI_CTYPE_UNKNOWN  = 0x00;
     public static final byte LI_CTYPE_XBOX     = 0x01;
@@ -478,13 +467,6 @@ public class MoonBridge {
                                     byte leftTrigger, byte rightTrigger,
                                     short leftStickX, short leftStickY,
                                     short rightStickX, short rightStickY);
-
-    public static native int sendTouchEvent(byte eventType, int pointerId, float x, float y, float pressure,
-                                            float contactAreaMajor, float contactAreaMinor, short rotation);
-
-    public static native int sendPenEvent(byte eventType, byte toolType, byte penButtons, float x, float y,
-                                          float pressure, float contactAreaMajor, float contactAreaMinor,
-                                          short rotation, byte tilt);
 
     public static native int sendControllerArrivalEvent(byte controllerNumber, short activeGamepadMask, byte type, int supportedButtonFlags, short capabilities);
 

@@ -255,6 +255,11 @@ Small changes, but each touches a path that is easy to break silently.
 - [ ] **Gamepad gyro still reaches the host** on a pad that has one (DualSense/DualShock). The
       device-IMU fallback and its axis-swizzle are gone; a real pad reports in its own frame
       and needs no correction.
+- [ ] **`isExternal()` now trusts the platform.** The hardcoded overrides for Shield *Portable*,
+      Tinker Board, Archos Gamepad 2, XPERIA Play and the Logitech G Cloud are gone, and that
+      answer feeds two things. On the **Shield TV**: the remote's Back button must still leave the
+      stream (`shouldIgnoreBack()`), and a paired controller must still report battery to the host
+      (`LI_CCAP_BATTERY_STATE`). Check with the TV remote alone, and with a pad also connected.
 - [ ] **The settings screen renders** with `checkbox_enable_pip`, `checkbox_vibrate_fallback`,
       `seekbar_vibrate_fallback_strength` and `checkbox_gamepad_motion_fallback` all removed —
       a dangling preference key would crash it or leave a dead row.

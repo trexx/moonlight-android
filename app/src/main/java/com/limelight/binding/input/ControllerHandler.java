@@ -640,28 +640,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         return type == MoonBridge.LI_CTYPE_PS;
     }
 
-    /** @return true if the device is external rather than part of the handheld itself */
+    /**
+     * @return true if the device is external rather than part of the handheld itself
+     *
+     * <p>Upstream overrides the platform's answer for a list of devices whose built-in controls
+     * report themselves as external, or the reverse: ASUS Tinker Board, Shield <em>Portable</em>,
+     * Archos Gamepad 2, XPERIA Play and the Logitech G Cloud. All are handhelds or SBCs, and none
+     * is a supported target, so this now trusts the platform. Both supported devices are set-top
+     * boxes with no built-in controls at all, which is the case {@code isExternal()} gets right.
+     */
     private static boolean isExternal(InputDevice dev) {
-        // The ASUS Tinker Board inaccurately reports Bluetooth gamepads as internal,
-        // causing shouldIgnoreBack() to believe it should pass through back as a
-        // navigation event for any attached gamepads.
-        if (Build.MODEL.equals("Tinker Board")) {
-            return true;
-        }
-
-        String deviceName = dev.getName();
-        if (deviceName.contains("gpio") || // This is the back button on Shield portable consoles
-                deviceName.contains("joy_key") || // These are the gamepad buttons on the Archos Gamepad 2
-                deviceName.contains("keypad") || // These are gamepad buttons on the XPERIA Play
-                deviceName.equalsIgnoreCase("NVIDIA Corporation NVIDIA Controller v01.01") || // Gamepad on Shield Portable
-                deviceName.equalsIgnoreCase("NVIDIA Corporation NVIDIA Controller v01.02") || // Gamepad on Shield Portable (?)
-                deviceName.equalsIgnoreCase("GR0006") // Gamepad on Logitech G Cloud
-        )
-        {
-            LimeLog.info(dev.getName()+" is internal by hardcoded mapping");
-            return false;
-        }
-
         return dev.isExternal();
     }
 
@@ -779,15 +767,11 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         // Linux kernel version doesn't have motion sensor support, which is common for third-party
         // gamepads.
         //
-        // Android 12 has a bug that causes InputDeviceSensorManager to cause a NPE on a background
-        // thread due to bad error checking in InputListener callbacks. InputDeviceSensorManager is
-        // created upon the first call to InputDevice.getSensorManager(), so we avoid calling this
-        // on Android 12 unless we have a gamepad that could plausibly have motion sensors.
-        // https://cs.android.com/android/_/android/platform/frameworks/base/+/8970010a5e9f3dc5c069f56b4147552accfcbbeb
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ||
-                        context.vendorId == 0x054c || context.vendorId == 0x057e) && // Sony or Nintendo
-                prefConfig.gamepadMotionSensors) {
+        // InputDevice.getSensorManager() is the API 31 entry point for pad motion sensors, so the
+        // Shield never reaches it. Upstream additionally narrowed this to Sony and Nintendo pads on
+        // Android 12, where touching InputDeviceSensorManager could NPE on a background thread;
+        // neither supported device is API 31 or 32, so that narrowing is gone.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && prefConfig.gamepadMotionSensors) {
             if (dev.getSensorManager().getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null || dev.getSensorManager().getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null) {
                 context.sensorManager = dev.getSensorManager();
             }
@@ -3292,10 +3276,13 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     capabilities |= MoonBridge.LI_CCAP_BATTERY_STATE;
                 }
 
-                // Light.hasRgbControl() was totally broken prior to Android 14.
-                // It always returned true because LIGHT_CAPABILITY_RGB was defined as 0,
-                // so we will just guess RGB is supported if it's a PlayStation controller.
-                if (hasRgbLed && (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE || type == MoonBridge.LI_CTYPE_PS)) {
+                // hasRgbLed is only ever set behind an API 31 gate, so it stays false on the
+                // Shield. On the Homatics, API 34 is where Light.hasRgbControl() first answers
+                // honestly — before that it returned true unconditionally, because
+                // LIGHT_CAPABILITY_RGB was defined as 0. Both target devices therefore sit on one
+                // side or the other of that fix, and the PlayStation-pad guess it used to need is
+                // no longer reachable.
+                if (hasRgbLed) {
                     capabilities |= MoonBridge.LI_CCAP_RGB_LED;
                 }
             }

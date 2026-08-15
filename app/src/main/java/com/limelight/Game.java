@@ -80,8 +80,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -408,13 +406,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             Display.HdrCapabilities hdrCaps = display.getHdrCapabilities();
 
             // We must now ensure our display is compatible with HDR10
-            if (hdrCaps != null) {
-                // getHdrCapabilities() returns null on Lenovo Lenovo Mirage Solo (vega), Android 8.0
-                for (int hdrType : hdrCaps.getSupportedHdrTypes()) {
-                    if (hdrType == Display.HdrCapabilities.HDR_TYPE_HDR10) {
-                        willStreamHdr = true;
-                        break;
-                    }
+            for (int hdrType : hdrCaps.getSupportedHdrTypes()) {
+                if (hdrType == Display.HdrCapabilities.HDR_TYPE_HDR10) {
+                    willStreamHdr = true;
+                    break;
                 }
             }
 
@@ -578,40 +573,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         setPreferredOrientationForCurrentDisplay();
     }
 
-    /**
-     * Captures or releases the meta keys (Home, Recents, Back).
-     *
-     * <p>Capturing them lets combinations like Win+D reach the host instead of Android, which is
-     * the point; releasing them is what makes it possible to leave the stream at all.
-     */
-    public void setMetaKeyCaptureState(boolean enabled) {
-        // This uses custom APIs present on some Samsung devices to allow capture of
-        // meta key events while streaming.
-        try {
-            Class<?> semWindowManager = Class.forName("com.samsung.android.view.SemWindowManager");
-            Method getInstanceMethod = semWindowManager.getMethod("getInstance");
-            Object manager = getInstanceMethod.invoke(null);
-
-            if (manager != null) {
-                Class<?>[] parameterTypes = new Class<?>[2];
-                parameterTypes[0] = ComponentName.class;
-                parameterTypes[1] = boolean.class;
-                Method requestMetaKeyEventMethod = semWindowManager.getDeclaredMethod("requestMetaKeyEvent", parameterTypes);
-                requestMetaKeyEventMethod.invoke(manager, this.getComponentName(), enabled);
-            }
-            else {
-                LimeLog.warning("SemWindowManager.getInstance() returned null");
-            }
-        } catch (ClassNotFoundException e) {
-            e.printStackTrace();
-        } catch (NoSuchMethodException e) {
-            e.printStackTrace();
-        } catch (InvocationTargetException e) {
-            e.printStackTrace();
-        } catch (IllegalAccessException e) {
-            e.printStackTrace();
-        }
-    }
 
     /** {@inheritDoc} Re-establishes pointer capture and the system UI state on regaining focus. */
     @Override
@@ -1017,9 +978,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         else {
             inputCaptureProvider.disableCapture();
         }
-
-        // Grab/ungrab system keyboard shortcuts
-        setMetaKeyCaptureState(grab);
 
         grabbedInput = grab;
     }

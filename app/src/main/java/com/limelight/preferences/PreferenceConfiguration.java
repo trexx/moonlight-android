@@ -3,7 +3,6 @@ package com.limelight.preferences;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.os.Build;
 import android.preference.PreferenceManager;
 
 import com.limelight.nvstream.StreamConfiguration;
@@ -463,14 +462,6 @@ public class PreferenceConfiguration {
                 .apply();
     }
 
-    /** @return true on SHIELD firmware versions whose HDR output is broken, where HDR is suppressed */
-    public static boolean isShieldAtvFirmwareWithBrokenHdr() {
-        // This particular Shield TV firmware crashes when using HDR
-        // https://www.nvidia.com/en-us/geforce/forums/notifications/comment/155192/
-        return Build.MANUFACTURER.equalsIgnoreCase("NVIDIA") &&
-                Build.FINGERPRINT.contains("PPR1.180610.011/4079208_2235.1395");
-    }
-
     /**
      * Reads and normalises every setting, migrating legacy keys and computing device-dependent
      * defaults on the way.
@@ -567,15 +558,6 @@ public class PreferenceConfiguration {
             prefs.edit().putBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context)).apply();
         }
 
-        if (!prefs.contains(GAMEPAD_MOTION_SENSORS_PREF_STRING) && Build.VERSION.SDK_INT == Build.VERSION_CODES.S) {
-            // Android 12 has a nasty bug that causes crashes when the app touches the InputDevice's
-            // associated InputDeviceSensorManager (just calling getSensorManager() is enough).
-            // As a workaround, we will override the default value for the gamepad motion sensor
-            // option to disabled on Android 12 to reduce the impact of this bug.
-            // https://cs.android.com/android/_/android/platform/frameworks/base/+/8970010a5e9f3dc5c069f56b4147552accfcbbeb
-            prefs.edit().putBoolean(GAMEPAD_MOTION_SENSORS_PREF_STRING, false).apply();
-        }
-
         // This must happen after the preferences migration to ensure the preferences are populated
         config.bitrate = prefs.getInt(BITRATE_PREF_STRING, prefs.getInt(BITRATE_PREF_OLD_STRING, 0) * 1000);
         if (config.bitrate == 0) {
@@ -632,7 +614,7 @@ public class PreferenceConfiguration {
         config.smallIconMode = prefs.getBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context));
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
-        config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
+        config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR);
         config.enableIntraRefresh = prefs.getBoolean(ENABLE_INTRA_REFRESH_PREF_STRING, DEFAULT_ENABLE_INTRA_REFRESH);
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
