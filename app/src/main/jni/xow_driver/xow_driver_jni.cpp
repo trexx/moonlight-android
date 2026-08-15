@@ -84,6 +84,38 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_sendrumbleTrigger
     controller->inputRumbleTrigger(left_trigger, right_trigger);
 }
 extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_binding_input_driver_XboxWirelessController_setAudioEnabledNative(JNIEnv *env,
+                                                                                     jobject thiz,
+                                                                                     jlong handle,
+                                                                                     jboolean enable) {
+    auto *controller = (Controller *) handle;
+    return controller->setAudioEnabled(enable == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_limelight_binding_input_driver_XboxWirelessController_queueAudioNative(JNIEnv *env,
+                                                                                jobject thiz,
+                                                                                jlong handle,
+                                                                                jshortArray samples,
+                                                                                jint count) {
+    auto *controller = (Controller *) handle;
+
+    // Critical section rather than a copy: this runs per audio frame, and GetPrimitiveArrayCritical
+    // hands back the array's own storage where the runtime allows it. Nothing between the calls
+    // may enter the JVM or block.
+    auto *data = (jshort *) env->GetPrimitiveArrayCritical(samples, nullptr);
+    if (data == nullptr) {
+        return;
+    }
+
+    controller->queueAudio(reinterpret_cast<const int16_t *>(data), (size_t) count);
+
+    env->ReleasePrimitiveArrayCritical(samples, data, JNI_ABORT);
+}
+
+extern "C"
 JNIEXPORT void JNICALL
 Java_com_limelight_binding_input_driver_XboxWirelessController_registerNative(JNIEnv *env,
                                                                               jobject thiz,

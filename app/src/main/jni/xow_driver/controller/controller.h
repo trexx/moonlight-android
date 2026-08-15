@@ -49,6 +49,23 @@ public:
     void inputRumble(short lowFreqMotor, short highFreqMotor);
     void inputRumbleTrigger(short leftTrigger, short rightTrigger);
 
+    /*
+     * Starts or stops rendering stream audio to this pad's headphone jack. Negotiates the format
+     * and spins up the sender thread on enable; stops and releases both on disable, so a pad
+     * nobody is listening to costs nothing.
+     *
+     * Safe to call repeatedly with the same value.
+     */
+    bool setAudioEnabled(bool enable);
+    bool isAudioEnabled() const { return audioEnabled; }
+
+    /*
+     * Queues interleaved 16-bit stereo PCM for this pad. Called from Moonlight's audio decode
+     * thread, so it only copies into the ring and returns - the blocking USB write happens on the
+     * sender thread. Samples are dropped rather than queued without limit when the ring is full.
+     */
+    void queueAudio(const int16_t *samples, size_t count);
+
 private:
     /* GIP events */
     void deviceAnnounced(uint8_t id, const AnnounceData *announce) override;
@@ -102,6 +119,20 @@ private:
     std::mutex rumbleMutex;
     std::condition_variable rumbleCondition;
     Buffer<RumbleData> rumbleBuffer;
+
+    /* Audio producer/consumer, built on the same shape as the rumble pair above */
+    void processAudio();
+    void audioSamplesReceived(const AudioSamplesData *samples) override;
+
+    std::atomic<bool> audioEnabled{false};
+    std::atomic<bool> stopAudioThread{false};
+    std::thread audioThread;
+    std::mutex audioMutex;
+    std::condition_variable audioCondition;
+    // Bytes awaiting transmission, drained one 8 ms packet at a time. Guarded by audioMutex.
+    std::vector<uint8_t> audioBuffer;
+    // Last flow rate the pad reported, tracked only to notice it drifting from the packet size
+    uint16_t audioFlowRate = 0;
 
     void notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge);
 

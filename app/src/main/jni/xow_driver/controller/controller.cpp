@@ -63,6 +63,15 @@
 // resetting" is acted on; 01 is unused, 10 is full power and 11 is reserved.
 #define POWER_LEVEL_OFF 0x00
 
+// One packet of 48 kHz 16-bit stereo at the protocol's 8 ms cadence:
+// 48000 Hz * 2 channels * 2 bytes * 8 ms / 1000 = 1536. See gip_make_audio_config() in xone.
+#define AUDIO_PACKET_BYTES 1536
+
+// Four packets, so roughly 32 ms may queue before samples start being dropped. Enough to ride out
+// a scheduling hiccup on either thread, short enough that a real backlog is discarded rather than
+// turning into permanent lag.
+#define AUDIO_BUFFER_MAX_BYTES (AUDIO_PACKET_BYTES * 4)
+
 // Scales a 16-bit magnitude, which is what moonlight-common-c and the Android input APIs both
 // deal in, onto the protocol's 0 - 100 range.
 #define RUMBLE_SCALE(magnitude) \
@@ -95,6 +104,10 @@ Controller::~Controller()
     {
         rumbleThread.join();
     }
+
+    // Stops and joins the audio thread if it is running. Must happen before the JNI teardown
+    // below, since the thread touches nothing Java but does use this object's sendPacket.
+    setAudioEnabled(false);
 
     if (!setDeviceState(DEVICE_ID_CONTROLLER, STATE_OFF))
     {
@@ -535,6 +548,152 @@ void Controller::waitForMetadata()
     }
 
     startDevice();
+}
+
+void Controller::audioSamplesReceived(const AudioSamplesData *samples)
+{
+    // The pad modulates this to pull our send rate towards its own clock. We send a fixed size -
+    // as xone does - so this is recorded rather than acted on, and a value that settles away from
+    // AUDIO_PACKET_BYTES is the evidence that a session's audio is slipping.
+    if (samples->flowRate != audioFlowRate)
+    {
+        audioFlowRate = samples->flowRate;
+
+        if (audioFlowRate != AUDIO_PACKET_BYTES)
+        {
+            Log::debug("Audio flow rate now %u, expected %u", audioFlowRate, AUDIO_PACKET_BYTES);
+        }
+    }
+}
+
+bool Controller::setAudioEnabled(bool enable)
+{
+    if (enable == audioEnabled)
+    {
+        return true;
+    }
+
+    if (enable)
+    {
+        // 48 kHz stereo both ways. The capture direction is negotiated because the protocol pairs
+        // them in one message and the pad needs a valid value, not because anything reads a
+        // microphone here.
+        if (!setAudioFormat(AUDIO_FORMAT_48KHZ_STEREO, AUDIO_FORMAT_48KHZ_STEREO))
+        {
+            Log::error("Failed to set audio format");
+
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(audioMutex);
+
+            audioBuffer.clear();
+            audioBuffer.reserve(AUDIO_BUFFER_MAX_BYTES);
+        }
+
+        audioFlowRate = 0;
+        stopAudioThread = false;
+        audioEnabled = true;
+        audioThread = std::thread(&Controller::processAudio, this);
+
+        Log::info("Audio enabled for controller");
+
+        return true;
+    }
+
+    audioEnabled = false;
+    stopAudioThread = true;
+    audioCondition.notify_one();
+
+    if (audioThread.joinable())
+    {
+        audioThread.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(audioMutex);
+
+        audioBuffer.clear();
+        audioBuffer.shrink_to_fit();
+    }
+
+    Log::info("Audio disabled for controller");
+
+    return true;
+}
+
+void Controller::queueAudio(const int16_t *samples, size_t count)
+{
+    if (!audioEnabled)
+    {
+        return;
+    }
+
+    const uint8_t *bytes = reinterpret_cast<const uint8_t *>(samples);
+    size_t length = count * sizeof(int16_t);
+
+    {
+        std::lock_guard<std::mutex> lock(audioMutex);
+
+        // Drop the oldest rather than growing without bound. A backlog here is heard as audio
+        // drifting permanently behind the video, which is worse than losing a few milliseconds -
+        // the same trade AudioRenderer's own documentation describes for the AudioTrack path.
+        if (audioBuffer.size() + length > AUDIO_BUFFER_MAX_BYTES)
+        {
+            size_t excess = audioBuffer.size() + length - AUDIO_BUFFER_MAX_BYTES;
+
+            if (excess >= audioBuffer.size())
+            {
+                audioBuffer.clear();
+            }
+            else
+            {
+                audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + excess);
+            }
+        }
+
+        audioBuffer.insert(audioBuffer.end(), bytes, bytes + length);
+    }
+
+    audioCondition.notify_one();
+}
+
+/*
+ * Drains the ring one packet at a time. There is no timer: the host delivers audio in real time,
+ * so waiting for a packet's worth of samples paces this at the protocol's 8 ms on its own.
+ */
+void Controller::processAudio()
+{
+    uint8_t packet[AUDIO_PACKET_BYTES];
+
+    while (!stopAudioThread)
+    {
+        {
+            std::unique_lock<std::mutex> lock(audioMutex);
+
+            audioCondition.wait(lock, [this] {
+                return stopAudioThread || audioBuffer.size() >= AUDIO_PACKET_BYTES;
+            });
+
+            if (stopAudioThread)
+            {
+                return;
+            }
+
+            std::copy(audioBuffer.begin(), audioBuffer.begin() + AUDIO_PACKET_BYTES, packet);
+            audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + AUDIO_PACKET_BYTES);
+        }
+
+        // Outside the lock: this is a blocking USB transfer, and the decode thread must never
+        // wait behind it.
+        if (!sendAudioSamples(packet, sizeof(packet)))
+        {
+            Log::error("Failed to send audio samples");
+
+            return;
+        }
+    }
 }
 
 void Controller::processRumble()
