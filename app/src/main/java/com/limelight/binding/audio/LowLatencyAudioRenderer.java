@@ -70,7 +70,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         // AAudioStreamBuilder_setChannelMask() only exists from API 32. Without it a surround
         // stream has no defined speaker layout, which silences everything but front left/right.
         // Stereo is unambiguous from the channel count alone, so it's still fine below 32.
-        if (audioConfiguration.channelCount > 2 && Build.VERSION.SDK_INT < Build.VERSION_CODES.S_V2) {
+        if (audioConfiguration.channelCount() > 2 && Build.VERSION.SDK_INT < Build.VERSION_CODES.S_V2) {
             LimeLog.info("Not using AAudio for surround audio below API 32");
             return false;
         }
@@ -94,7 +94,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         // A pad can only take 48 kHz stereo, and playDecodedAudio() forwards samples verbatim.
         // Telling the sink now means the menu can grey the option out rather than accepting a
         // selection that would send surround audio to a stereo device.
-        padAudioSink.setStreamFormat(audioConfiguration.channelCount, sampleRate);
+        padAudioSink.setStreamFormat(audioConfiguration.channelCount(), sampleRate);
 
         return openLocalRenderer();
     }

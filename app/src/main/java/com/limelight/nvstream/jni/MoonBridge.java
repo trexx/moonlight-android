@@ -165,19 +165,26 @@ public class MoonBridge {
         return slices << 24;
     }
 
-    public static class AudioConfiguration {
-        public final int channelCount;
-        public final int channelMask;
+    /**
+     * The negotiated audio format: how many channels, and which speakers they map to.
+     *
+     * <p>A record because it is exactly a pair of values compared by content. The hand-written
+     * {@code equals}/{@code hashCode} it replaces both delegated to {@link #toInt()}, which is a
+     * lossless function of the two components for any value in range — so the generated pair
+     * computes the same answer without the code.
+     */
+    public record AudioConfiguration(int channelCount, int channelMask) {
 
-        public AudioConfiguration(int channelCount, int channelMask) {
-            this.channelCount = channelCount;
-            this.channelMask = channelMask;
-        }
-
-        // Creates an AudioConfiguration from the integer value returned by moonlight-common-c
-        // See CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION() and CHANNEL_MASK_FROM_AUDIO_CONFIGURATION()
-        // in Limelight.h
-        private AudioConfiguration(int audioConfiguration) {
+        /**
+         * Decodes the integer form moonlight-common-c uses. See
+         * {@code CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION()} and
+         * {@code CHANNEL_MASK_FROM_AUDIO_CONFIGURATION()} in Limelight.h.
+         *
+         * <p>A factory rather than an extra constructor: the magic byte has to be checked before
+         * the components are derived, and a delegating constructor cannot run anything ahead of
+         * its {@code this(...)} call.
+         */
+        private static AudioConfiguration fromNative(int audioConfiguration) {
             // Check the magic byte before decoding to make sure we got something that's actually
             // a MAKE_AUDIO_CONFIGURATION()-based value and not something else like an older version
             // hardcoded AUDIO_CONFIGURATION value from an earlier version of moonlight-common-c.
@@ -185,27 +192,13 @@ public class MoonBridge {
                 throw new IllegalArgumentException("Audio configuration has invalid magic byte!");
             }
 
-            this.channelCount = (audioConfiguration >> 8) & 0xFF;
-            this.channelMask = (audioConfiguration >> 16) & 0xFFFF;
+            return new AudioConfiguration((audioConfiguration >> 8) & 0xFF,
+                    (audioConfiguration >> 16) & 0xFFFF);
         }
 
         // See SURROUNDAUDIOINFO_FROM_AUDIO_CONFIGURATION() in Limelight.h
         public int getSurroundAudioInfo() {
             return channelMask << 16 | channelCount;
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (obj instanceof AudioConfiguration that) {
-                return this.toInt() == that.toInt();
-            }
-
-            return false;
-        }
-
-        @Override
-        public int hashCode() {
-            return toInt();
         }
 
         // Returns the integer value expected by moonlight-common-c
@@ -302,7 +295,7 @@ public class MoonBridge {
     /** Callback from native: set up audio output for the negotiated configuration. */
     public static int bridgeArInit(int audioConfiguration, int sampleRate, int samplesPerFrame) {
         if (audioRenderer != null) {
-            return audioRenderer.setup(new AudioConfiguration(audioConfiguration), sampleRate, samplesPerFrame);
+            return audioRenderer.setup(AudioConfiguration.fromNative(audioConfiguration), sampleRate, samplesPerFrame);
         }
         else {
             return -1;

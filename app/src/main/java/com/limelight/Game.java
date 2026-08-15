@@ -1155,23 +1155,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 touchContextMap[i].cancelTouch();
             }
 
-            switch (prefConfig.mouseMode) {
-                case ABSOLUTE:
-                    touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamView, false);
-                    break;
-                case ABSOLUTE_SWAPPED:
-                    touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamView, true);
-                    break;
-                case TRACKPAD:
-                    touchContextMap[i] = new TrackpadContext(conn, i);
-                    break;
-                case RELATIVE:
-                default:
-                    touchContextMap[i] = new RelativeTouchContext(conn, i,
-                            REFERENCE_HORIZ_RES, REFERENCE_VERT_RES,
-                            streamView, prefConfig);
-                    break;
-            }
+            // Exhaustive over the enum with no default, so adding a mouse mode becomes a compile
+            // error here rather than silently falling into the relative context.
+            touchContextMap[i] = switch (prefConfig.mouseMode) {
+                case ABSOLUTE -> new AbsoluteTouchContext(conn, i, streamView, false);
+                case ABSOLUTE_SWAPPED -> new AbsoluteTouchContext(conn, i, streamView, true);
+                case TRACKPAD -> new TrackpadContext(conn, i);
+                case RELATIVE -> new RelativeTouchContext(conn, i,
+                        REFERENCE_HORIZ_RES, REFERENCE_VERT_RES,
+                        streamView, prefConfig);
+            };
         }
     }
 

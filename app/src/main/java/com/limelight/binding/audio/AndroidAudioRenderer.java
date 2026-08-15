@@ -64,7 +64,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
         int channelConfig;
         int bytesPerFrame;
 
-        switch (audioConfiguration.channelCount) {
+        switch (audioConfiguration.channelCount()) {
             case 2 -> channelConfig = AudioFormat.CHANNEL_OUT_STEREO;
             case 4 -> channelConfig = AudioFormat.CHANNEL_OUT_QUAD;
             case 6 -> channelConfig = AudioFormat.CHANNEL_OUT_5POINT1;
@@ -78,7 +78,7 @@ public class AndroidAudioRenderer implements AudioRenderer {
         LimeLog.info("Audio channel config: "+String.format("0x%X", channelConfig));
 
         // 2 bytes per sample, since the format is fixed at 16-bit PCM
-        bytesPerFrame = audioConfiguration.channelCount * samplesPerFrame * 2;
+        bytesPerFrame = audioConfiguration.channelCount() * samplesPerFrame * 2;
 
         // We're not supposed to request less than the minimum
         // buffer size for our buffer, but it appears that we can
