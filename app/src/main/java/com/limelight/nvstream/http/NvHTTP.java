@@ -773,6 +773,11 @@ public class NvHTTP {
     /**
      * Launches or resumes an app.
      *
+     * <p>Only parameters Sunshine actually parses are sent. GFE read a wider set — the HDR
+     * capability descriptor, {@code additionalStates}, {@code remoteControllersBitmap} and
+     * {@code gcpersist} among them — and Sunshine has no parser for any of it, so sending it
+     * only made the request harder to read against {@code src/nvhttp.cpp}.
+     *
      * @param verb "launch" for a new session or "resume" for one already running
      * @return true if the host started it
      */
@@ -783,15 +788,18 @@ public class NvHTTP {
         String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), verb,
             "appid=" + appId +
             "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + fps +
-            "&additionalStates=1&sops=" + (enableSops ? 1 : 0) +
+            "&sops=" + (enableSops ? 1 : 0) +
             "&rikey="+bytesToHex(context.riKey.getEncoded()) +
             "&rikeyid="+context.riKeyId +
-            (!enableHdr ? "" : "&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
+            (!enableHdr ? "" : "&hdrMode=1") +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +
             "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo() +
-            "&remoteControllersBitmap=" + context.streamConfig.getAttachedGamepadMask() +
+            // Ask the host to keep encoding silence rather than stalling the audio stream when
+            // nothing is playing. Without it an idle host simply stops sending, which is
+            // indistinguishable from a broken stream and makes every renderer underrun counter
+            // ambiguous. Sunshine implements this on WASAPI only; other backends ignore it.
+            "&continuousAudio=1" +
             "&gcmap=" + context.streamConfig.getAttachedGamepadMask() +
-            "&gcpersist="+(context.streamConfig.getPersistGamepadsAfterDisconnect() ? 1 : 0) +
             MoonBridge.getLaunchUrlQueryParameters());
         if ((verb.equals("launch") && !getXmlString(xmlStr, "gamesession", true).equals("0") ||
                 (verb.equals("resume") && !getXmlString(xmlStr, "resume", true).equals("0")))) {

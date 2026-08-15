@@ -43,7 +43,6 @@ public class StreamConfiguration {
     private int encryptionFlags;
     private int colorRange;
     private int colorSpace;
-    private boolean persistGamepadsAfterDisconnect;
 
     public static class Builder {
         private StreamConfiguration config = new StreamConfiguration();
@@ -101,11 +100,6 @@ public class StreamConfiguration {
 
         public StreamConfiguration.Builder setAttachedGamepadMask(int attachedGamepadMask) {
             config.attachedGamepadMask = attachedGamepadMask;
-            return this;
-        }
-
-        public StreamConfiguration.Builder setPersistGamepadsAfterDisconnect(boolean value) {
-            config.persistGamepadsAfterDisconnect = value;
             return this;
         }
 
@@ -225,11 +219,6 @@ public class StreamConfiguration {
     /** @return bitmask of controllers attached at launch, so the host creates the right slots */
     public int getAttachedGamepadMask() {
         return attachedGamepadMask;
-    }
-
-    /** @return whether host-side controllers persist after the stream ends */
-    public boolean getPersistGamepadsAfterDisconnect() {
-        return persistGamepadsAfterDisconnect;
     }
 
     /** @return the client display's refresh rate in hundredths of a Hz, for host-side pacing */
