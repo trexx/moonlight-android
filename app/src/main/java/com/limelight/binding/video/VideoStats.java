@@ -1,14 +1,17 @@
 package com.limelight.binding.video;
 
-import android.os.SystemClock;
-
 /**
  * Counters for one measurement window, as displayed by the performance overlay and the
  * end-of-stream summary.
  *
- * <p>Totals only — rates are derived on demand by {@link #getFps()} — which is what allows windows
- * to be summed together via {@link #add(VideoStats)}. The decoder keeps three of these: the window
- * being filled, the last completed one, and a running total for the session.
+ * <p>Totals only — rates are derived on demand by {@link #getFps(long)} — which is what allows
+ * windows to be summed together via {@link #add(VideoStats)}. The decoder keeps three of these: the
+ * window being filled, the last completed one, and a running total for the session.
+ *
+ * <p>Holds no clock of its own: {@link #getFps(long)} is handed the current time by the caller,
+ * which already has it. That keeps this class free of Android types so it can be tested on a JVM,
+ * and follows the rule for anything the frame path touches — pass the timestamp in rather than
+ * routing a clock through an injected indirection.
  *
  * <p>Not synchronised. The instances are written by the decoder threads and read when a window
  * rolls over; the values are statistics, so a torn read costs nothing worse than a slightly odd
@@ -49,9 +52,12 @@ class VideoStats {
         this.frameLossEvents += other.frameLossEvents;
         this.framesLost += other.framesLost;
 
+        // Both sides need the zero check, not just this one. Guarding only `this` still lets
+        // Math.min(x, 0) collapse a real minimum to zero when the incoming window carried no host
+        // latency at all, which is what happens to the active window during a stall.
         if (this.minHostProcessingLatency == 0) {
             this.minHostProcessingLatency = other.minHostProcessingLatency;
-        } else {
+        } else if (other.minHostProcessingLatency != 0) {
             this.minHostProcessingLatency = (char) Math.min(this.minHostProcessingLatency, other.minHostProcessingLatency);
         }
         this.maxHostProcessingLatency = (char) Math.max(this.maxHostProcessingLatency, other.maxHostProcessingLatency);
@@ -98,11 +104,14 @@ class VideoStats {
     }
 
     /**
+     * @param nowUptimeMillis the current {@code SystemClock.uptimeMillis()}, on the same clock as
+     *                        {@link #measurementStartTimestamp}. Passed in rather than read here so
+     *                        this class stays free of Android types.
      * @return frame rates derived from the counters and the time since the window opened. All
      *         zero until the window has been open for a measurable interval.
      */
-    VideoStatsFps getFps() {
-        float elapsed = (SystemClock.uptimeMillis() - this.measurementStartTimestamp) / (float) 1000;
+    VideoStatsFps getFps(long nowUptimeMillis) {
+        float elapsed = (nowUptimeMillis - this.measurementStartTimestamp) / (float) 1000;
 
         VideoStatsFps fps = new VideoStatsFps();
         if (elapsed > 0) {
