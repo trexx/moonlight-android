@@ -282,12 +282,36 @@ driver) **and** an Android-enumerated pad connected at the same time.
 
 ---
 
+## 7. USB controller motion is gated on what the host asked for
+
+USB-driven pads used to report gyro and accelerometer on every input report, whether or not the
+host had enabled those sensors — the Android sensor path avoids this for free by not registering
+a listener until asked, but a USB driver parses motion out of every report it reads. It is now
+gated on the rate the host requested.
+
+The failure mode of a wrong gate is **silence, not an error**: motion simply stops reaching the
+host, and nothing logs. So these need checking rather than assuming.
+
+- [ ] **Gyro reaches a host that wants it.** With a pad that has one, in a game or test app that
+      requests motion, confirm the host receives it. Check Sunshine's log for the enable request
+      rather than judging by feel.
+- [ ] **Motion stops when the host disables it**, rather than running for the rest of the session.
+- [ ] **Motion survives an unplug/replug mid-stream.** This is the one most at risk. A reconnect
+      builds a fresh `UsbDeviceContext` with both rates back at 0, so motion depends on the host
+      re-enabling it in response to the controller-arrival event. `InputDeviceContext` carries its
+      rates across a reconfiguration for exactly this reason; the USB path has no equivalent and
+      leans on the protocol instead. If motion does not come back after a replug, that is what to
+      fix — carry the rates across, keyed on the controller number.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
 |---|---|
 | §2 in full | Nintendo Switch Pro Controller + USB cable |
 | §6 both items | A USB-driven pad *and* an Android-enumerated pad, connected together |
+| §7 motion | A pad with a gyro (Switch Pro, DualSense, DualShock 4) + a host game that requests it |
 | §3 latency claim | Google TV Streamer, or another device with the AudioTrack fast-path bug |
 | §3 surround | 5.1 or 7.1 output on the host |
 | §4 pads | Xbox Series S/X pad, 8BitDo pad, PowerA Pro |

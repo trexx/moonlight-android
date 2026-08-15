@@ -2346,6 +2346,20 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 break;
             }
         }
+
+        // USB-driven pads have no SensorManager to register with - their driver parses motion out
+        // of every input report it reads and pushes it unconditionally - so recording what the
+        // host asked for is the only gate available. reportControllerMotion() applies it.
+        for (int i = 0; i < usbDeviceContexts.size(); i++) {
+            UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
+
+            if (deviceContext.controllerNumber == controllerNumber) {
+                switch (motionType) {
+                    case MoonBridge.LI_MOTION_TYPE_ACCEL -> deviceContext.accelReportRateHz = reportRateHz;
+                    case MoonBridge.LI_MOTION_TYPE_GYRO -> deviceContext.gyroReportRateHz = reportRateHz;
+                }
+            }
+        }
     }
 
     /** Host callback setting the controller's light bar colour, where the controller has one. */
@@ -2921,6 +2935,18 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return;
         }
 
+        // Drop samples for a sensor the host has not enabled. The Android sensor path gets this
+        // for free - it never registers a SensorEventListener until the host asks - but a USB
+        // driver parses motion out of every input report and calls this regardless. Without the
+        // gate a Switch Pro Controller reading at ~120 Hz sends 240 motion events a second for
+        // the whole session whether or not anything on the host wants them, and each one is a
+        // JNI call that moonlight-common-c then discards.
+        short requestedRateHz = motionType == MoonBridge.LI_MOTION_TYPE_GYRO
+                ? context.gyroReportRateHz : context.accelReportRateHz;
+        if (requestedRateHz == 0) {
+            return;
+        }
+
         conn.sendControllerMotionEvent((byte) context.controllerNumber, motionType, motionX, motionY, motionZ);
     }
 
@@ -2987,6 +3013,18 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public short rightStickY = 0x0000;
         public short leftStickX = 0x0000;
         public short leftStickY = 0x0000;
+
+        // What the host has asked this controller to report, or 0 for "not wanted". Kept here
+        // rather than on InputDeviceContext because both controller kinds need it: the Android
+        // sensor path uses it to reapply a configuration after sensors disappear and reappear,
+        // and the USB path uses it as the only gate it has - see reportControllerMotion().
+        //
+        // Volatile because all three participants are different threads. The host callback
+        // arrives on moonlight-common-c's control thread (MoonBridge -> Game ->
+        // handleSetMotionEventState, no Handler hop), enableSensorRunnable reads it on the
+        // background thread, and the USB drivers read it on their own reader threads.
+        public volatile short gyroReportRateHz;
+        public volatile short accelReportRateHz;
 
         public boolean mouseEmulationActive;
         public int mouseEmulationLastInputMap;
@@ -3063,9 +3101,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         public SensorManager sensorManager;
         public SensorEventListener gyroListener;
-        public short gyroReportRateHz;
         public SensorEventListener accelListener;
-        public short accelReportRateHz;
 
         public InputDevice inputDevice;
 
