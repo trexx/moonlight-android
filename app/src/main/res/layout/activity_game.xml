@@ -22,6 +22,18 @@
         <requestFocus />
     </com.limelight.ui.StreamView>
 
+    <!--
+      Opaque black, not the translucent #80000000 it used to be. A translucent layer above the
+      SurfaceView forces the hardware composer to blend, which on this hardware means falling back
+      to GPU (client) composition for the whole frame - so the overlay changed the frame timing it
+      exists to measure. Opaque lets the composer keep the video on its own plane and place this as
+      a separate one.
+
+      Whether that actually happens is device-dependent, so it is a check rather than an assumption:
+      HARDWARE_TESTING.md section 8 has the dumpsys SurfaceFlinger command and the pass condition.
+      If composition does not change on either box, revert this - legibility over a bright scene is
+      worse with a hard black box, and that is not worth paying for nothing.
+    -->
     <TextView
         android:id="@+id/performanceOverlay"
         android:layout_width="wrap_content"
@@ -31,7 +43,7 @@
         android:layout_gravity="start"
         android:textAppearance="?android:attr/textAppearanceSmall"
         android:gravity="start"
-        android:background="#80000000"
+        android:background="#FF000000"
         android:preferKeepClear="true"
         android:visibility="gone" />
 
@@ -44,7 +56,7 @@
         android:layout_gravity="end"
         android:textAppearance="?android:attr/textAppearanceLarge"
         android:gravity="end"
-        android:background="#80000000"
+        android:background="#FF000000"
         android:preferKeepClear="true"
         android:visibility="gone" />
 

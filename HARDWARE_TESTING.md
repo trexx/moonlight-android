@@ -155,12 +155,31 @@ it is switched on.
       reports of unplayable stuttering exist against the implementation this replaces, so it
       is worth deliberately stressing.
 
-> **Cannot be verified on the hardware available.** The problem this targets is AudioTrack's
-> fast path being denied on certain Android TV devices, producing roughly 0.5–1 s of audio
-> delay. The Android TV box on hand does **not** exhibit that symptom, so the latency win
-> itself is unconfirmed. Everything above is still worth running — it establishes the
-> feature does no harm — but the benefit remains unproven until it reaches an affected
-> device (Google TV Streamer or similar).
+> **Measured, and the Homatics is an affected device.** This file previously said the latency
+> win was unconfirmed because no device on hand showed the symptom. That was an assumption, and
+> it was wrong — it predates the granted-configuration readback, which disproves it outright.
+>
+> On the **Homatics Box R 4K**, AudioTrack is *denied* the fast path: AudioFlinger reports
+> requested flags `00000004` against output flags `00000002`, and the track lands on Android's
+> deep-buffer output — `PERFORMANCE_MODE_NONE`, a 1924-frame buffer, **169.6 ms** of measured
+> output latency. AAudio on the same box, same stream, back to back, is granted `LOW_LATENCY`
+> and `EXCLUSIVE` and measures **22.6 ms**. That is a 147 ms difference.
+>
+> On the **Shield TV** the picture is the opposite and stands on its own: AudioTrack *is*
+> granted the fast path, the two paths differ by 2.5 ms, and AAudio costs two stream rebuilds
+> and an order of magnitude more discarded audio for it. Keep the feature for the Homatics, not
+> for that box.
+>
+> **The consequence, recorded rather than acted on:** `DEFAULT_ENABLE_AAUDIO` is false, so the
+> Homatics currently ships with roughly 170 ms of audio latency by default, fixable only by a
+> setting most users will never find. Both paths report their granted mode, so detecting the
+> downgrade and switching automatically is possible rather than hypothetical. Not implemented —
+> changing the default would make the Shield slightly worse, and picking per device needs more
+> hardware time than has gone into it.
+>
+> Source: commit `810858bf` on `feature/audio-observability`, which also carries the readback
+> instrumentation the measurement depends on. That instrumentation is **not** on master, so
+> reproducing these numbers here means building that branch.
 
 ---
 
@@ -305,6 +324,37 @@ host, and nothing logs. So these need checking rather than assuming.
 
 ---
 
+## 8. Overlay composition
+
+The performance and notification overlays used a translucent background (`#80000000`) over the
+SurfaceView. A translucent layer above the video forces the hardware composer to blend, which on
+this hardware means falling back to GPU (client) composition for the whole frame — so the
+overlay changed the frame timing it exists to measure. They are now opaque.
+
+**This is a hypothesis to confirm, not a fix to assume.** Whether the composer keeps the video
+on its own plane is device-dependent.
+
+With the stream running and the performance overlay **up**:
+
+```bash
+adb shell dumpsys SurfaceFlinger | grep -iE "composition|client|device"
+```
+
+- [ ] **Homatics Box R 4K:** the stream layer composites `DEVICE`, not `CLIENT`, with the
+      overlay visible. Compare against the same command with the overlay hidden.
+- [ ] **Shield TV:** same check.
+- [ ] **The measurement moves.** Harvest `globalVideoStats` from the end-of-stream summary,
+      overlay-on before and overlay-on after. If composition changed, frame timing with the
+      overlay up should now be closer to overlay-off than it was.
+- [ ] **Still legible over a bright scene.** Opaque black is a harder edge than the translucent
+      box was.
+
+> **If composition does not change on either box, revert it.** The readability cost is real and
+> is not worth paying for a change that bought nothing. That outcome is a valid result, not a
+> failed test — record it here so the idea is not retried blind.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -312,7 +362,7 @@ host, and nothing logs. So these need checking rather than assuming.
 | §2 in full | Nintendo Switch Pro Controller + USB cable |
 | §6 both items | A USB-driven pad *and* an Android-enumerated pad, connected together |
 | §7 motion | A pad with a gyro (Switch Pro, DualSense, DualShock 4) + a host game that requests it |
-| §3 latency claim | Google TV Streamer, or another device with the AudioTrack fast-path bug |
+| ~~§3 latency claim~~ | ~~A device with the AudioTrack fast-path bug~~ — met: the Homatics is one, measured at 169.6 ms vs 22.6 ms |
 | §3 surround | 5.1 or 7.1 output on the host |
 | §4 pads | Xbox Series S/X pad, 8BitDo pad, PowerA Pro |
 | §4 decoder | Amlogic-based Android TV device |
