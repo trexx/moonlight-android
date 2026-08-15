@@ -1,7 +1,7 @@
 # Audio to the controller's headphone jack
 
-Assessment only. **Nothing here is implemented**, and the next step is a measurement rather than
-a commit. Written up so the research does not have to be done twice.
+Assessment only. **Nothing here is implemented.** Written up so the research does not have to be
+done twice, and because the format question that gated it has now been answered.
 
 ## The idea
 
@@ -56,25 +56,48 @@ anything.
 Neither figure is measured for this route. They are the bounds it would have to land between to be
 worth having.
 
-## What blocks it
+## The format: 48 kHz, 16-bit
 
-**The audio format has to be discovered, not guessed.** GIP devices declare `SupportedAudioFormats`
-in their metadata (spec 2.2.2.4.3), which is exactly the element xone's `gip_parse_audio_formats`
-reads. Metadata now arrives — fragment reassembly and the request landed alongside this note — but
-nothing has yet reported what it says.
+Reported from hardware rather than inferred, and it is the good answer.
 
-The format matters concretely. xone's `enum gip_audio_format` tops out at `48KHZ_STEREO`, and
-Moonlight decodes Opus at 48 kHz. **If a pad reports a 48 kHz format, no resampling is needed**; if
-it reports 24 kHz, a resampler joins the design. That single line of logcat changes the shape of
-the work, so it is worth having before starting.
+**Moonlight decodes Opus at 48 kHz, so no resampling is needed.** That removes the largest unknown
+and the most awkward part of the design — a resampler would have cost both latency and CPU on a
+path that exists to save latency. 16-bit signed PCM is also what GIP audio uses throughout, matching
+xone's `SNDRV_PCM_FMTBIT_S16_LE`, so the decoded buffer can go almost straight out.
+
+The packet arithmetic falls out of it, at the protocol's 8 ms interval:
+
+| | Samples per packet | Bytes | Within the 2048-byte Audio MTU |
+|---|---|---|---|
+| Mono | 384 | 768 | yes |
+| Stereo | 384 | 1536 | yes |
+
+Both fit, so **audio packets never need fragmenting** — worth knowing, because it keeps the audio
+path clear of the chunk reassembly this driver just gained.
+
+Both do, however, exceed 127 bytes, and spec 2.2.10.4 says the payload length field must then use
+the extended encoding: seven bits per byte, bit 7 chaining to the next. `decodeVarint()` in
+`gip.cpp` already implements it, but **`handlePacket()` only reaches it on the fragmented branch**.
+An audio packet is not fragmented, so it would arrive with a multi-byte length down the fast path,
+where the length is still read as a single byte. That path would need extending before audio
+messages could be parsed. Harmless today — `CMD_AUDIO_SAMPLES` is never dispatched, so such a
+packet is ignored rather than misread.
+
+Still open: whether the pad wants mono or stereo, which its metadata reports as a two-byte entry
+per supported format. That decides only the packet size above, not the shape of the work.
 
 ## Next step
 
-1. Run the §8 checks in `HARDWARE_TESTING.md` and fill in the `audio formats` column for whatever
-   pads are to hand.
-2. Decide from that whether the sink needs resampling.
-3. Only then port the protocol half above, behind a setting that is off by default — the same shape
-   as the AAudio work, which degrades to the existing path rather than replacing it.
+1. Port the protocol half above — format negotiation, volume, enable/init, and the sample sender —
+   behind a setting that is **off by default**, the same shape as the AAudio work, which degrades
+   to the existing path rather than replacing it.
+2. Extend `handlePacket()` to decode an extended payload length on the unfragmented path, which
+   audio needs and nothing else currently does.
+3. Feed it from the same decoded PCM the existing renderer consumes, without disturbing that path
+   when the setting is off.
+4. Measure. The claim worth testing is the one this is for: that it beats a Bluetooth headset by
+   enough to matter. Take numbers from the end-of-stream summary rather than the overlay, per
+   `CLAUDE.md`.
 
-Until step 1 has real output, any implementation would be built on a guess about the one thing the
-device is willing to tell us.
+`HARDWARE_TESTING.md` §8 still has a table for what each pad reports; filling it in for more than
+one generation is worth doing, since the format above is confirmed for one pad rather than all.
