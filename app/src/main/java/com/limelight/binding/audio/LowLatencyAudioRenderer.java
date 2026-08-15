@@ -3,6 +3,7 @@ package com.limelight.binding.audio;
 import android.os.Build;
 
 import com.limelight.LimeLog;
+import com.limelight.binding.input.driver.XboxWirelessController;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
 
@@ -16,6 +17,7 @@ import com.limelight.nvstream.jni.MoonBridge;
 public class LowLatencyAudioRenderer implements AudioRenderer {
 
     private final boolean enableAAudio;
+    private final PadAudioSink padAudioSink;
 
     private AudioRenderer renderer;
     private NativeAAudioRenderer aaudioRenderer;
@@ -28,9 +30,13 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     /**
      * @param enableAAudio user opt-in. AAudio is never used without it, since the AudioTrack
      *                     path is the better-tested one on most devices.
+     * @param padAudioSink pads currently taking the audio instead of the TV. Starts empty and is
+     *                     populated from the in-game menu, so with no pad enabled the local output
+     *                     below behaves exactly as it did before this existed.
      */
-    public LowLatencyAudioRenderer(boolean enableAAudio) {
+    public LowLatencyAudioRenderer(boolean enableAAudio, PadAudioSink padAudioSink) {
         this.enableAAudio = enableAAudio;
+        this.padAudioSink = padAudioSink;
     }
 
     /** @return true if every precondition for the AAudio path holds for this stream */
@@ -63,6 +69,11 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         this.sampleRate = sampleRate;
         this.samplesPerFrame = samplesPerFrame;
 
+        // A pad can only take 48 kHz stereo, and playDecodedAudio() forwards samples verbatim.
+        // Telling the sink now means the menu can grey the option out rather than accepting a
+        // selection that would send surround audio to a stereo device.
+        padAudioSink.setStreamFormat(audioConfiguration.channelCount, sampleRate);
+
         if (shouldTryAAudio(audioConfiguration)) {
             NativeAAudioRenderer candidate = new NativeAAudioRenderer();
             if (candidate.setup(audioConfiguration, sampleRate, samplesPerFrame) == 0) {
@@ -88,6 +99,16 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
      */
     @Override
     public void playDecodedAudio(short[] audioData) {
+        // Pads take the audio instead of the TV, not as well as it - the point is private
+        // listening. A single volatile read, and the empty case is the overwhelmingly common one.
+        XboxWirelessController[] pads = padAudioSink.getTargets();
+        if (pads.length > 0) {
+            for (XboxWirelessController pad : pads) {
+                pad.queueAudio(audioData, audioData.length);
+            }
+            return;
+        }
+
         // A route change we couldn't recover from leaves the AAudio stream unusable. Rather than
         // going permanently silent, drop it and let the rest of the session run on AudioTrack.
         if (aaudioRenderer != null && aaudioRenderer.isDead()) {
@@ -130,6 +151,10 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     /** {@inheritDoc} Releases the active renderer, whichever one the session ended up on. */
     @Override
     public void cleanup() {
+        // Stop the pads first: their sender threads outlive this object otherwise, and a pad left
+        // in audio mode keeps its ring and thread alive for nothing.
+        padAudioSink.disableAll();
+
         if (renderer != null) {
             renderer.cleanup();
             renderer = null;

@@ -22,7 +22,10 @@ import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
 
+import com.limelight.binding.audio.PadAudioSink;
+
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Bound service that owns every USB controller this app drives itself.
@@ -96,6 +99,15 @@ public class UsbDriverService extends Service implements UsbDriverListener {
     public void deviceRemoved(AbstractController controller) {
         // Remove the the controller from our list (if not removed already)
         controllers.remove(controller);
+
+        // A pad taking stream audio must leave the sink before its native driver instance is
+        // destroyed, or the audio thread keeps queueing into a freed handle. This is the only
+        // place a removal is known - the audio renderer is not on the listener chain - so the
+        // coupling to the audio package is deliberate and lives here rather than being invented
+        // somewhere with less claim to know.
+        if (padAudioSink != null && controller instanceof XboxWirelessController wireless) {
+            padAudioSink.disable(wireless);
+        }
 
         // Call through to the client's listener
         if (listener != null) {
@@ -189,7 +201,30 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         public void setDonglePairingMode(boolean enable) {
             UsbDriverService.this.setDonglePairingMode(enable);
         }
+
+        /**
+         * @return every controller currently paired through an adapter, in pairing order, which
+         *         is what the in-game menu lists so the user can pick which pads get audio
+         */
+        public List<XboxWirelessController> getWirelessControllers() {
+            List<XboxWirelessController> found = new ArrayList<>();
+            for (XboxWirelessDongle dongle : xboxWirelessDongles) {
+                found.addAll(dongle.getControllers());
+            }
+            return found;
+        }
+
+        /**
+         * Hands the service the sink so a disconnecting pad can be taken out of it before its
+         * native instance goes away. Without this the sink would keep a dangling handle.
+         */
+        public void setPadAudioSink(PadAudioSink sink) {
+            padAudioSink = sink;
+        }
     }
+
+    // Set by the client once it binds; see UsbDriverBinder.setPadAudioSink()
+    private PadAudioSink padAudioSink;
 
     /**
      * Puts every claimed Xbox wireless adapter into (or out of) pairing mode, reporting the

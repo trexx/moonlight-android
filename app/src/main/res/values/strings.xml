@@ -124,6 +124,11 @@
     <string name="game_menu_toggle_mouse_on">Enable Controller Mouse Emulation</string>
     <string name="game_menu_toggle_mouse_off">Disable Controller Mouse Emulation</string>
     <string name="game_menu_pair_xbox_controller">Pair Xbox Wireless Controller</string>
+    <string name="game_menu_pad_audio">Controller headphone audio</string>
+    <string name="game_menu_pad_audio_entry">Controller %1$d: %2$s</string>
+    <string name="game_menu_pad_audio_on">On</string>
+    <string name="game_menu_pad_audio_off">Off</string>
+    <string name="game_menu_pad_audio_unavailable">Off (two controllers already)</string>
     <string name="game_menu_disconnect">Disconnect</string>
     <string name="game_menu_cancel">Cancel</string>
     <string name="game_menu_send_keys">Send special Key(s)</string>
@@ -253,6 +258,9 @@
     <!-- Toasts -->
     <string name="toast_controller_type_changed">Gamepad type may be changed due to motion sensor emulation</string>
     <string name="toast_dongle_pairing_enabled">Pairing mode on. Hold the pair button on your controller until it connects.</string>
+    <string name="toast_pad_audio_enabled">Audio moved to the controller\'s headphone jack.</string>
+    <string name="toast_pad_audio_disabled">Audio moved back to this device.</string>
+    <string name="toast_pad_audio_failed">Couldn\'t send audio to that controller. Two controllers is the limit.</string>
     <string name="toast_dongle_pairing_failed">Could not put the Xbox Wireless Adapter into pairing mode</string>
 
     <!-- Array strings -->

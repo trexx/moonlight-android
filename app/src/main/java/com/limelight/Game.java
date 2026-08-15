@@ -3,6 +3,7 @@ package com.limelight;
 
 import com.limelight.binding.PlatformBinding;
 import com.limelight.binding.audio.LowLatencyAudioRenderer;
+import com.limelight.binding.audio.PadAudioSink;
 import com.limelight.binding.input.ControllerHandler;
 import com.limelight.binding.input.GameInputDevice;
 import com.limelight.binding.input.KeyboardTranslator;
@@ -12,6 +13,7 @@ import com.limelight.binding.input.touch.AbsoluteTouchContext;
 import com.limelight.binding.input.touch.RelativeTouchContext;
 import com.limelight.binding.input.touch.TrackpadContext;
 import com.limelight.binding.input.driver.UsbDriverService;
+import com.limelight.binding.input.driver.XboxWirelessController;
 import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
@@ -83,6 +85,8 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Queue;
 
@@ -190,11 +194,19 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private boolean connectedToUsbDriverService = false;
     // Retained so the game menu can ask about, and drive, the USB driver's dongles
     private UsbDriverService.UsbDriverBinder usbDriverBinder;
+
+    // Which pads are taking the stream's audio. Shared with the renderer, which reads it per
+    // frame, and mutated from the game menu. Empty until the user asks for it, so the audio path
+    // is unchanged for anyone who never opens that menu.
+    private final PadAudioSink padAudioSink = new PadAudioSink();
     private ServiceConnection usbDriverServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
             UsbDriverService.UsbDriverBinder binder = (UsbDriverService.UsbDriverBinder) iBinder;
             binder.setListener(controllerHandler);
+            // Before start(): the service drops a disconnecting pad from the sink, and a pad can
+            // go away as soon as the driver is running.
+            binder.setPadAudioSink(padAudioSink);
             binder.start();
             usbDriverBinder = binder;
             connectedToUsbDriverService = true;
@@ -2172,7 +2184,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             UiHelper.notifyStreamConnecting(Game.this);
 
             decoderRenderer.setRenderTarget(holder);
-            conn.start(new LowLatencyAudioRenderer(prefConfig.enableAAudio),
+            conn.start(new LowLatencyAudioRenderer(prefConfig.enableAAudio, padAudioSink),
                     decoderRenderer, Game.this);
         }
     }
@@ -2303,6 +2315,54 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         if (usbDriverBinder != null) {
             usbDriverBinder.setDonglePairingMode(true);
         }
+    }
+
+    /**
+     * @return the pads paired through the adapter, in pairing order, or empty if the driver is not
+     *         bound. The game menu lists these so the user can send audio to one.
+     */
+    public List<XboxWirelessController> getWirelessControllers() {
+        if (usbDriverBinder == null) {
+            return Collections.emptyList();
+        }
+        return usbDriverBinder.getWirelessControllers();
+    }
+
+    /** @return which pads are currently taking the stream's audio */
+    public PadAudioSink getPadAudioSink() {
+        return padAudioSink;
+    }
+
+    /**
+     * Turns audio to a pad's headphone jack on or off mid-stream, reporting the outcome. Refusal
+     * is almost always the two-pad limit, which the toast says rather than leaving the user to
+     * wonder why the menu did nothing.
+     */
+    public void togglePadAudio(XboxWirelessController controller) {
+        final boolean enabling = !padAudioSink.isEnabled(controller);
+
+        // Off the main thread, for the same reason setDonglePairingMode() is: both ends of this
+        // are USB transfers. Disabling also joins the pad's sender thread, which can be inside a
+        // bulk write with a one-second timeout, and that is far too long to hold the UI.
+        new Thread(() -> {
+            final boolean succeeded = enabling
+                    ? padAudioSink.enable(controller)
+                    : disablePadAudio(controller);
+
+            final int message = succeeded
+                    ? (enabling ? R.string.toast_pad_audio_enabled
+                                : R.string.toast_pad_audio_disabled)
+                    : R.string.toast_pad_audio_failed;
+
+            new Handler(Looper.getMainLooper()).post(
+                    () -> Toast.makeText(Game.this, message, Toast.LENGTH_SHORT).show());
+        }).start();
+    }
+
+    /** Disabling always succeeds; wrapped so the toggle above can treat both directions alike. */
+    private boolean disablePadAudio(XboxWirelessController controller) {
+        padAudioSink.disable(controller);
+        return true;
     }
 
     /** Ends the stream and finishes the activity. */

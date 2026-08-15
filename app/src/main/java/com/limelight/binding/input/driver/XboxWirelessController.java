@@ -130,7 +130,31 @@ public class XboxWirelessController extends AbstractController{
         reportBattery(state, percentage);
     }
 
+    /**
+     * Starts or stops rendering stream audio to this pad's headphone jack.
+     *
+     * @return true if the pad accepted the change
+     */
+    public boolean setAudioEnabled(boolean enable) {
+        return setAudioEnabledNative(handle, enable);
+    }
+
+    /**
+     * Queues interleaved 16-bit stereo PCM for this pad.
+     *
+     * <p>Called from Moonlight's audio decode thread. The native side copies into a bounded ring
+     * and returns, so this does not block on the wireless link.
+     *
+     * @param audioData interleaved samples; the caller reuses the buffer, so it is not retained
+     * @param count     number of samples to take from the front of {@code audioData}
+     */
+    public void queueAudio(short[] audioData, int count) {
+        queueAudioNative(handle, audioData, count);
+    }
+
     native void registerNative(long handle);
+    native boolean setAudioEnabledNative(long handle, boolean enable);
+    native void queueAudioNative(long handle, short[] samples, int count);
     native void sendRumble(long handle, short lowFreqMotor, short highFreqMotor);
     native void sendrumbleTriggers(long handle, short leftTrigger, short rightTrigger);
 
