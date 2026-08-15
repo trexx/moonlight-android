@@ -332,9 +332,9 @@ bool GipDevice::handlePacket(const Bytes &packet)
     // An unfragmented message may still carry the multi-byte length encoding: the single byte in
     // Frame tops out at 127, and MS-GIPUSB 2.2.10.4 has anything longer use the varint form with
     // the continuation bit set. Nothing this driver handles today is that long - input, status,
-    // announce, guide and serial are all well under it - so this exists for correctness rather
-    // than for a message we have seen. Reading such a header through Frame alone would take the
-    // first length byte literally and dispatch against a wrong length.
+    // announce, guide and serial are all well under it. Audio is the first message that needs it:
+    // a 48 kHz stereo packet is 1536 bytes. Reading such a header through Frame alone would take
+    // the first length byte literally and dispatch against a wrong length.
     uint32_t payloadLength = frame->length;
     size_t headerLength = sizeof(Frame);
 
@@ -419,6 +419,17 @@ bool GipDevice::handlePacket(const Bytes &packet)
         data.size() >= sizeof(InputData)
     ) {
         inputReceived(data.toStruct<InputData>());
+    }
+
+    // The pad sends these whether or not it has a microphone, because the flow rate they carry is
+    // how GIP does rate adaptation (MS-GIPUSB 3.2.5.1.5). Any mic samples after it are discarded -
+    // this client has no microphone support.
+    else if (
+        frame->command == CMD_AUDIO_SAMPLES &&
+        payloadLength >= sizeof(AudioSamplesData) &&
+        data.size() >= sizeof(AudioSamplesData)
+    ) {
+        audioSamplesReceived(data.toStruct<AudioSamplesData>());
     }
 
     // Ignore any unknown packets
@@ -1149,6 +1160,54 @@ void GipDevice::handleAuthPacket(const uint8_t *data, size_t length)
         default:
             break;
     }
+}
+
+bool GipDevice::setAudioFormat(AudioFormat in, AudioFormat out)
+{
+    Frame frame = {};
+
+    frame.command = CMD_AUDIO_CONFIG;
+    frame.type = TYPE_REQUEST;
+    frame.sequence = getSequence();
+    frame.length = sizeof(AudioFormatData);
+
+    AudioFormatData format = {};
+
+    format.subcommand = AUDIO_CTRL_FORMAT;
+    format.in = in;
+    format.out = out;
+
+    Bytes packet;
+
+    packet.append(frame);
+    packet.append(format);
+
+    return sendPacket(packet);
+}
+
+bool GipDevice::sendAudioSamples(const uint8_t *samples, size_t length)
+{
+    // Audio needs the extended length encoding - 1536 bytes will not fit the single byte the
+    // Frame struct has - so the header is built by hand rather than through Frame.
+    uint8_t header[HEADER_MAX_LENGTH];
+
+    // Zero is reserved, so skip it on wrap
+    if (++audioSequence == 0)
+    {
+        audioSequence = 1;
+    }
+
+    size_t headerLength = encodeHeader(header, CMD_AUDIO_SAMPLES, 0, TYPE_REQUEST,
+                                       audioSequence, static_cast<uint32_t>(length));
+
+    // Sized once and filled directly. Bytes::append()'s template overload takes the address of
+    // whatever it is handed, which for a pointer would copy the pointer rather than the samples.
+    Bytes packet(headerLength + length);
+
+    std::copy(header, header + headerLength, packet.raw());
+    std::copy(samples, samples + length, packet.raw() + headerLength);
+
+    return sendPacket(packet);
 }
 
 bool GipDevice::requestIdentify()

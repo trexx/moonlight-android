@@ -198,6 +198,41 @@ protected:
         uint16_t hidDescriptorOffset;
     } __attribute__((packed));
 
+    /*
+     * Audio format identifiers (MS-GIPUSB 2.2.2.4.3). Even values are stereo and odd are mono, so
+     * channel count is 2 - (format & 1). Only the one this driver uses is named; the rest of the
+     * table runs 8 kHz to 48 kHz in the same pairs.
+     */
+    enum AudioFormat
+    {
+        AUDIO_FORMAT_NONE = 0x00,
+        AUDIO_FORMAT_48KHZ_MONO = 0x0f,
+        AUDIO_FORMAT_48KHZ_STEREO = 0x10,
+    };
+
+    // Subcommand byte of an audio control message
+    enum AudioControl
+    {
+        AUDIO_CTRL_FORMAT = 0x02,
+    };
+
+    struct AudioFormatData
+    {
+        uint8_t subcommand;
+        uint8_t in;
+        uint8_t out;
+    } __attribute__((packed));
+
+    /*
+     * Upstream audio, which the pad sends whether or not it has a microphone. The flow rate is the
+     * point of it here: it is how GIP absorbs clock drift, and a value that wanders away from the
+     * configured buffer size means our audio is slipping against the device's clock.
+     */
+    struct AudioSamplesData
+    {
+        uint16_t flowRate;
+    } __attribute__((packed));
+
     struct InputData
     {
         struct
@@ -335,10 +370,23 @@ protected:
     bool requestAuthPacket(uint8_t command, uint16_t length);
 
 
+    /* Upstream audio from the pad. Only the flow rate is of interest - there is no mic support. */
+    virtual void audioSamplesReceived(const AudioSamplesData *samples) {}
+
     bool performRumble(RumbleData rumble);
     bool setLedMode(LedModeData mode);
     bool requestSerialNumber();
     bool requestIdentify();
+
+    /* Asks the device to use these formats. 'in' is capture, 'out' is what we render to it. */
+    bool setAudioFormat(AudioFormat in, AudioFormat out);
+
+    /*
+     * Sends one audio packet. 'length' must match the negotiated format's 8 ms buffer size, which
+     * for 48 kHz stereo is 1536 bytes - the device paces on packet arrival, so a short packet is
+     * heard rather than merely inefficient.
+     */
+    bool sendAudioSamples(const uint8_t *samples, size_t length);
 
 private:
     /* Security exchange, driven entirely here - see the .cpp for the flow. */
@@ -409,6 +457,10 @@ private:
      * 1, 2, 3 and the first security message is 1 again.
      */
     uint8_t securitySequence = 0x01;
+
+    // Audio is its own data class, and MS-GIPUSB 2.2.10.3 makes the sequence a counter per class.
+    // Sharing the command counter would make both streams' numbering jump around.
+    uint8_t audioSequence = 0x01;
     SendPacket sendPacket;
 
     /*
