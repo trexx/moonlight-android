@@ -190,6 +190,12 @@ it is switched on.
 - [ ] Under load — packet loss, decoder pressure — audio does not stutter. Two independent
       reports of unplayable stuttering exist against the implementation this replaces, so it
       is worth deliberately stressing.
+- [ ] **Continuous audio holds the stream open through silence.** The client now sends
+      `continuousAudio=1`, so a **Windows** host encodes silence rather than sending nothing
+      while nothing is playing. Leave the host silent for 30 s, then resume audio: there must
+      be no gap, glitch or resync on the first sound back, and the Sunshine log should carry
+      `Client requested continuous audio` from the connect. Linux and macOS hosts parse the
+      flag and ignore it, so the old behaviour there is expected and is not a failure.
 
 > **Measured, and the Homatics is an affected device.** This file previously said the latency
 > win was unconfirmed because no device on hand showed the symptom. That was an assumption, and
@@ -1503,6 +1509,42 @@ Needs **Sunshine on an NVIDIA GPU**; AMD and Intel hosts parse the attribute and
 
 ---
 
+## 17. Fractional refresh rates under "cap FPS" pacing
+
+The client used to request `roundedRefreshRate - 1` whenever cap-FPS pacing met a display at or
+below the requested rate — 59 fps on a 59.94 Hz panel. It also sent the panel's exact rate as
+`clientRefreshRateX100`, which Sunshine can turn into a precise 30000/1001 encode. It never got
+the chance: Sunshine discards that value when it differs from the requested rate by more than 1%
+(`src/rtsp.cpp`), and 59.94 against 59 is 1.6% out. The host fell back to integer 59 every time.
+
+The client now asks for 60 on such a display and lets the exact rate through the guard, so the
+stream should land on 59.94 rather than a whole frame below it.
+
+**Take the numbers from the end-of-stream summary, not the overlay.** On this hardware the overlay
+forces GPU composition, so it changes the frame timing it is measuring. Compare overlay-off runs.
+
+- [ ] **Set each box to a 59.94 Hz output mode** and confirm the client logs
+      `Fractional display rate 59.94; requesting 60`. If it logs nothing, the display is reporting
+      a whole 60.000 and this section cannot be tested on it — record that and move on.
+- [ ] **Stream at 60 fps with frame pacing set to "cap FPS"** for several minutes of steady
+      motion, and record from `globalVideoStats`: frames received, frames rendered, and the
+      dropped/discarded counts.
+- [ ] **Compare against the same run on the previous build.** The pass condition is that the slow
+      periodic drop or duplicate — roughly one per 17 seconds at 59 fps against 59.94 Hz — is gone,
+      with no new stutter in its place.
+- [ ] **The Sunshine host log retains the rate.** It should not log the value being discarded, and
+      the encoder should report 59.94 rather than 59.
+- [ ] **A whole-number display is unchanged.** At a true 60.000 Hz the client must still request
+      59 — that path is deliberately untouched, and it is the one that protects against queueing.
+- [ ] **A non-Sunshine host still behaves.** This is the risk case: if the host ignores
+      `clientRefreshRateX100`, the client is now asking for 60 on a 59.94 Hz panel, which is
+      exactly the over-rate condition cap-FPS pacing exists to avoid.
+
+Reading `LimeLog` output on the Homatics needs `adb shell setprop persist.log.tag '""'` first, and
+`adb shell setprop persist.log.tag S` afterwards to restore the shipped value.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -1526,3 +1568,4 @@ Needs **Sunshine on an NVIDIA GPU**; AMD and Intel hosts parse the attribute and
 | §12 both items | A USB-driven pad *and* an Android-enumerated pad, connected together |
 | §13 motion | A pad with a gyro (Switch Pro, DualSense, DualShock 4) + a host game that requests it |
 | §16 intra refresh | Sunshine host on an NVIDIA GPU |
+| §17 refresh rate | A display or output mode that reports a fractional rate (59.94, 29.97, 23.976) |
