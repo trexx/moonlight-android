@@ -35,6 +35,7 @@ public class StreamConfiguration {
     private boolean sops;
     private boolean enableAdaptiveResolution;
     private boolean playLocalAudio;
+    private boolean continuousAudio;
     private int maxPacketSize;
     private int remote;
     private MoonBridge.AudioConfiguration audioConfiguration;
@@ -92,7 +93,12 @@ public class StreamConfiguration {
             config.playLocalAudio = enable;
             return this;
         }
-        
+
+        public StreamConfiguration.Builder setContinuousAudio(boolean enable) {
+            config.continuousAudio = enable;
+            return this;
+        }
+
         public StreamConfiguration.Builder setMaxPacketSize(int maxPacketSize) {
             config.maxPacketSize = maxPacketSize;
             return this;
@@ -199,6 +205,11 @@ public class StreamConfiguration {
     /** @return whether audio also plays on the host's speakers */
     public boolean getPlayLocalAudio() {
         return playLocalAudio;
+    }
+
+    /** @return whether the host should keep encoding audio while nothing is playing */
+    public boolean getContinuousAudio() {
+        return continuousAudio;
     }
     
     /** @return whether this connection is local, remote, or auto-detected */

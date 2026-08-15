@@ -71,6 +71,11 @@
             android:title="@string/title_checkbox_enable_aaudio"
             android:summary="@string/summary_checkbox_enable_aaudio"
             android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_continuous_audio"
+            android:title="@string/title_checkbox_continuous_audio"
+            android:summary="@string/summary_checkbox_continuous_audio"
+            android:defaultValue="false" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_gamepad_settings"
         android:key="category_gamepad_settings">

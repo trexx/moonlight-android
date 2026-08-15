@@ -203,6 +203,9 @@
     <string name="title_checkbox_enable_aaudio">Low latency audio output (Experimental)</string>
     <string name="summary_checkbox_enable_aaudio">Use AAudio instead of AudioTrack. Try this if audio lags noticeably behind video on an Android TV device. Has no effect when audio effects are enabled, and falls back automatically if it can\'t be used.</string>
 
+    <string name="title_checkbox_continuous_audio">Keep the audio stream open during silence</string>
+    <string name="summary_checkbox_continuous_audio">Ask the host to keep encoding while nothing is playing, instead of stopping until the next sound. Avoids a glitch on the first audio back and keeps underrun counts meaningful. Costs about 96 Kbps while the host is silent. Windows hosts only; others ignore it.</string>
+
     <string name="category_gamepad_settings">Gamepad Settings</string>
     <string name="title_checkbox_multi_controller">Automatic gamepad presence detection</string>
     <string name="summary_checkbox_multi_controller">Unchecking this option forces a gamepad to always be present</string>

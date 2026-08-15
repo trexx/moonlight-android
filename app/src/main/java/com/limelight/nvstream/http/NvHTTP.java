@@ -798,7 +798,7 @@ public class NvHTTP {
             // nothing is playing. Without it an idle host simply stops sending, which is
             // indistinguishable from a broken stream and makes every renderer underrun counter
             // ambiguous. Sunshine implements this on WASAPI only; other backends ignore it.
-            "&continuousAudio=1" +
+            "&continuousAudio=" + (context.streamConfig.getContinuousAudio() ? 1 : 0) +
             "&gcmap=" + context.streamConfig.getAttachedGamepadMask() +
             MoonBridge.getLaunchUrlQueryParameters());
         if ((verb.equals("launch") && !getXmlString(xmlStr, "gamesession", true).equals("0") ||

@@ -84,6 +84,7 @@ public class PreferenceConfiguration {
     private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
     private static final String ENABLE_AAUDIO_PREF_STRING = "checkbox_enable_aaudio";
+    private static final String CONTINUOUS_AUDIO_PREF_STRING = "checkbox_continuous_audio";
     private static final String REDUCE_REFRESH_RATE_PREF_STRING = "checkbox_reduce_refresh_rate";
     private static final String FULL_RANGE_PREF_STRING = "checkbox_full_range";
     private static final String GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING = "checkbox_gamepad_touchpad_as_mouse";
@@ -120,6 +121,7 @@ public class PreferenceConfiguration {
     private static final String DEFAULT_FRAME_PACING = "latency";
     private static final boolean DEFAULT_ABSOLUTE_MOUSE_MODE = false;
     private static final boolean DEFAULT_ENABLE_AAUDIO = false;
+    private static final boolean DEFAULT_CONTINUOUS_AUDIO = false;
     private static final boolean DEFAULT_REDUCE_REFRESH_RATE = false;
     private static final boolean DEFAULT_FULL_RANGE = false;
     private static final boolean DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE = false;
@@ -165,6 +167,7 @@ public class PreferenceConfiguration {
     public int framePacing;
     public boolean absoluteMouseMode;
     public boolean enableAAudio;
+    public boolean continuousAudio;
     public boolean reduceRefreshRate;
     public boolean fullRange;
     public boolean gamepadMotionSensors;
@@ -650,6 +653,7 @@ public class PreferenceConfiguration {
         config.enableLatencyToast = prefs.getBoolean(LATENCY_TOAST_PREF_STRING, DEFAULT_LATENCY_TOAST);
         config.absoluteMouseMode = prefs.getBoolean(ABSOLUTE_MOUSE_MODE_PREF_STRING, DEFAULT_ABSOLUTE_MOUSE_MODE);
         config.enableAAudio = prefs.getBoolean(ENABLE_AAUDIO_PREF_STRING, DEFAULT_ENABLE_AAUDIO);
+        config.continuousAudio = prefs.getBoolean(CONTINUOUS_AUDIO_PREF_STRING, DEFAULT_CONTINUOUS_AUDIO);
         config.reduceRefreshRate = prefs.getBoolean(REDUCE_REFRESH_RATE_PREF_STRING, DEFAULT_REDUCE_REFRESH_RATE);
         config.fullRange = prefs.getBoolean(FULL_RANGE_PREF_STRING, DEFAULT_FULL_RANGE);
         config.gamepadTouchpadAsMouse = prefs.getBoolean(GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING, DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE);

@@ -190,12 +190,14 @@ it is switched on.
 - [ ] Under load — packet loss, decoder pressure — audio does not stutter. Two independent
       reports of unplayable stuttering exist against the implementation this replaces, so it
       is worth deliberately stressing.
-- [ ] **Continuous audio holds the stream open through silence.** The client now sends
-      `continuousAudio=1`, so a **Windows** host encodes silence rather than sending nothing
-      while nothing is playing. Leave the host silent for 30 s, then resume audio: there must
-      be no gap, glitch or resync on the first sound back, and the Sunshine log should carry
-      `Client requested continuous audio` from the connect. Linux and macOS hosts parse the
-      flag and ignore it, so the old behaviour there is expected and is not a failure.
+- [ ] **Continuous audio off: behaviour is unchanged.** *(Audio settings, off by default.)* The
+      launch request must carry `continuousAudio=0` and the Sunshine log must not report the
+      request. This is the check that matters — the default path stays exactly as it was.
+- [ ] **Continuous audio on: the stream stays open through silence.** A **Windows** host then
+      encodes silence rather than sending nothing while nothing is playing. Leave the host silent
+      for 30 s, then resume audio: no gap, glitch or resync on the first sound back, and
+      `Client requested continuous audio` in the Sunshine log from the connect. Linux and macOS
+      hosts parse the flag and ignore it, so unchanged behaviour there is expected, not a failure.
 
 > **Measured, and the Homatics is an affected device.** This file previously said the latency
 > win was unconfirmed because no device on hand showed the symptom. That was an assumption, and
