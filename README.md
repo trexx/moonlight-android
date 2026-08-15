@@ -145,6 +145,18 @@ for the diagnosis; see also upstream issues
 [#1238](https://github.com/moonlight-stream/moonlight-android/issues/1238) and
 [#1161](https://github.com/moonlight-stream/moonlight-android/issues/1161).
 
+### Continuous audio (optional)
+
+An idle Sunshine host stops sending audio altogether rather than encoding silence. From here
+that is indistinguishable from a stream that has broken, and it makes the renderer's underrun
+count ambiguous — the ring buffer drains and fills with silence either way.
+
+**Keep the audio stream open during silence** in the audio settings asks the host not to do
+that. It is **off by default**, because it costs roughly 96 Kbps for as long as the host has
+nothing to play — free on a LAN, not free on every link — and because leaving the shipped path
+untouched is the safer default. Sunshine implements it on **Windows** hosts only; the Linux and
+macOS backends parse the request and ignore it.
+
 ### Hardware-accelerated AES
 
 Stream crypto now runs on **Mbed TLS 3.6.7 LTS** instead of the OpenSSL 1.1.1 build that
@@ -195,6 +207,15 @@ automatically and now is not unless asked for.
 * **More precise frame pacing.** Frame timestamps are now carried end-to-end in
   microseconds rather than milliseconds, removing the 1 ms quantisation that previously
   applied to the presentation timestamps handed to the decoder.
+* **Fractional refresh rates actually reach the host.** Sunshine can encode at an exact
+  59.94 Hz when the client tells it the display runs there, and the client has always sent
+  that number — but it was thrown away. Sunshine discards `clientRefreshRateX100` when it
+  differs from the requested rate by more than 1%, and "cap FPS" pacing asked for one frame
+  *below* the display, so 59 against 59.94 was 1.6% out and every session fell back to
+  integer 59. On a fractional display the client now asks for the whole number and lets the
+  exact rate through, and the value it sends is rounded rather than truncated. Whole-number
+  displays are unchanged — there is no exact rate to pass, and staying a frame below 60.000
+  is what cap-FPS pacing is for.
 * **Better diagnostics.** The performance overlay now reports FEC recovery — how many
   video and audio packets were rebuilt from parity, and how many were unrecoverable —
   which makes packet loss visible while streaming instead of only showing its symptoms.
@@ -286,7 +307,12 @@ Each of these was removed rather than carried, and each is user-visible:
   project does not apply to it.
 * **GeForce Experience-specific handling.** The 4K-capability check, the SOPS resolution
   workarounds, the >60 FPS launch fudge and the NVIDIA-server detection are gone; the fork
-  targets Sunshine.
+  targets Sunshine. The launch request was trimmed to match: `additionalStates`,
+  `remoteControllersBitmap`, `gcpersist` and the GFE HDR capability descriptor are all
+  parameters Sunshine has no parser for, so only `hdrMode` survives from that descriptor.
+* **Pen and touchscreen input.** The `LiSendTouchEvent`/`LiSendPenEvent` bindings had no
+  callers — the touchscreen path is mouse emulation, and neither supported device has a
+  touchscreen or accepts a stylus. Controller *touchpad* events are unaffected.
 * **The help button and in-app help viewer.** It opened upstream's wiki in a `WebView`, which
   meant shipping JavaScript execution in a streaming client for one page of documentation
   that a diverged fork's configuration no longer matches. It was the only `WebView` in the
