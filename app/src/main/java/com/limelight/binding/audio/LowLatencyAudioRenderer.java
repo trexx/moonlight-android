@@ -12,18 +12,25 @@ import com.limelight.nvstream.jni.MoonBridge;
  * AudioTrack remains the default and is used unchanged unless the user has explicitly opted into
  * AAudio, every precondition holds, and the stream actually opens. If any of that fails we fall
  * straight back, so enabling the option can degrade to today's behaviour but never below it.
+ *
+ * <p>That choice is made once, at setup, and is never revisited. Route changes — HDMI replug or
+ * mode change, switching to a soundbar, a Bluetooth device connecting — are recovered inside
+ * {@code aaudio_renderer.c}: AAudio reports {@code AAUDIO_ERROR_DISCONNECTED} to its error
+ * callback, which reopens and restarts the stream on a detached thread. None of that involves
+ * this class, and it is unaffected by there being no liveness check here.
+ *
+ * <p>What is deliberately <em>not</em> handled is the case where that native recovery has already
+ * failed. There used to be a poll from {@link #playDecodedAudio} that swapped to AudioTrack for
+ * the rest of the session when it did. That is gone: an unrecoverable stream now stays silent,
+ * and the user turns the setting off if they hit it. Swapping renderers underneath a running
+ * session traded a rare, already-broken case for a JNI round trip on every audio packet, and for
+ * a session that silently stops being the thing the user configured.
  */
 public class LowLatencyAudioRenderer implements AudioRenderer {
 
     private final boolean enableAAudio;
 
     private AudioRenderer renderer;
-    private NativeAAudioRenderer aaudioRenderer;
-
-    // Retained so we can build an AudioTrack renderer later if the AAudio stream dies mid-session
-    private MoonBridge.AudioConfiguration audioConfiguration;
-    private int sampleRate;
-    private int samplesPerFrame;
 
     /**
      * @param enableAAudio user opt-in. AAudio is never used without it, since the AudioTrack
@@ -55,19 +62,14 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
      *
      * <p>Picks the backing renderer. AAudio is attempted first when eligible; anything short of
      * a working stream falls through to {@link AndroidAudioRenderer}, whose result is returned
-     * as this renderer's own.
+     * as this renderer's own. This is the only point at which the choice is made.
      */
     @Override
     public int setup(MoonBridge.AudioConfiguration audioConfiguration, int sampleRate, int samplesPerFrame) {
-        this.audioConfiguration = audioConfiguration;
-        this.sampleRate = sampleRate;
-        this.samplesPerFrame = samplesPerFrame;
-
         if (shouldTryAAudio(audioConfiguration)) {
             NativeAAudioRenderer candidate = new NativeAAudioRenderer();
             if (candidate.setup(audioConfiguration, sampleRate, samplesPerFrame) == 0) {
                 LimeLog.info("Using native AAudio renderer");
-                aaudioRenderer = candidate;
                 renderer = candidate;
                 return 0;
             }
@@ -80,47 +82,14 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         return renderer.setup(audioConfiguration, sampleRate, samplesPerFrame);
     }
 
-    // isDead() crosses JNI, and playDecodedAudio() runs per audio packet - roughly 200 times a
-    // second at a 5 ms frame. Polling on every packet spends a round trip to catch something that
-    // only happens on a route change, so poll every 32nd instead: about 160 ms, which is far
-    // faster than a listener notices silence and a thirty-second of the JNI traffic.
-    private static final int DEAD_STREAM_POLL_INTERVAL = 32;
-    private int deadStreamPollCountdown;
-
     /**
      * {@inheritDoc}
      *
-     * <p>Also where a dead AAudio stream is noticed and swapped out, since this is the only
-     * method called often enough to detect it promptly.
+     * <p>Straight delegation. The null check guards teardown, where {@link #cleanup()} releases
+     * the renderer while decoded audio may still be in flight.
      */
     @Override
     public void playDecodedAudio(short[] audioData) {
-        // A route change we couldn't recover from leaves the AAudio stream unusable. Rather than
-        // going permanently silent, drop it and let the rest of the session run on AudioTrack.
-        //
-        // The countdown is reset whenever the poll runs, not only when it finds a dead stream -
-        // otherwise the first poll would leave it negative and every subsequent packet would poll
-        // again, which is the cost this is here to avoid.
-        if (aaudioRenderer != null && --deadStreamPollCountdown <= 0) {
-            deadStreamPollCountdown = DEAD_STREAM_POLL_INTERVAL;
-
-            if (aaudioRenderer.isDead()) {
-                LimeLog.warning("AAudio stream died, switching to AudioTrack for the rest of the session");
-                aaudioRenderer.cleanup();
-                aaudioRenderer = null;
-
-                AudioRenderer fallback = new AndroidAudioRenderer();
-                if (fallback.setup(audioConfiguration, sampleRate, samplesPerFrame) != 0) {
-                    LimeLog.severe("Unable to start AudioTrack fallback");
-                    renderer = null;
-                    return;
-                }
-
-                fallback.start();
-                renderer = fallback;
-            }
-        }
-
         if (renderer != null) {
             renderer.playDecodedAudio(audioData);
         }
@@ -134,7 +103,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
-    /** {@inheritDoc} Forwarded to whichever renderer is currently active. */
+    /** {@inheritDoc} Forwarded to whichever renderer {@link #setup} selected. */
     @Override
     public void stop() {
         if (renderer != null) {
@@ -142,13 +111,12 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
-    /** {@inheritDoc} Releases the active renderer, whichever one the session ended up on. */
+    /** {@inheritDoc} Releases the renderer {@link #setup} selected. */
     @Override
     public void cleanup() {
         if (renderer != null) {
             renderer.cleanup();
             renderer = null;
         }
-        aaudioRenderer = null;
     }
 }

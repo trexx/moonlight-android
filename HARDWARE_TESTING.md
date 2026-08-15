@@ -145,10 +145,15 @@ it is switched on.
 - [ ] Setting on, **5.1 or 7.1**: **every speaker produces sound.** Use Windows'
       per-speaker test (Sound → Speakers → Configure → Test). This is the exact check that
       exposed the silent-surround-channels bug in ClassicOldSong #567.
-- [ ] Setting on, **route change mid-stream**: unplug/replug HDMI, or switch audio output.
-      Audio must recover, or fall back to AudioTrack for the rest of the session — it must
-      not go permanently silent, and the stream must not hang at "Waiting for audio stream
-      establishment".
+- [ ] Setting on, **route change mid-stream**: unplug/replug HDMI, change HDMI mode, or switch
+      audio output. Audio must recover, and the stream must not hang at "Waiting for audio
+      stream establishment". Recovery happens natively — `errorCallback()` in
+      `aaudio_renderer.c` reopens the stream on `AAUDIO_ERROR_DISCONNECTED` — so the pass
+      condition is `Recovered AAudio stream after device disconnect` in logcat, with a sane
+      frame buffer size on the line. **This is the check that matters most**, because if native
+      recovery fails there is now no second line of defence: the session stays silent until the
+      user turns the setting off. That is deliberate, but it makes this path the one that has
+      to work.
 - [ ] Setting on, **surround below Android 12L** (API 32) if such a device is available:
       must fall back to AudioTrack rather than opening a stream with an undefined layout.
 - [ ] Under load — packet loss, decoder pressure — audio does not stutter. Two independent

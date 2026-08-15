@@ -24,7 +24,6 @@ public class NativeAAudioRenderer implements AudioRenderer {
 
     private static native long nativeSetup(int channelCount, int channelMask, int sampleRate, int samplesPerFrame);
     private static native void nativeEnqueue(long handle, short[] data, int length);
-    private static native boolean nativeIsDead(long handle);
     private static native void nativeCleanup(long handle);
 
     /**
@@ -46,13 +45,6 @@ public class NativeAAudioRenderer implements AudioRenderer {
         }
 
         return 0;
-    }
-
-    /**
-     * @return true if the stream has failed unrecoverably and the caller should stop using it
-     */
-    public boolean isDead() {
-        return handle == 0 || nativeIsDead(handle);
     }
 
     // Frames dropped because moonlight-common-c's queue was already too deep. Counted rather than
