@@ -64,26 +64,15 @@ public class AndroidAudioRenderer implements AudioRenderer {
         int channelConfig;
         int bytesPerFrame;
 
-        switch (audioConfiguration.channelCount)
-        {
-            case 2:
-                channelConfig = AudioFormat.CHANNEL_OUT_STEREO;
-                break;
-            case 4:
-                channelConfig = AudioFormat.CHANNEL_OUT_QUAD;
-                break;
-            case 6:
-                channelConfig = AudioFormat.CHANNEL_OUT_5POINT1;
-                break;
-            case 8:
-                // AudioFormat.CHANNEL_OUT_7POINT1_SURROUND isn't available until Android 6.0,
-                // yet the CHANNEL_OUT_SIDE_LEFT and CHANNEL_OUT_SIDE_RIGHT constants were added
-                // in 5.0, so just hardcode the constant so we can work on Lollipop.
-                channelConfig = 0x000018fc; // AudioFormat.CHANNEL_OUT_7POINT1_SURROUND
-                break;
-            default:
+        switch (audioConfiguration.channelCount) {
+            case 2 -> channelConfig = AudioFormat.CHANNEL_OUT_STEREO;
+            case 4 -> channelConfig = AudioFormat.CHANNEL_OUT_QUAD;
+            case 6 -> channelConfig = AudioFormat.CHANNEL_OUT_5POINT1;
+            case 8 -> channelConfig = AudioFormat.CHANNEL_OUT_7POINT1_SURROUND;
+            default -> {
                 LimeLog.severe("Decoder returned unhandled channel count");
                 return -1;
+            }
         }
 
         LimeLog.info("Audio channel config: "+String.format("0x%X", channelConfig));
@@ -98,50 +87,27 @@ public class AndroidAudioRenderer implements AudioRenderer {
         // use the recommended larger buffer size.
 
         for (int i = 0; i < 4; i++) {
-            boolean lowLatency;
-            int bufferSize;
-
             // We will try:
             // 1) Small buffer, low latency mode
             // 2) Large buffer, low latency mode
             // 3) Small buffer, standard mode
             // 4) Large buffer, standard mode
+            boolean lowLatency = switch (i) {
+                case 0, 1 -> true;
+                default -> false;
+            };
 
-            switch (i) {
-                case 0:
-                case 1:
-                    lowLatency = true;
-                    break;
-                case 2:
-                case 3:
-                    lowLatency = false;
-                    break;
-                default:
-                    // Unreachable
-                    throw new IllegalStateException();
-            }
-
-            switch (i) {
-                case 0:
-                case 2:
-                    bufferSize = bytesPerFrame * 2;
-                    break;
-
-                case 1:
-                case 3:
-                    // Try the larger buffer size
-                    bufferSize = Math.max(AudioTrack.getMinBufferSize(sampleRate,
+            int bufferSize = switch (i) {
+                case 0, 2 -> bytesPerFrame * 2;
+                default -> {
+                    // Try the larger buffer size, rounded up to the next whole frame
+                    int minBufferSize = Math.max(AudioTrack.getMinBufferSize(sampleRate,
                             channelConfig,
                             AudioFormat.ENCODING_PCM_16BIT),
                             bytesPerFrame * 2);
-
-                    // Round to next frame
-                    bufferSize = (((bufferSize + (bytesPerFrame - 1)) / bytesPerFrame) * bytesPerFrame);
-                    break;
-                default:
-                    // Unreachable
-                    throw new IllegalStateException();
-            }
+                    yield ((minBufferSize + (bytesPerFrame - 1)) / bytesPerFrame) * bytesPerFrame;
+                }
+            };
 
             // The fast mixer only runs at the device's native rate, so asking for low latency
             // at any other rate silently gets a resampler and none of the benefit

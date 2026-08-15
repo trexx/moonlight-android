@@ -91,8 +91,8 @@ public class ComputerDatabaseManager {
         }
 
         JSONObject json = new JSONObject();
-        json.put(AddressFields.ADDRESS, tuple.address);
-        json.put(AddressFields.PORT, tuple.port);
+        json.put(AddressFields.ADDRESS, tuple.address());
+        json.put(AddressFields.PORT, tuple.port());
 
         return json;
     }

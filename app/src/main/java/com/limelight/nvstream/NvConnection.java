@@ -123,11 +123,11 @@ public class NvConnection {
     /** @throws IOException if the host's address can't be resolved, which aborts the connection */
     private InetAddress resolveServerAddress() throws IOException {
         // Try to find an address that works for this host
-        InetAddress[] addrs = InetAddress.getAllByName(context.serverAddress.address);
+        InetAddress[] addrs = InetAddress.getAllByName(context.serverAddress.address());
         for (InetAddress addr : addrs) {
             try (Socket s = new Socket()) {
                 s.setSoLinger(true, 0);
-                s.connect(new InetSocketAddress(addr, context.serverAddress.port), 1000);
+                s.connect(new InetSocketAddress(addr, context.serverAddress.port()), 1000);
                 return addr;
             } catch (IOException e) {
                 e.printStackTrace();
@@ -441,7 +441,7 @@ public class NvConnection {
                 // we must not invoke that functionality in parallel.
                 synchronized (MoonBridge.class) {
                     MoonBridge.setupBridge(videoDecoderRenderer, audioRenderer, connectionListener);
-                    int ret = MoonBridge.startConnection(context.serverAddress.address,
+                    int ret = MoonBridge.startConnection(context.serverAddress.address(),
                             context.serverAppVersion, context.serverGfeVersion, context.rtspSessionUrl,
                             context.serverCodecModeSupport,
                             context.negotiatedWidth, context.negotiatedHeight,

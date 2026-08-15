@@ -107,8 +107,8 @@ public class NvHTTP {
             tmf.init((KeyStore) null);
 
             for (TrustManager tm : tmf.getTrustManagers()) {
-                if (tm instanceof X509TrustManager) {
-                    return (X509TrustManager) tm;
+                if (tm instanceof X509TrustManager x509) {
+                    return x509;
                 }
             }
         } catch (NoSuchAlgorithmException e) {
@@ -236,18 +236,18 @@ public class NvHTTP {
             // in IPv6 form, because InetAddress.getByName() will return an Inet4Address
             // for what OkHTTP thinks is an IPv6 address. Normalize it into IPv4 form
             // to avoid triggering this bug.
-            String addressString = address.address;
+            String addressString = address.address();
             if (addressString.contains(":") && addressString.contains(".")) {
                 InetAddress addr = InetAddress.getByName(addressString);
-                if (addr instanceof Inet4Address) {
-                    addressString = ((Inet4Address)addr).getHostAddress();
+                if (addr instanceof Inet4Address v4) {
+                    addressString = v4.getHostAddress();
                 }
             }
 
             this.baseUrlHttp = new HttpUrl.Builder()
                     .scheme("http")
                     .host(addressString)
-                    .port(address.port)
+                    .port(address.port())
                     .build();
         } catch (IllegalArgumentException e) {
             // Encapsulate IllegalArgumentException into IOException for callers to handle more easily

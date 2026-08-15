@@ -506,9 +506,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return;
         }
 
-        if (context instanceof InputDeviceContext) {
-            InputDeviceContext devContext = (InputDeviceContext) context;
-
+        if (context instanceof InputDeviceContext devContext) {
             LimeLog.info(devContext.name+" ("+context.id+") needs a controller number assigned");
             if (!devContext.external) {
                 LimeLog.info("Built-in buttons hardcoded as controller 0");

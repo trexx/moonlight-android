@@ -196,8 +196,7 @@ public class MoonBridge {
 
         @Override
         public boolean equals(Object obj) {
-            if (obj instanceof AudioConfiguration) {
-                AudioConfiguration that = (AudioConfiguration)obj;
+            if (obj instanceof AudioConfiguration that) {
                 return this.toInt() == that.toInt();
             }
 

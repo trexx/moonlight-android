@@ -458,11 +458,10 @@ public class CachedAppAssetLoader {
 
         @Override
         public boolean equals(Object o) {
-            if (!(o instanceof LoaderTuple)) {
+            if (!(o instanceof LoaderTuple other)) {
                 return false;
             }
 
-            LoaderTuple other = (LoaderTuple) o;
             return computer.uuid.equals(other.computer.uuid) && app.getAppId() == other.app.getAppId();
         }
 
