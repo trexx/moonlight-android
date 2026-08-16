@@ -184,12 +184,40 @@ bool GipDevice::handlePacket(const Bytes &packet)
         return true;
     }
 
-    const Bytes data(packet, sizeof(Frame));
+    // An unfragmented message may still carry the multi-byte length encoding: the single byte in
+    // Frame tops out at 127, and MS-GIPUSB 2.2.10.4 has anything longer use the varint form with
+    // the continuation bit set. Nothing this driver handles today is that long - input, status,
+    // announce, guide and serial are all well under it - so this exists for correctness rather
+    // than for a message we have seen. Reading such a header through Frame alone would take the
+    // first length byte literally and dispatch against a wrong length.
+    uint32_t payloadLength = frame->length;
+    size_t headerLength = sizeof(Frame);
+
+    if (frame->length & 0x80)
+    {
+        size_t consumed = decodeVarint(packet.raw() + 3, packet.size() - 3, payloadLength);
+
+        if (consumed == 0)
+        {
+            Log::debug("Malformed payload length");
+
+            return true;
+        }
+
+        headerLength = 3 + consumed;
+
+        if (packet.size() < headerLength)
+        {
+            return true;
+        }
+    }
+
+    const Bytes data(packet, headerLength);
 
     // Data is 32-bit aligned, check for minimum size
     if (
         frame->command == CMD_ANNOUNCE &&
-        frame->length == sizeof(AnnounceData) &&
+        payloadLength == sizeof(AnnounceData) &&
         data.size() >= sizeof(AnnounceData)
     ) {
         deviceAnnounced(
@@ -205,7 +233,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
     // events. The leading four bytes are the same in both, so parse those and ignore the tail.
     else if (
         frame->command == CMD_STATUS &&
-        frame->length >= sizeof(StatusData) &&
+        payloadLength >= sizeof(StatusData) &&
         data.size() >= sizeof(StatusData)
     ) {
         statusReceived(
@@ -216,7 +244,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
 
     else if (
         frame->command == CMD_GUIDE_BTN &&
-        frame->length == sizeof(GuideButtonData) &&
+        payloadLength == sizeof(GuideButtonData) &&
         data.size() >= sizeof(GuideButtonData)
     ) {
         guideButtonPressed(data.toStruct<GuideButtonData>());
@@ -224,7 +252,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
 
     else if (
         frame->command == CMD_SERIAL_NUM &&
-        frame->length == sizeof(SerialData) &&
+        payloadLength == sizeof(SerialData) &&
         data.size() >= sizeof(SerialData)
     ) {
         serialNumberReceived(data.toStruct<SerialData>());
@@ -235,7 +263,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
     // The "non-remapped" input is appended to the packet
     else if (
         frame->command == CMD_INPUT &&
-        frame->length >= sizeof(InputData) &&
+        payloadLength >= sizeof(InputData) &&
         data.size() >= sizeof(InputData)
     ) {
         inputReceived(data.toStruct<InputData>());

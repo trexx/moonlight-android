@@ -86,16 +86,76 @@ packet is ignored rather than misread.
 Still open: whether the pad wants mono or stereo, which its metadata reports as a two-byte entry
 per supported format. That decides only the packet size above, not the shape of the work.
 
+## Measured against real hardware, and it does not work yet
+
+An implementation of the protocol half below was built and tested. It does not produce sound, and
+the reason is structural rather than a coding mistake.
+
+**The pad declares no audio at all.** On an Xbox One pad (PID `02dd`, integrated 3.5 mm jack) over
+adapter `045e:02fe`, on a Shield TV, device 0's metadata lists exactly two data classes — `0x20`
+(input) and `0x09` (rumble) — and **zero audio formats**. That dump is byte-for-byte identical
+with and without a headset plugged into the jack.
+
+**The send side was never the problem.** With audio enabled the driver transmitted 3125 packets in
+25 s, a dead-steady 125/s at the protocol's 8 ms cadence, with correctly encoded headers
+(`60 20 02 80 8c 00` — command, sequence, varint 1536, padded even). The pad never acknowledged
+the format request and never sent a single Audio Capture message, so its flow rate stayed at 0.
+It simply is not listening.
+
+**Why: audio is a separate GIP client.** In xone, `client->audio_formats` is read only by
+`driver/headset.c`, a driver bound to its own client; `driver/gamepad.c` has no audio path at all.
+So the audio endpoint is **never** device 0 — integrated jack or old stereo-headset adapter alike.
+`handlePacket()` discards every packet with device id > 0, so we could not see such a client even
+if it appeared.
+
+**But no accessory client ever announced**, with or without a headset connected, so lifting that
+filter is necessary and not sufficient. The same pad plays headset audio on Windows, so the
+hardware is capable and the gap is in this driver.
+
+Two candidates, neither tested:
+
+**xone does support this over the adapter**, so a working reference exists. Its clients are created
+on demand from the device id in each header — `gip_get_client(adap, hdr.options & GIP_HDR_CLIENT_ID)`
+in `gip_process_buffer()` — which is transport-independent, and `transport/dongle.c` routes a
+`GIP_BUF_AUDIO` buffer onto its own transmit queue. The audio *adapter* operations
+(`enable_audio`, `init_audio_in`/`_out`) that only `transport/wired.c` registers are optional and
+return success when absent: the wired path needs them to configure USB isochronous endpoints, and
+the dongle needs no transport-level setup at all.
+
+Two candidates for what we are missing, neither tested:
+
+- **Link encryption, and the handshake behind it.** This is the strongest lead. xone's dongle
+  implements `set_encryption_key`, which programs a per-client key into the MT76
+  (`xone_mt76_set_client_key(&dongle->mt, client->wcid, key, len)`), and the key comes from the
+  security handshake in its `auth/` module. xow does neither — its own handshake comment lists
+  `Authenticate` in both directions and marks it "unused" — and runs the link unencrypted. Input
+  and rumble work that way; a pad may well withhold its audio client until authenticated.
+- **The setup sequence is incomplete.** xone does `gip_suggest_audio_format` →
+  `gip_set_audio_volume` → `gip_init_audio_out`/`_in` → `gip_enable_audio`; we send only the
+  format. `gip_set_audio_volume` is a real GIP message we never send, and is cheap to try. The
+  other three are the optional adapter operations above and are no-ops for the dongle.
+
+Also worth noting as a divergence: `gip_process_buffer()` loops over *several* GIP messages in one
+transport buffer, while `handlePacket()` parses only the first and ignores anything after it. The
+frames observed here carried a single message plus a couple of bytes of alignment padding, so this
+is not the cause of what is described above, but it is a real gap.
+
 ## Next step
 
-1. Port the protocol half above — format negotiation, volume, enable/init, and the sample sender —
-   behind a setting that is **off by default**, the same shape as the AAudio work, which degrades
-   to the existing path rather than replacing it.
-2. Extend `handlePacket()` to decode an extended payload length on the unfragmented path, which
-   audio needs and nothing else currently does.
-3. Feed it from the same decoded PCM the existing renderer consumes, without disturbing that path
-   when the setting is off.
-4. Measure. The claim worth testing is the one this is for: that it beats a Bluetooth headset by
+The order below is deliberately diagnosis-first. Building more of the protocol against a device
+that announces no audio client only repeats the result above.
+
+1. **Find out why no accessory client announces.** Lift the `deviceId > 0` filter in
+   `handlePacket()` behind a debug log first and watch what, if anything, arrives when a headset
+   is plugged in. That is one build cycle and it decides everything after it.
+2. If nothing announces, **try the missing setup messages** — `gip_set_audio_volume` above all,
+   since it is the one real GIP message xone sends that we do not.
+3. If that changes nothing, **the security handshake is the remaining lead**, and it is a large
+   piece of work: xone's `auth/` module is crypto plus certificate handling, and porting it is its
+   own project rather than a step in this one.
+4. Only then port the rest of the protocol half described above, behind a setting that is **off by
+   default**, degrading to the existing path rather than replacing it.
+5. Measure. The claim worth testing is the one this is for: that it beats a Bluetooth headset by
    enough to matter. Take numbers from the end-of-stream summary rather than the overlay, per
    `CLAUDE.md`.
 
