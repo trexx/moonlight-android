@@ -3,8 +3,6 @@ package com.limelight.nvstream.http;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 
-import com.limelight.LimeLog;
-
 /**
  * Translates thread interruption escaping an OkHttp call into something our callers can handle.
  *
@@ -27,9 +25,14 @@ import com.limelight.LimeLog;
  * {@code connectResults.poll()}, and 5.4.0 still has no catch around it — so bumping the
  * dependency does not fix this and the translation has to happen on our side.
  *
+ * <p>Touches no Android type, so it can be tested on a JVM. That is why the caller does the
+ * logging: {@code LimeLog} is backed by {@code android.util.Log}, whose stub throws under the
+ * android.jar unit tests compile against, and one log call here would put this whole decision back
+ * out of reach. See {@code NvHTTP.openHttpConnection}.
+ *
  * <p>Latency: none. This sits on the HTTP path used for host discovery, pairing and launch, all of
- * which are off the streaming path entirely; the translation and its one log line only run on the
- * way out of a failed call.
+ * which are off the streaming path entirely; the translation only runs on the way out of a failed
+ * call.
  */
 final class HttpInterrupts {
 
@@ -50,15 +53,6 @@ final class HttpInterrupts {
         // isInterrupted() and rely on the next Thread.sleep() throwing to break out, so the flag
         // has to go back before we hand control to a caller that only knows how to handle IOException.
         Thread.currentThread().interrupt();
-
-        // Once translated this is indistinguishable from an ordinary connect failure — tryPollIp
-        // swallows it and reports the host offline — so without a line here the interrupt leaves no
-        // trace at all. The thread name identifies the host ("Polling thread for <name>", "Parallel
-        // Poll - <address> - <name>"), which is what separates a routine stop-polling interrupt from
-        // one that fired where it should not have. Logged only for interrupts, never for the far more
-        // common IO failure, so a host that is simply offline does not spam the log.
-        LimeLog.info("Connect interrupted on \"" + Thread.currentThread().getName()
-                + "\"; reporting it as an IO failure");
 
         InterruptedIOException translated = new InterruptedIOException("Interrupted while connecting");
         translated.initCause(t);
