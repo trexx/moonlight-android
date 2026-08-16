@@ -122,12 +122,22 @@ Robolectric:
 - `GlRendererParser` — split from `MediaCodecHelper`, which cannot even load on a JVM because it
   initialises a static field from `Build.HARDWARE`.
 - `StickCalibration` — split from `ProConController`, which needs a USB device.
+- `HttpInterrupts` — was already pure apart from one log call; the caller logs instead.
 - `KeyMapper` — was already pure.
 
 `LimeLog` is backed by `android.util.Log`, so it is **not** safe to call from code under test: JVM
 tests run against a stubbed `android.jar` whose methods throw `RuntimeException` unless
 `testOptions.unitTests.returnDefaultValues` is set, and it is not set here. Keep the logic you
 extract for testing free of `LimeLog` calls, as `VideoStats` and `KeyMapper` are.
+
+**When extracted logic needs to log, the caller logs.** Do not reach for
+`returnDefaultValues`; leaving it unset is what forces extracted logic to be genuinely free of
+Android, and turning it on would let a test pass while silently calling framework methods that do
+nothing. Moving the line out has been the better change both times it came up: `GlRendererParser`
+logged the GPU model from a shared helper, so `MediaCodecHelper.initialize()` emitted the same line
+three or four times, and now emits it once. `HttpInterrupts` logged interrupts from inside
+`translate()`; `NvHTTP` now logs from inside the branch that only runs for an interrupt, so
+"never log for a plain IO failure" is guaranteed by shape rather than asserted by a test.
 
 **Assertions are disabled in tests** (`enableAssertions = false`), matching Android runtime
 behaviour. Do not write a test that depends on an `assert` firing.
