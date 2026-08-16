@@ -65,8 +65,7 @@ public class ProConController extends AbstractController {
     private boolean stopped = false;
     // Rolling 4-bit sequence number the controller expects on every outgoing report
     private byte sendPacketCount = 0;
-    private final int[][][] stickCalibration = new int[2][2][3]; // [stick][axis][min, center, max]
-    private final float[][][] stickExtends = new float[2][2][2]; // Pre-calculated scale for each axis
+    private final StickCalibration stickCalibration = new StickCalibration();
 
     /** @return true if this is a Nintendo (0x057e) Switch Pro Controller (0x2009) */
     public static boolean canClaimDevice(UsbDevice device) {
@@ -453,10 +452,10 @@ public class ProConController extends AbstractController {
         int rawRightStickX = buffer.get(9) & 0xFF | ((buffer.get(10) & 0x0F) << 8);
         int rawRightStickY = ((buffer.get(10) & 0xF0) >> 4) | (buffer.get(11) << 4);
 
-        leftStickX = applyStickCalibration(rawLeftStickX, 0, 0);
-        leftStickY = applyStickCalibration(-rawLeftStickY - 1, 0, 1);
-        rightStickX = applyStickCalibration(rawRightStickX, 1, 0);
-        rightStickY = applyStickCalibration(-rawRightStickY - 1, 1, 1);
+        leftStickX = stickCalibration.apply(rawLeftStickX, 0, 0);
+        leftStickY = stickCalibration.apply(-rawLeftStickY - 1, 0, 1);
+        rightStickX = stickCalibration.apply(rawRightStickX, 1, 0);
+        rightStickY = stickCalibration.apply(-rawRightStickY - 1, 1, 1);
 
         accelX = buffer.getShort(37) * ACCEL_LSB_TO_MS2;
         accelY = buffer.getShort(39) * ACCEL_LSB_TO_MS2;
@@ -510,8 +509,8 @@ public class ProConController extends AbstractController {
      * Loads both sticks' calibration from flash, preferring the user's own over the factory
      * values, and falls back to nominal 12-bit ranges for any stick that can't be read.
      *
-     * <p>The two sticks store their three 12-bit pairs in a different order, which is why the
-     * unpacking below is duplicated rather than shared.
+     * <p>The two sticks store their three 12-bit pairs in a different order, which is why
+     * {@link StickCalibration} unpacks each one separately.
      *
      * @return always true; a failed read degrades to the default calibration rather than
      *         failing initialisation, since an uncalibrated stick still works
@@ -534,112 +533,24 @@ public class ProConController extends AbstractController {
 
         boolean lsCalibrated = false;
         if (spiFlashRead(lsAddr, STICK_CALIBRATION_LENGTH, buffer)) {
-            // The left stick stores max first, then center, then min
-            int xMax = (buffer[20] & 0xFF) | ((buffer[21] & 0x0F) << 8);
-            int yMax = ((buffer[21] & 0xF0) >> 4) | ((buffer[22] & 0xFF) << 4);
-            int xCenter = (buffer[23] & 0xFF) | ((buffer[24] & 0x0F) << 8);
-            int yCenter = ((buffer[24] & 0xF0) >> 4) | ((buffer[25] & 0xFF) << 4);
-            int xMin = (buffer[26] & 0xFF) | ((buffer[27] & 0x0F) << 8);
-            int yMin = ((buffer[27] & 0xF0) >> 4) | ((buffer[28] & 0xFF) << 4);
-            applyCalibration(0, xMin, xCenter, xMax, yMin, yCenter, yMax);
-
+            stickCalibration.loadLeftStickFlash(buffer);
             lsCalibrated = true;
         }
 
         if (!lsCalibrated) {
-            applyDefaultCalibration(0);
+            stickCalibration.applyDefaultCalibration(0);
         }
 
         boolean rsCalibrated = false;
         if (spiFlashRead(rsAddr, STICK_CALIBRATION_LENGTH, buffer)) {
-            // The right stick stores center first, then min, then max
-            int xCenter = (buffer[20] & 0xFF) | ((buffer[21] & 0x0F) << 8);
-            int yCenter = ((buffer[21] & 0xF0) >> 4) | ((buffer[22] & 0xFF) << 4);
-            int xMin = (buffer[23] & 0xFF) | ((buffer[24] & 0x0F) << 8);
-            int yMin = ((buffer[24] & 0xF0) >> 4) | ((buffer[25] & 0xFF) << 4);
-            int xMax = (buffer[26] & 0xFF) | ((buffer[27] & 0x0F) << 8);
-            int yMax = ((buffer[27] & 0xF0) >> 4) | ((buffer[28] & 0xFF) << 4);
-            applyCalibration(1, xMin, xCenter, xMax, yMin, yCenter, yMax);
-
+            stickCalibration.loadRightStickFlash(buffer);
             rsCalibrated = true;
         }
 
         if (!rsCalibrated) {
-            applyDefaultCalibration(1);
+            stickCalibration.applyDefaultCalibration(1);
         }
 
         return true;
-    }
-
-    /**
-     * Converts one stick's raw calibration triple into absolute bounds and usable extents.
-     *
-     * <p>The flash values are deltas from centre rather than absolute positions, and the Y axis
-     * is stored inverted relative to the direction {@link #handleRead} produces, hence the
-     * subtractions from 0x1000.
-     */
-    private void applyCalibration(int stick, int xMin, int xCenter, int xMax, int yMin, int yCenter, int yMax) {
-        stickCalibration[stick][0][0] = xCenter - xMin;
-        stickCalibration[stick][0][1] = xCenter;
-        stickCalibration[stick][0][2] = xCenter + xMax;
-        stickCalibration[stick][1][0] = 0x1000 - yCenter - yMax;
-        stickCalibration[stick][1][1] = 0x1000 - yCenter;
-        stickCalibration[stick][1][2] = 0x1000 - yCenter + yMin;
-
-        // Start the usable range at 70% of the calibrated extent. applyStickCalibration()
-        // widens these if it ever sees a larger deflection, so a conservative start just
-        // means full range is reached after the stick has been pushed to its corners once.
-        stickExtends[stick][0][0] = (float) ((xCenter - stickCalibration[stick][0][0]) * -0.7);
-        stickExtends[stick][0][1] = (float) ((stickCalibration[stick][0][2] - xCenter) * 0.7);
-        stickExtends[stick][1][0] = (float) ((yCenter - stickCalibration[stick][1][0]) * -0.7);
-        stickExtends[stick][1][1] = (float) ((stickCalibration[stick][1][2] - yCenter) * 0.7);
-    }
-
-    /** Nominal full-scale 12-bit calibration, used when flash can't be read. */
-    private void applyDefaultCalibration(int stick) {
-        for (int axis = 0; axis < 2; axis++) {
-            stickCalibration[stick][axis][0] = 0x000;  // Min
-            stickCalibration[stick][axis][1] = 0x800;  // Center
-            stickCalibration[stick][axis][2] = 0xFFF;  // Max
-
-            stickExtends[stick][axis][0] = -0x700;
-            stickExtends[stick][axis][1] = 0x700;
-        }
-    }
-
-    /**
-     * Normalises a raw axis reading to -1.0 to 1.0 using the loaded calibration.
-     *
-     * <p>Self-widening: a reading beyond the current extent becomes the new extent and reports
-     * full deflection. That absorbs sticks whose real range differs from what flash claims, at
-     * the cost of the range only being fully learned once the stick has been pushed to its
-     * corners. It also means the extents are per-session and never shrink back.
-     *
-     * @param stick 0 left, 1 right
-     * @param axis  0 X, 1 Y
-     */
-    private float applyStickCalibration(int value, int stick, int axis) {
-        int center = stickCalibration[stick][axis][1];
-
-        // handleRead() negates the Y axes, so wrap them back into the unsigned 12-bit range
-        if (value < 0) {
-            value += 0x1000;
-        }
-
-        value -= center;
-
-        if (value < stickExtends[stick][axis][0]) {
-            stickExtends[stick][axis][0] = value;
-            return -1;
-        } else if (value > stickExtends[stick][axis][1]) {
-            stickExtends[stick][axis][1] = value;
-            return 1;
-        }
-
-        if (value > 0) {
-            return value / stickExtends[stick][axis][1];
-        } else {
-            return -value / stickExtends[stick][axis][0];
-        }
     }
 }
