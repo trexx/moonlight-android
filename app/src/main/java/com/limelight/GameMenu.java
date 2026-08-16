@@ -176,6 +176,11 @@ public class GameMenu {
             if (enabled) {
                 state = getString(R.string.game_menu_pad_audio_on);
             }
+            else if (!sink.isSupportedBy(controller)) {
+                // The pad's own metadata says it has no audio endpoint. Distinct from the
+                // two-pad cap below, and worth saying so rather than blaming the limit.
+                state = getString(R.string.game_menu_pad_audio_unsupported);
+            }
             else if (sink.canEnableMore()) {
                 state = getString(R.string.game_menu_pad_audio_off);
             }

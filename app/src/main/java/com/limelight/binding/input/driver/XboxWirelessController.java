@@ -131,6 +131,15 @@ public class XboxWirelessController extends AbstractController{
     }
 
     /**
+     * @return true if this pad told us, in its metadata, that it can render 48 kHz stereo. A pad
+     *         that did not has no audio endpoint reachable this way, and enabling would move the
+     *         stream's audio off the TV and into silence.
+     */
+    public boolean hasAudioSupport() {
+        return hasAudioSupportNative(handle);
+    }
+
+    /**
      * Starts or stops rendering stream audio to this pad's headphone jack.
      *
      * @return true if the pad accepted the change
@@ -154,6 +163,7 @@ public class XboxWirelessController extends AbstractController{
 
     native void registerNative(long handle);
     native boolean setAudioEnabledNative(long handle, boolean enable);
+    native boolean hasAudioSupportNative(long handle);
     native void queueAudioNative(long handle, short[] samples, int count);
     native void sendRumble(long handle, short lowFreqMotor, short highFreqMotor);
     native void sendrumbleTriggers(long handle, short leftTrigger, short rightTrigger);

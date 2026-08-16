@@ -59,6 +59,9 @@ public:
     bool setAudioEnabled(bool enable);
     bool isAudioEnabled() const { return audioEnabled; }
 
+    /* Whether this pad declared an audio format we can render to; see supportsAudioOut(). */
+    bool supportsAudioOut() const;
+
     /*
      * Queues interleaved 16-bit stereo PCM for this pad. Called from Moonlight's audio decode
      * thread, so it only copies into the ring and returns - the blocking USB write happens on the

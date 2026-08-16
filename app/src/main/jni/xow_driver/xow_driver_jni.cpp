@@ -94,6 +94,15 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_setAudioEnabledNa
 }
 
 extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_binding_input_driver_XboxWirelessController_hasAudioSupportNative(JNIEnv *env,
+                                                                                     jobject thiz,
+                                                                                     jlong handle) {
+    auto *controller = (Controller *) handle;
+    return controller->supportsAudioOut() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
 JNIEXPORT void JNICALL
 Java_com_limelight_binding_input_driver_XboxWirelessController_queueAudioNative(JNIEnv *env,
                                                                                 jobject thiz,

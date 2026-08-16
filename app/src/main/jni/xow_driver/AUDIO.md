@@ -197,8 +197,15 @@ that announces no audio client only repeats the result above.
   dongle-attached pad actually reports has not been observed. The log answers it.
 - **Stereo 48 kHz only.** Samples are forwarded verbatim with no downmix, so a surround stream
   disables the feature rather than sending something wrong.
-- **Integrated jacks only.** A headset on the old stereo-headset *adapter* is a GIP accessory with
-  device id > 0, and `handlePacket()` discards accessory packets outright.
+- **No pad has accepted audio yet, and the ship-blocker is upstream of this code.** The audio
+  endpoint is a separate GIP client with device id > 0 — integrated jack or old stereo-headset
+  adapter alike — and `handlePacket()` discards accessory packets outright. No such client has
+  been observed announcing itself over the adapter. The measurement and the leads are recorded
+  under "Measured against real hardware" above; nothing in the sender below is implicated.
+
+  Until that is resolved this ships refusing: a pad whose metadata declares no audio format is
+  rejected with a message saying so, rather than moving the stream's audio off the TV into
+  silence.
 - **No microphone.** There is no mic support anywhere in this client, so the capture direction is
   negotiated but never read.
 

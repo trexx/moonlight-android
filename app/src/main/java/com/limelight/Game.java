@@ -2334,9 +2334,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     /**
-     * Turns audio to a pad's headphone jack on or off mid-stream, reporting the outcome. Refusal
-     * is almost always the two-pad limit, which the toast says rather than leaving the user to
-     * wonder why the menu did nothing.
+     * Turns audio to a pad's headphone jack on or off mid-stream, reporting the outcome. A refusal
+     * is either the two-pad bandwidth limit or a pad with no audio endpoint at all, and the toast
+     * distinguishes them rather than leaving the user to wonder why the menu did nothing.
      */
     public void togglePadAudio(XboxWirelessController controller) {
         final boolean enabling = !padAudioSink.isEnabled(controller);
@@ -2349,10 +2349,20 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     ? padAudioSink.enable(controller)
                     : disablePadAudio(controller);
 
-            final int message = succeeded
-                    ? (enabling ? R.string.toast_pad_audio_enabled
-                                : R.string.toast_pad_audio_disabled)
-                    : R.string.toast_pad_audio_failed;
+            final int message;
+
+            if (succeeded) {
+                message = enabling ? R.string.toast_pad_audio_enabled
+                                   : R.string.toast_pad_audio_disabled;
+            }
+            else if (!controller.hasAudioSupport()) {
+                // Read after the attempt rather than before it, so the reason reported is the one
+                // that actually stopped it rather than a guess made in advance
+                message = R.string.toast_pad_audio_unsupported;
+            }
+            else {
+                message = R.string.toast_pad_audio_failed;
+            }
 
             new Handler(Looper.getMainLooper()).post(
                     () -> Toast.makeText(Game.this, message, Toast.LENGTH_SHORT).show());

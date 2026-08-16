@@ -583,6 +583,26 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
     }
 }
 
+/*
+ * Whether the pad declared an audio format we can render to.
+ *
+ * Metadata lists these as (capture, render) pairs, which is how xone reads the same element -
+ * it hands data[0] and data[1] straight to its format request. A pad that declared none has no
+ * audio endpoint on this device id, and asking it to take audio is answered with silence.
+ */
+bool Controller::supportsAudioOut() const
+{
+    for (size_t i = 1; i < audioFormats.size(); i += METADATA_AUDIO_FORMAT_LENGTH)
+    {
+        if (audioFormats[i] == AUDIO_FORMAT_48KHZ_STEREO)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool Controller::setAudioEnabled(bool enable)
 {
     if (enable == audioEnabled)
@@ -592,6 +612,16 @@ bool Controller::setAudioEnabled(bool enable)
 
     if (enable)
     {
+        // Refuse rather than half-succeed. Enabling routes stream audio away from the TV, so a
+        // pad that cannot play it leaves the user with silence everywhere and no explanation.
+        // The metadata is the only thing that says, and we already ask for it.
+        if (!supportsAudioOut())
+        {
+            Log::info("Controller declared no 48 kHz stereo output; refusing audio");
+
+            return false;
+        }
+
         // 48 kHz stereo both ways. The capture direction is negotiated because the protocol pairs
         // them in one message and the pad needs a valid value, not because anything reads a
         // microphone here.

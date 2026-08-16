@@ -77,6 +77,15 @@ public class PadAudioSink {
         return false;
     }
 
+    /**
+     * @return true if this pad can take audio at all. Distinct from {@link #canEnableMore()}:
+     *         that is about the bandwidth budget, this is about the hardware, and the two
+     *         refusals need different explanations to be any use to the user.
+     */
+    public boolean isSupportedBy(XboxWirelessController controller) {
+        return formatSupported && controller.hasAudioSupport();
+    }
+
     /** @return true if another pad could be enabled right now */
     public synchronized boolean canEnableMore() {
         return formatSupported && targets.length < MAX_TARGETS;
@@ -93,6 +102,13 @@ public class PadAudioSink {
         }
 
         if (!formatSupported) {
+            return false;
+        }
+
+        // Checked before the cap so a pad that simply cannot do audio is not reported as having
+        // hit the two-pad limit
+        if (!controller.hasAudioSupport()) {
+            LimeLog.info("Not enabling pad audio: controller declares no audio format");
             return false;
         }
 
