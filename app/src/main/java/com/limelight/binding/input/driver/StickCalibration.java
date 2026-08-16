@@ -10,17 +10,89 @@ package com.limelight.binding.input.driver;
  *
  * <p>Holds no USB state: {@link ProConController} does the flash reads and hands the resulting
  * 9-byte records here.
+ *
+ * <p>The four axes are separate objects with scalar fields rather than slots in
+ * {@code int[2][2][3]} and {@code float[2][2][2]} arrays, which is how this was originally
+ * written. Jagged arrays in Java are not flat blocks: those two declarations are fourteen heap
+ * objects, each leaf carrying a header larger than its payload and sitting wherever the allocator
+ * put it, so every read walked three dependent pointers and paid three bounds checks. The driver
+ * only ever asks for the four combinations below, and asks with constant indices, so the
+ * navigation bought nothing. {@link Axis#apply} now touches three fields of one object.
  */
 final class StickCalibration {
 
     /** Offset of the calibration payload within an SPI flash reply. */
     private static final int FLASH_PAYLOAD_OFFSET = 20;
 
-    /** [stick][axis][min, center, max], stick 0 left and 1 right, axis 0 X and 1 Y. */
-    private final int[][][] stickCalibration = new int[2][2][3];
+    // Never reassigned, so ProConController is free to hold these references directly rather than
+    // reaching through this object on every read.
+    final Axis leftX = new Axis();
+    final Axis leftY = new Axis();
+    final Axis rightX = new Axis();
+    final Axis rightY = new Axis();
 
-    /** Pre-calculated usable extent either side of centre, [stick][axis][negative, positive]. */
-    private final float[][][] stickExtends = new float[2][2][2];
+    /**
+     * One axis: its calibrated bounds, and the running extents {@link #apply} widens.
+     *
+     * <p>{@code min}, {@code center} and {@code max} are absolute positions in the raw 12-bit
+     * range, already converted from the deltas flash stores.
+     */
+    static final class Axis {
+
+        private int min;
+        private int center;
+        private int max;
+
+        /** Usable extent below centre. Negative. */
+        private float negExtent;
+        /** Usable extent above centre. Positive. */
+        private float posExtent;
+
+        /**
+         * Normalises a raw axis reading to -1.0 to 1.0 using the loaded calibration.
+         *
+         * <p>Self-widening: a reading beyond the current extent becomes the new extent and reports
+         * full deflection. That absorbs sticks whose real range differs from what flash claims, at
+         * the cost of the range only being fully learned once the stick has been pushed to its
+         * corners. It also means the extents are per-session and never shrink back.
+         *
+         * <p>Called four times per {@code ProConController.handleRead()}, which turns over at
+         * roughly 120 Hz per controller. It allocates nothing and reads only fields of this object.
+         */
+        float apply(int value) {
+            // ProConController.handleRead() negates the Y axes, so wrap them back into the unsigned
+            // 12-bit range
+            if (value < 0) {
+                value += 0x1000;
+            }
+
+            value -= center;
+
+            if (value < negExtent) {
+                negExtent = value;
+                return -1;
+            } else if (value > posExtent) {
+                posExtent = value;
+                return 1;
+            }
+
+            if (value > 0) {
+                return value / posExtent;
+            } else {
+                return -value / negExtent;
+            }
+        }
+
+        /** Nominal full-scale 12-bit calibration, used when flash can't be read. */
+        private void applyDefaults() {
+            min = 0x000;
+            center = 0x800;
+            max = 0xFFF;
+
+            negExtent = -0x700;
+            posExtent = 0x700;
+        }
+    }
 
     /**
      * Unpacks the left stick's record. The left stick stores max first, then center, then min.
@@ -69,78 +141,65 @@ final class StickCalibration {
      * hence the subtractions from 0x1000.
      */
     void applyCalibration(int stick, int xMin, int xCenter, int xMax, int yMin, int yCenter, int yMax) {
-        stickCalibration[stick][0][0] = xCenter - xMin;
-        stickCalibration[stick][0][1] = xCenter;
-        stickCalibration[stick][0][2] = xCenter + xMax;
-        stickCalibration[stick][1][0] = 0x1000 - yCenter - yMax;
-        stickCalibration[stick][1][1] = 0x1000 - yCenter;
-        stickCalibration[stick][1][2] = 0x1000 - yCenter + yMin;
+        Axis x = stick == 0 ? leftX : rightX;
+        Axis y = stick == 0 ? leftY : rightY;
+
+        x.min = xCenter - xMin;
+        x.center = xCenter;
+        x.max = xCenter + xMax;
+        y.min = 0x1000 - yCenter - yMax;
+        y.center = 0x1000 - yCenter;
+        y.max = 0x1000 - yCenter + yMin;
 
         // Start the usable range at 70% of the calibrated extent. apply() widens these if it ever
         // sees a larger deflection, so a conservative start just means full range is reached after
         // the stick has been pushed to its corners once.
-        stickExtends[stick][0][0] = (float) ((xCenter - stickCalibration[stick][0][0]) * -0.7);
-        stickExtends[stick][0][1] = (float) ((stickCalibration[stick][0][2] - xCenter) * 0.7);
-        stickExtends[stick][1][0] = (float) ((yCenter - stickCalibration[stick][1][0]) * -0.7);
-        stickExtends[stick][1][1] = (float) ((stickCalibration[stick][1][2] - yCenter) * 0.7);
+        //
+        // Note the asymmetry, carried over verbatim from the driver this came from: the X extents
+        // are measured from x.center, but the Y extents are measured from the raw yCenter, which is
+        // not y.center - that was inverted to 0x1000 - yCenter two lines above. The two agree only
+        // for a stick whose flash centre is exactly 0x800. See the Y-axis note in
+        // HARDWARE_TESTING.md; it needs a controller to settle, so it is recorded rather than
+        // changed here.
+        x.negExtent = (float) ((xCenter - x.min) * -0.7);
+        x.posExtent = (float) ((x.max - xCenter) * 0.7);
+        y.negExtent = (float) ((yCenter - y.min) * -0.7);
+        y.posExtent = (float) ((y.max - yCenter) * 0.7);
     }
 
     /** Nominal full-scale 12-bit calibration, used when flash can't be read. */
     void applyDefaultCalibration(int stick) {
-        for (int axis = 0; axis < 2; axis++) {
-            stickCalibration[stick][axis][0] = 0x000;  // Min
-            stickCalibration[stick][axis][1] = 0x800;  // Center
-            stickCalibration[stick][axis][2] = 0xFFF;  // Max
-
-            stickExtends[stick][axis][0] = -0x700;
-            stickExtends[stick][axis][1] = 0x700;
-        }
-    }
-
-    /**
-     * Normalises a raw axis reading to -1.0 to 1.0 using the loaded calibration.
-     *
-     * <p>Self-widening: a reading beyond the current extent becomes the new extent and reports
-     * full deflection. That absorbs sticks whose real range differs from what flash claims, at
-     * the cost of the range only being fully learned once the stick has been pushed to its
-     * corners. It also means the extents are per-session and never shrink back.
-     *
-     * @param stick 0 left, 1 right
-     * @param axis  0 X, 1 Y
-     */
-    float apply(int value, int stick, int axis) {
-        int center = stickCalibration[stick][axis][1];
-
-        // ProConController.handleRead() negates the Y axes, so wrap them back into the unsigned
-        // 12-bit range
-        if (value < 0) {
-            value += 0x1000;
-        }
-
-        value -= center;
-
-        if (value < stickExtends[stick][axis][0]) {
-            stickExtends[stick][axis][0] = value;
-            return -1;
-        } else if (value > stickExtends[stick][axis][1]) {
-            stickExtends[stick][axis][1] = value;
-            return 1;
-        }
-
-        if (value > 0) {
-            return value / stickExtends[stick][axis][1];
+        if (stick == 0) {
+            leftX.applyDefaults();
+            leftY.applyDefaults();
         } else {
-            return -value / stickExtends[stick][axis][0];
+            rightX.applyDefaults();
+            rightY.applyDefaults();
         }
     }
 
-    // Accessors for tests. Nothing in the driver reads these back.
+    // Accessors for tests. Nothing in the driver reads these back - it holds the Axis objects
+    // directly - so the index navigation here is off the hot path entirely.
+
+    private Axis axisFor(int stick, int axis) {
+        if (stick == 0) {
+            return axis == 0 ? leftX : leftY;
+        }
+        return axis == 0 ? rightX : rightY;
+    }
 
     int calibration(int stick, int axis, int index) {
-        return stickCalibration[stick][axis][index];
+        Axis a = axisFor(stick, axis);
+        return switch (index) {
+            case 0 -> a.min;
+            case 1 -> a.center;
+            case 2 -> a.max;
+            default -> throw new IndexOutOfBoundsException("no bound " + index);
+        };
     }
 
     float extent(int stick, int axis, int index) {
-        return stickExtends[stick][axis][index];
+        Axis a = axisFor(stick, axis);
+        return index == 0 ? a.negExtent : a.posExtent;
     }
 }

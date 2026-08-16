@@ -300,6 +300,33 @@ pad. Test both configurations — the second block is the regression check.
 - [ ] The controller still works through the kernel `hid-nintendo` path exactly as before,
       with buttons and sticks but no motion. This must be unchanged for existing users.
 
+### Suspected defect: the Y extents are measured from the wrong centre
+
+Found by inspection while flattening `StickCalibration`, not by anyone playing. Recorded
+rather than fixed, because telling a real defect from a harmless quirk here means feeling
+the stick.
+
+`applyCalibration()` derives each axis's usable extent as 70% of its calibrated range. For X
+it measures from the stored centre. For Y it measures from the raw `yCenter` out of flash —
+but the stored Y centre is `0x1000 - yCenter`, because the Y axis is inverted on the way in.
+The two agree only when `yCenter` is exactly `0x800`; otherwise both Y extents are off by
+`1.4 ×` the centre offset, one too large and one too small.
+
+A pad whose flash Y centre sits at `0x700`, say, would get Y extents skewed by ~358 counts
+against a nominal 1792 — a fifth of the range.
+
+What makes it hard to see: `apply()` only ever widens. An extent that comes out too small
+heals itself the first time the stick is pushed to that corner, and after that the axis is
+correct. An extent that comes out too large never shrinks, so that direction stays sluggish
+for the whole session — full deflection never quite reaches 1.0.
+
+- [ ] **Push each stick to all four corners and confirm both axes reach full deflection.**
+      Compare Y against X on the same stick, and the left stick against the right. A Y axis
+      that reads short in one direction only, and stays short, is this.
+- [ ] If it reproduces, log the flash `yCenter` for the affected pad before changing the
+      formula — a pad centred at `0x800` cannot show the bug, so a clean test says nothing
+      until you know what its centre actually is.
+
 ---
 
 ## 3. Low latency audio output (AAudio)

@@ -192,7 +192,7 @@ class StickCalibrationTest {
             StickCalibration calibration = new StickCalibration();
             calibration.applyDefaultCalibration(0);
 
-            assertEquals(0.0f, calibration.apply(0x800, 0, 0), 0.001f);
+            assertEquals(0.0f, calibration.leftX.apply(0x800), 0.001f);
         }
     }
 
@@ -210,7 +210,7 @@ class StickCalibrationTest {
         @Test
         @DisplayName("reports zero at the calibrated centre")
         void reportsZeroAtCentre() {
-            assertEquals(0.0f, centred().apply(0x800, 0, 0), 0.001f);
+            assertEquals(0.0f, centred().leftX.apply(0x800), 0.001f);
         }
 
         @Test
@@ -219,7 +219,7 @@ class StickCalibrationTest {
             StickCalibration calibration = centred();
 
             // Usable extent starts at 70% of 0x400 = 716.8; half of that should read ~0.5
-            float half = calibration.apply(0x800 + 358, 0, 0);
+            float half = calibration.leftX.apply(0x800 + 358);
             assertEquals(0.5f, half, 0.01f);
         }
 
@@ -228,8 +228,8 @@ class StickCalibrationTest {
         void reportsFullDeflectionBothWays() {
             StickCalibration calibration = centred();
 
-            assertEquals(1.0f, calibration.apply(0xFFF, 0, 0), 0.001f);
-            assertEquals(-1.0f, calibration.apply(0x000, 0, 0), 0.001f);
+            assertEquals(1.0f, calibration.leftX.apply(0xFFF), 0.001f);
+            assertEquals(-1.0f, calibration.leftX.apply(0x000), 0.001f);
         }
 
         @Test
@@ -239,16 +239,16 @@ class StickCalibrationTest {
             float extentBefore = calibration.extent(0, 0, 1);
 
             // A deflection past the calibrated extent becomes the new extent
-            assertEquals(1.0f, calibration.apply(0x800 + 900, 0, 0), 0.001f);
+            assertEquals(1.0f, calibration.leftX.apply(0x800 + 900), 0.001f);
             assertEquals(900, calibration.extent(0, 0, 1), 0.001f);
             assertTrue(calibration.extent(0, 0, 1) > extentBefore);
 
             // The same input now reads as exactly full scale rather than widening again
-            assertEquals(1.0f, calibration.apply(0x800 + 900, 0, 0), 0.001f);
+            assertEquals(1.0f, calibration.leftX.apply(0x800 + 900), 0.001f);
             assertEquals(900, calibration.extent(0, 0, 1), 0.001f);
 
             // A smaller deflection scales against the widened extent and leaves it alone
-            assertEquals(0.5f, calibration.apply(0x800 + 450, 0, 0), 0.001f);
+            assertEquals(0.5f, calibration.leftX.apply(0x800 + 450), 0.001f);
             assertEquals(900, calibration.extent(0, 0, 1), 0.001f);
         }
 
@@ -259,7 +259,7 @@ class StickCalibrationTest {
             StickCalibration calibration = centred();
 
             // -0x800 wraps to 0x800, the centre
-            assertEquals(0.0f, calibration.apply(-0x800, 0, 1), 0.001f);
+            assertEquals(0.0f, calibration.leftY.apply(-0x800), 0.001f);
         }
 
         @Test
@@ -270,7 +270,7 @@ class StickCalibrationTest {
             calibration.applyDefaultCalibration(1);
 
             // Widening left X must not touch left Y or either right axis
-            calibration.apply(0x800 + 2000, 0, 0);
+            calibration.leftX.apply(0x800 + 2000);
 
             assertEquals(2000, calibration.extent(0, 0, 1), 0.001f);
             assertEquals(0x700, calibration.extent(0, 1, 1), 0.001f);

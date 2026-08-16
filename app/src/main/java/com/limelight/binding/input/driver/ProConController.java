@@ -67,6 +67,14 @@ public class ProConController extends AbstractController {
     private byte sendPacketCount = 0;
     private final StickCalibration stickCalibration = new StickCalibration();
 
+    // Resolved once here rather than reached through stickCalibration on every read. Safe to hold:
+    // the four Axis objects are final fields of StickCalibration, created with it and mutated in
+    // place by the calibration load, so these references stay valid for the life of the driver.
+    private final StickCalibration.Axis leftStickXCal = stickCalibration.leftX;
+    private final StickCalibration.Axis leftStickYCal = stickCalibration.leftY;
+    private final StickCalibration.Axis rightStickXCal = stickCalibration.rightX;
+    private final StickCalibration.Axis rightStickYCal = stickCalibration.rightY;
+
     /** @return true if this is a Nintendo (0x057e) Switch Pro Controller (0x2009) */
     public static boolean canClaimDevice(UsbDevice device) {
         return device.getVendorId() == 0x057e && device.getProductId() == 0x2009;
@@ -452,10 +460,10 @@ public class ProConController extends AbstractController {
         int rawRightStickX = buffer.get(9) & 0xFF | ((buffer.get(10) & 0x0F) << 8);
         int rawRightStickY = ((buffer.get(10) & 0xF0) >> 4) | (buffer.get(11) << 4);
 
-        leftStickX = stickCalibration.apply(rawLeftStickX, 0, 0);
-        leftStickY = stickCalibration.apply(-rawLeftStickY - 1, 0, 1);
-        rightStickX = stickCalibration.apply(rawRightStickX, 1, 0);
-        rightStickY = stickCalibration.apply(-rawRightStickY - 1, 1, 1);
+        leftStickX = leftStickXCal.apply(rawLeftStickX);
+        leftStickY = leftStickYCal.apply(-rawLeftStickY - 1);
+        rightStickX = rightStickXCal.apply(rawRightStickX);
+        rightStickY = rightStickYCal.apply(-rawRightStickY - 1);
 
         accelX = buffer.getShort(37) * ACCEL_LSB_TO_MS2;
         accelY = buffer.getShort(39) * ACCEL_LSB_TO_MS2;
