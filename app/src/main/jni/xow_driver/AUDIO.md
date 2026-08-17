@@ -345,11 +345,23 @@ real host. Its LED brightness is `0x14`, the same value xow uses.
 `0x10/0x10` hardcoded here; the host takes the device's first advertised pair. And Audio Control:
 Volume travels device to host - it was sent the wrong way in an earlier experiment.
 
-Causation is still not proven: the capture shows Windows authenticating and the sub-device
-appearing, not that the first causes the second. But this driver does everything else Windows does
-- metadata, START, LED - and never sees a sub-device, while Windows additionally authenticates and
-does. The pad lists command `6` in both capability arrays. That is as strong as circumstantial
-evidence gets, and it makes the security handshake the lead worth spending on.
+**And the specification states the mechanism outright.** 2.2.1.4, under Secondary Device ID:
+
+> *"GIP supports enumeration of additional sub-devices after the primary device has completed the
+> Security Handshake successfully."*
+
+So this is not a correlation drawn from one capture. Sub-device enumeration is specified to follow
+a successful handshake, which is why no `dev=3` has ever appeared here: this driver has never
+authenticated. The capture shows the same thing happening in practice, and the pad lists command
+`6` in both capability arrays.
+
+Worth noting where that sentence was found, because it was nearly missed: under *Device IDs*,
+not under Security. Section 5 covers only whether the host enforces the exchange, and the
+specification documents every message type in 3.1.5.5 **except** this one - there is no mention
+anywhere of certificates, pre-master secrets, public keys or session keys. The omission looks
+deliberate. So the handshake's payload has to come from the capture and from xone, while
+everything around it - that it gates sub-devices, that it is a Unique sequence pool, when in the
+state machine it belongs - is in the specification and was worth searching for properly.
 
 ## Next step
 
