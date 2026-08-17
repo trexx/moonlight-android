@@ -178,11 +178,25 @@ that announces no audio client only repeats the result above.
    three conditions in the table above. The reporting lives in the driver behind `_DEBUG`, so this
    is re-checkable on another pad without a further build, and a pad that *does* expose a headset
    would show up in the same lines.
-2. **Try the missing setup messages** — `gip_set_audio_volume` above all, since it is the one real
-   GIP message xone sends that we do not. Now the cheapest untried lead.
-3. If that changes nothing, **the security handshake is the remaining lead**, and it is a large
-   piece of work: xone's `auth/` module is crypto plus certificate handling, and porting it is its
-   own project rather than a step in this one.
+2. ~~Try the missing setup messages.~~ **Done — no effect.** `gip_set_audio_volume` was implemented
+   (`CMD_AUDIO_CONFIG` subcommand `0x03`, `mute=0x04` unmuted, out/chat/in = 100/50/100, xone's own
+   values) and sent between the format request and the first samples. It transmitted without error
+   and produced nothing: no acknowledgement, no flow rate, no accessory client, across 35 s of
+   audio. The code was not kept — xone guards that call with `if (client->id && …)`, so it sends
+   volume only to an accessory client and never to device 0, which makes sending it to the pad
+   itself speculative and it is now also known to be useless. `gip_init_extra_data`'s undocumented
+   `0x4d`/`07 00` remains untried, but has no more reason behind it than "xone sends it".
+3. **The security handshake is now the only lead left**, and it is a large piece of work: xone's
+   `auth/` module is crypto plus certificate handling, and porting it is its own project rather
+   than a step in this one. Note the dongle transport *does* implement `set_encryption_key`,
+   programming a per-client key into the MT76 (`xone_mt76_set_client_key(&dongle->mt,
+   client->wcid, key, len)`) from a session key that module derives. xow does none of it and runs
+   the link unencrypted, which is evidently enough for input and rumble.
+
+   The hypothesis is that a pad withholds its audio client until the session is authenticated.
+   Nothing here proves that — it is what remains after the cheap explanations were measured and
+   ruled out. Scope the auth port and decide whether the payoff justifies it before starting,
+   rather than working from this file's earlier optimism.
 4. Only then port the rest of the protocol half described above, behind a setting that is **off by
    default**, degrading to the existing path rather than replacing it.
 5. Measure. The claim worth testing is the one this is for: that it beats a Bluetooth headset by
