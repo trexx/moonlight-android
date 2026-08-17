@@ -171,7 +171,29 @@ void Controller::registerJavaContext(JavaVM *vm, JNIEnv *env, jobject thiz) {
 
 void Controller::deviceAnnounced(uint8_t id, const AnnounceData *announce)
 {
-    Log::info("Device announced, product id: %04x", announce->productId);
+    Log::info("Device %u announced, vendor %04x product %04x",
+              id, announce->vendorId, announce->productId);
+
+    /*
+     * A sub-device, which for this pad means the 3.5 mm audio one: MS-GIPUSB 2.2.1.4 has these
+     * enumerate only once the primary has completed the security handshake, and Table 1 shows them
+     * carrying their own device ID, VID and PID.
+     *
+     * It must not go through initInput(). That is the primary device's setup - it ends by assigning
+     * to rumbleThread, and assigning over a thread that is already running calls std::terminate.
+     * A sub-device has no rumble, no input reports and no LED; what it has is its own metadata,
+     * which is where its audio formats are stated.
+     */
+    if (id != DEVICE_ID_CONTROLLER)
+    {
+        if (!requestIdentify(id))
+        {
+            Log::error("Failed to request metadata from device %u", id);
+        }
+
+        return;
+    }
+
     Log::debug(
         "Firmware version: %d.%d.%d.%d",
         announce->firmwareVersion.major,
@@ -452,10 +474,10 @@ static void logCommandDescriptors(const uint8_t *payload, size_t length, uint16_
     Log::info("Metadata commands: %u item(s): %s", count, list.c_str());
 }
 
-void Controller::identifyReceived(const IdentifyData *identify,
+void Controller::identifyReceived(uint8_t id, const IdentifyData *identify,
                                   const uint8_t *payload, size_t length)
 {
-    Log::info("Metadata received: %zu bytes", length);
+    Log::info("Metadata from device %u: %zu bytes", id, length);
 
     // Item widths are xone's, which are the sizes of the structs it maps each element onto:
     // gip_command_descriptor is 23 bytes and gip_firmware_version is 4. The 1 and 8 used here

@@ -295,7 +295,7 @@ protected:
      *
      * Not pure virtual: a device that never asks for metadata has no reason to implement it.
      */
-    virtual void identifyReceived(const IdentifyData *identify,
+    virtual void identifyReceived(uint8_t id, const IdentifyData *identify,
                                   const uint8_t *payload, size_t length) {}
 
     /*
@@ -394,7 +394,7 @@ protected:
     bool performRumble(RumbleData rumble);
     bool setLedMode(LedModeData mode);
     bool requestSerialNumber();
-    bool requestIdentify();
+    bool requestIdentify(uint8_t id = 0);
 
     /* Asks the device to use these formats. 'in' is capture, 'out' is what we render to it. */
     bool setAudioFormat(AudioFormat in, AudioFormat out);
@@ -444,6 +444,8 @@ private:
     bool acknowledgeChunk(const Frame &frame, uint32_t received, uint32_t remaining);
     bool handleChunk(const Frame &frame, uint32_t length, uint32_t offset, const Bytes &data);
     void dispatchChunked(uint8_t command, const uint8_t *data, size_t length);
+    // Device the in-flight fragmented transfer belongs to, so its dispatch reaches the right one
+    uint8_t chunkDeviceId = 0;
     uint8_t getSequence(bool accessory = false);
 
 #ifdef _DEBUG

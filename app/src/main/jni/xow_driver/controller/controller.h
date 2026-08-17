@@ -76,7 +76,7 @@ private:
     void guideButtonPressed(const GuideButtonData *button) override;
     void serialNumberReceived(const SerialData *serial) override;
     void inputReceived(const InputData *input) override;
-    void identifyReceived(const IdentifyData *identify,
+    void identifyReceived(uint8_t id, const IdentifyData *identify,
                           const uint8_t *payload, size_t length) override;
 
     void updateButtonStatus(const InputData *input);

@@ -319,15 +319,13 @@ bool GipDevice::handlePacket(const Bytes &packet)
         return false;
     }
 
-    // Ignore packets from accessories
+#ifdef _DEBUG
     if (frame->deviceId > 0)
     {
-#ifdef _DEBUG
         logAccessoryPacket(*frame, packet.size(), "packet");
+    }
 #endif
 
-        return true;
-    }
 
     // An unfragmented message may still carry the multi-byte length encoding: the single byte in
     // Frame tops out at 127, and MS-GIPUSB 2.2.10.4 has anything longer use the varint form with
@@ -536,6 +534,7 @@ bool GipDevice::handleChunk(const Frame &frame, uint32_t length, uint32_t offset
         chunkBuffer.assign(offset, 0);
         chunkLength = offset;
         chunkCommand = frame.command;
+        chunkDeviceId = frame.deviceId;
         chunkActive = true;
 
         // The first fragment's own payload starts at zero
@@ -617,7 +616,7 @@ void GipDevice::dispatchChunked(uint8_t command, const uint8_t *data, size_t len
         const IdentifyData *identify = reinterpret_cast<const IdentifyData *>(data);
 
         // Offsets are relative to the end of the opening blob, not the start of the message
-        identifyReceived(identify, data + sizeof(identify->unknown),
+        identifyReceived(chunkDeviceId, identify, data + sizeof(identify->unknown),
                          length - sizeof(identify->unknown));
 
         return;
@@ -1212,10 +1211,11 @@ bool GipDevice::sendAudioSamples(const uint8_t *samples, size_t length)
     return sendPacket(packet);
 }
 
-bool GipDevice::requestIdentify()
+bool GipDevice::requestIdentify(uint8_t id)
 {
     Frame frame = {};
 
+    frame.deviceId = id;
     frame.command = CMD_IDENTIFY;
     frame.type = TYPE_REQUEST;
     frame.sequence = getSequence();
