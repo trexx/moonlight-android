@@ -149,6 +149,19 @@ public class XboxWirelessController extends AbstractController{
     }
 
     /**
+     * Sets the headphone volume on this pad, 0 - 100.
+     *
+     * <p>Needed because pad audio bypasses AudioTrack and AAudio entirely, so Android's own volume
+     * — and therefore the TV remote — never reaches it. The driver asks the device to do the
+     * attenuation where the device allows it, and scales in software where it does not.
+     *
+     * @return whether the level was applied
+     */
+    public boolean setAudioVolume(int percent) {
+        return setAudioVolumeNative(handle, percent);
+    }
+
+    /**
      * @return audio session counters: packets sent, bytes dropped, packets late, send failures and
      *         the pad's last requested flow rate. For the performance overlay; reads relaxed
      *         atomics, so it neither locks nor disturbs the sending path.
@@ -173,6 +186,7 @@ public class XboxWirelessController extends AbstractController{
     native void registerNative(long handle);
     native boolean setAudioEnabledNative(long handle, boolean enable);
     native int[] audioStatsNative(long handle);
+    native boolean setAudioVolumeNative(long handle, int percent);
     native boolean hasAudioSupportNative(long handle);
     native void queueAudioNative(long handle, short[] samples, int count);
     native void sendRumble(long handle, short lowFreqMotor, short highFreqMotor);

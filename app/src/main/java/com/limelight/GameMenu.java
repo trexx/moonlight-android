@@ -194,9 +194,48 @@ public class GameMenu {
             options.add(new MenuOption(label, () -> game.togglePadAudio(controller)));
         }
 
+        // Only worth offering once a pad is actually taking audio - there is nothing to set the
+        // volume of otherwise, and the level applies to whichever pads are on rather than to one.
+        if (sink.hasTargets()) {
+            options.add(new MenuOption(game.getResources().getString(
+                    R.string.game_menu_pad_audio_volume, sink.getVolume()),
+                    () -> showPadAudioVolumeMenu()));
+        }
+
         options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
 
         showMenuDialog(getString(R.string.game_menu_pad_audio),
+                options.toArray(new MenuOption[0]));
+    }
+
+    /**
+     * Fixed volume steps rather than a slider.
+     *
+     * <p>This menu is driven by a d-pad from across a room, where a slider means holding a
+     * direction and guessing when to stop. Steps are one press each and land on the same value
+     * every time, which also makes "put it back where it was" possible.
+     *
+     * <p>Volume has to exist somewhere in the UI because pad audio bypasses AudioTrack and AAudio
+     * entirely, so the TV remote's volume keys do not reach it — see {@link PadAudioSink}.
+     */
+    private void showPadAudioVolumeMenu() {
+        PadAudioSink sink = game.getPadAudioSink();
+        int current = sink.getVolume();
+        List<MenuOption> options = new ArrayList<>();
+
+        for (int level : new int[]{100, 80, 60, 40, 20}) {
+            String label = game.getResources().getString(
+                    level == current ? R.string.game_menu_pad_audio_volume_current
+                                     : R.string.game_menu_pad_audio_volume_entry, level);
+
+            options.add(new MenuOption(label, () -> game.setPadAudioVolume(level)));
+        }
+
+        options.add(new MenuOption(getString(R.string.game_menu_pad_audio_volume_mute),
+                () -> game.setPadAudioVolume(0)));
+        options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
+
+        showMenuDialog(getString(R.string.game_menu_pad_audio_volume_title),
                 options.toArray(new MenuOption[0]));
     }
 

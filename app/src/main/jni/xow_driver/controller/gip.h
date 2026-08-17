@@ -244,6 +244,35 @@ protected:
     } __attribute__((packed));
 
     /*
+     * Audio Control: Volume Extended (MS-GIPUSB 3.2.5.1.1, Table 66). The same eight bytes travel
+     * in both directions: the device sends it unprompted to report its levels, and the host sends
+     * it to ask for new ones.
+     *
+     * Bit 7 of each level field is not part of the level - it is the device declaring whether the
+     * host may write that field. 3.2.5.1.1 is explicit that "the host SHOULD never issue a volume
+     * request unless the device flags at least one volume field as writeable", so the flags the
+     * device reported are preserved and echoed back rather than invented, and a request is only
+     * sent for a field the device said was writable.
+     *
+     * The plain (non-extended) Volume message is referenced by 3.1.5 but has no format table in
+     * the specification. Devices are told apart by payload length rather than guessing at it.
+     */
+    struct AudioVolumeData
+    {
+        uint8_t subcommand;
+        uint8_t flags;
+        uint8_t speaker;
+        uint8_t balance;
+        uint8_t microphone;
+        uint8_t sidetone;
+        uint8_t reserved[2];
+    } __attribute__((packed));
+
+    // Bit 7 of a volume field is the writable flag; the level is the low seven bits, 0 - 100.
+    static const uint8_t AUDIO_VOLUME_WRITABLE = 0x80;
+    static const uint8_t AUDIO_VOLUME_LEVEL = 0x7f;
+
+    /*
      * Upstream audio, which the pad sends whether or not it has a microphone. The flow rate is the
      * point of it here: it is how GIP absorbs clock drift, and a value that wanders away from the
      * configured buffer size means our audio is slipping against the device's clock.
@@ -406,6 +435,9 @@ protected:
 
     /* Asks the device to use these formats. 'in' is capture, 'out' is what we render to it. */
     bool setAudioFormat(uint8_t id, AudioFormat in, AudioFormat out);
+
+    /* Asks the device for new volume levels. Caller supplies the flags the device itself reported. */
+    bool setAudioVolume(uint8_t id, const AudioVolumeData &volume);
 
     /*
      * Sends one audio packet. 'length' must match the negotiated format's 8 ms buffer size, which

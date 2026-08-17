@@ -37,6 +37,18 @@ public class PadAudioSink {
     private volatile boolean formatSupported;
 
     /**
+     * Headphone volume for every pad taking audio, 0 - 100.
+     *
+     * <p>Held here rather than per pad so the level survives a pad being switched off and on, or a
+     * second pad joining — the user set a listening level, not a property of one controller. It is
+     * a session value with no preference behind it, matching the enable toggle it sits next to.
+     */
+    private volatile int volumePercent = DEFAULT_VOLUME;
+
+    /** Full scale. The device attenuates from here, so anything lower is throwing away signal. */
+    public static final int DEFAULT_VOLUME = 100;
+
+    /**
      * Records whether this stream's audio can go to a pad.
      *
      * <p>GIP tops out at 48 kHz stereo, and the samples are forwarded verbatim — there is no
@@ -55,6 +67,26 @@ public class PadAudioSink {
     /** @return true if this stream's format can be sent to a pad at all */
     public boolean isFormatSupported() {
         return formatSupported;
+    }
+
+    /** @return the headphone volume every pad is set to, 0 - 100 */
+    public int getVolume() {
+        return volumePercent;
+    }
+
+    /**
+     * Sets the headphone volume on every pad currently taking audio, and on any that joins later.
+     *
+     * <p>Synchronized with {@link #enable} so a pad cannot be added between the level being stored
+     * and it being applied, which would leave that one pad at the wrong volume until the next
+     * change.
+     */
+    public synchronized void setVolume(int percent) {
+        volumePercent = Math.max(0, Math.min(100, percent));
+
+        for (XboxWirelessController target : targets) {
+            target.setAudioVolume(volumePercent);
+        }
     }
 
     /**
@@ -160,6 +192,10 @@ public class PadAudioSink {
             LimeLog.warning("Pad refused audio");
             return false;
         }
+
+        // Before publishing the pad, so it is never briefly streaming at a level the user did not
+        // choose. Harmless at the default of 100, which is what the device starts at anyway.
+        controller.setAudioVolume(volumePercent);
 
         XboxWirelessController[] updated = new XboxWirelessController[targets.length + 1];
         System.arraycopy(targets, 0, updated, 0, targets.length);

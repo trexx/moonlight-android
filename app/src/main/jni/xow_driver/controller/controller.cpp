@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <linux/input.h>
@@ -824,6 +825,39 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
 
     if (subcommand == AUDIO_CTRL_VOLUME)
     {
+        /*
+         * Record what the device says before anything else, and do it whenever it arrives rather
+         * than only during startup - 3.2.5.1.1 has the device re-send this whenever a field
+         * changes, which is how a volume control on the device itself would reach us.
+         */
+        if (length >= sizeof(AudioVolumeData))
+        {
+            memcpy(&audioVolumeReported, data, sizeof(AudioVolumeData));
+            audioVolumeKnown = true;
+
+            Log::info(
+                "Audio: device volume, speaker %u%% (%s), balance %u, mic %u%%, flags 0x%02x",
+                audioVolumeReported.speaker & AUDIO_VOLUME_LEVEL,
+                (audioVolumeReported.speaker & AUDIO_VOLUME_WRITABLE) ? "writable" : "read-only",
+                audioVolumeReported.balance & AUDIO_VOLUME_LEVEL,
+                audioVolumeReported.microphone & AUDIO_VOLUME_LEVEL,
+                audioVolumeReported.flags
+            );
+        }
+        else
+        {
+            // The plain Volume message, which the specification names but never gives a layout
+            // for. Nothing can be read from it, so volume falls back to software scaling.
+            Log::info("Audio: device reported volume in %zu bytes, not the extended form", length);
+        }
+
+        // Apply whatever the user had already chosen. Does nothing at the default of 100 on a
+        // writable device, and installs the software gain on one that is not.
+        if (audioVolumePercent != 100 || !audioVolumeKnown)
+        {
+            setAudioVolume(audioVolumePercent);
+        }
+
         if (audioState != AUDIO_AWAITING_VOLUME)
         {
             return;
@@ -835,6 +869,45 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
         stopAudioThread = false;
         audioThread = std::thread(&Controller::processAudio, this);
     }
+}
+
+bool Controller::setAudioVolume(uint8_t percent)
+{
+    if (percent > 100)
+    {
+        percent = 100;
+    }
+
+    audioVolumePercent = percent;
+
+    // The device does the attenuation itself where it will let us ask, which is both free and what
+    // 3.2.5.1.1 intends. Only the speaker field is touched: chat balance and microphone are not
+    // ours to move, and this client has no microphone at all.
+    if (audioVolumeKnown && (audioVolumeReported.speaker & AUDIO_VOLUME_WRITABLE))
+    {
+        audioSoftwareScale.store(256, std::memory_order_relaxed);
+
+        AudioVolumeData volume = audioVolumeReported;
+
+        volume.subcommand = AUDIO_CTRL_VOLUME;
+        volume.speaker = AUDIO_VOLUME_WRITABLE | percent;
+
+        return GipDevice::setAudioVolume(audioDeviceId, volume);
+    }
+
+    /*
+     * Nothing to ask, so attenuate the samples ourselves. 8.8 fixed point, so 100% lands exactly on
+     * unity and skips the scaling loop rather than multiplying every sample by 1.
+     */
+    audioSoftwareScale.store(static_cast<uint16_t>((percent * 256) / 100),
+                             std::memory_order_relaxed);
+
+    if (audioVolumeKnown)
+    {
+        Log::info("Audio: device volume is read-only, scaling in software to %u%%", percent);
+    }
+
+    return true;
 }
 
 void Controller::queueAudio(const int16_t *samples, size_t count)
@@ -915,6 +988,23 @@ void Controller::processAudio()
 
             std::copy(audioBuffer.begin(), audioBuffer.begin() + AUDIO_PACKET_BYTES, packet);
             audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + AUDIO_PACKET_BYTES);
+        }
+
+        /*
+         * Only reached on a device that refuses host volume requests; setAudioVolume() leaves this
+         * at unity otherwise, so the usual cost is one relaxed load and a comparison per 8 ms
+         * packet rather than anything per sample.
+         */
+        uint16_t scale = audioSoftwareScale.load(std::memory_order_relaxed);
+
+        if (scale != 256)
+        {
+            int16_t *samples = reinterpret_cast<int16_t *>(packet);
+
+            for (size_t i = 0; i < sizeof(packet) / sizeof(int16_t); i++)
+            {
+                samples[i] = static_cast<int16_t>((samples[i] * scale) >> 8);
+            }
         }
 
         // Outside the lock: this is a blocking USB transfer, and the decode thread must never

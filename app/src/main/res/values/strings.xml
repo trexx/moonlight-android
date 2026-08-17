@@ -130,6 +130,11 @@
     <string name="game_menu_pad_audio_off">Off</string>
     <string name="game_menu_pad_audio_unavailable">Off (two controllers already)</string>
     <string name="game_menu_pad_audio_unsupported">Unavailable (no headphone audio)</string>
+    <string name="game_menu_pad_audio_volume">Headphone volume: %1$d%%</string>
+    <string name="game_menu_pad_audio_volume_title">Headphone volume</string>
+    <string name="game_menu_pad_audio_volume_entry">%1$d%%</string>
+    <string name="game_menu_pad_audio_volume_current">%1$d%% (current)</string>
+    <string name="game_menu_pad_audio_volume_mute">Mute</string>
     <string name="game_menu_disconnect">Disconnect</string>
     <string name="game_menu_cancel">Cancel</string>
     <string name="game_menu_send_keys">Send special Key(s)</string>

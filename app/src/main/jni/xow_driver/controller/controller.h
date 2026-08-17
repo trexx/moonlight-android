@@ -70,6 +70,23 @@ public:
     void audioStats(uint32_t out[5]) const;
 
     /*
+     * Sets the headphone volume, 0 - 100.
+     *
+     * Prefers the protocol: a device that flags its speaker volume writable is sent an Audio
+     * Control Volume Extended message, which costs nothing per packet and lets the device do the
+     * attenuation in its own hardware. A device that flags it read-only is scaled in software on
+     * the sender thread instead, because the alternative is no volume control at all - the pad
+     * audio path bypasses AudioTrack and AAudio, so Android's own volume never reaches it.
+     *
+     * Safe to call before audio starts; the level is remembered and applied once the device
+     * reports its volume state.
+     */
+    bool setAudioVolume(uint8_t percent);
+
+    /* @return the level last requested, 0 - 100. */
+    uint8_t audioVolume() const { return audioVolumePercent; }
+
+    /*
      * Queues interleaved 16-bit stereo PCM for this pad. Called from Moonlight's audio decode
      * thread, so it only copies into the ring and returns - the blocking USB write happens on the
      * sender thread. Samples are dropped rather than queued without limit when the ring is full.
@@ -185,12 +202,34 @@ private:
     std::atomic<uint32_t> audioSendFailures{0};
 
     /*
-     * Times the sender found the ring completely empty. Waiting as such is normal - the ring is
-     * how this paces itself, so the sender waits on every packet by design - but a ring drained to
-     * nothing means the host stopped supplying in time, which is what a gap in the audio sounds
-     * like.
+     * Times the sender waited longer than the cadence for a packet's worth of samples. Waiting as
+     * such is normal and says nothing - the ring is how this paces itself, so the sender waits on
+     * every packet by design. Waiting *past* AUDIO_STARVE_TIMEOUT is the host failing to supply in
+     * time, which is what a gap in the audio sounds like.
+     *
+     * An earlier version counted an empty ring instead, which is the normal steady state: it read
+     * 20% through audio that was audibly perfect.
      */
     std::atomic<uint32_t> audioStarved{0};
+
+    /*
+     * The device's own volume state, as it last reported it (MS-GIPUSB 3.2.5.1.1). Kept because a
+     * host volume request has to echo the device's writability flags back, and because whether the
+     * speaker field is writable at all decides how volume is applied - see setAudioVolume().
+     */
+    AudioVolumeData audioVolumeReported = {};
+    bool audioVolumeKnown = false;
+
+    // What the user asked for, 0 - 100. Remembered across a pad reconnecting or audio restarting.
+    uint8_t audioVolumePercent = 100;
+
+    /*
+     * Fallback gain for a device that reports its speaker volume read-only, as 8.8 fixed point:
+     * 256 is unity and skips the scaling entirely. Applied on the sender thread rather than at
+     * queue time so the decode thread stays a plain copy, and read once per packet rather than
+     * once per sample so the common unity case costs one comparison per 8 ms.
+     */
+    std::atomic<uint16_t> audioSoftwareScale{256};
 
     void notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge);
 

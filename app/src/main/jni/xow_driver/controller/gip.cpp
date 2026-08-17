@@ -1195,6 +1195,24 @@ bool GipDevice::setAudioFormat(uint8_t id, AudioFormat in, AudioFormat out)
     return sendPacket(packet);
 }
 
+bool GipDevice::setAudioVolume(uint8_t id, const AudioVolumeData &volume)
+{
+    Frame frame = {};
+
+    frame.deviceId = id;
+    frame.command = CMD_AUDIO_CONFIG;
+    frame.type = TYPE_REQUEST;
+    frame.sequence = getSequence();
+    frame.length = sizeof(AudioVolumeData);
+
+    Bytes packet;
+
+    packet.append(frame);
+    packet.append(volume);
+
+    return sendPacket(packet);
+}
+
 bool GipDevice::sendAudioSamples(uint8_t id, const uint8_t *samples, size_t length)
 {
     // Audio needs the extended length encoding - 1536 bytes will not fit the single byte the

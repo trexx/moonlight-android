@@ -2374,6 +2374,17 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }).start();
     }
 
+    /**
+     * Sets the headphone volume on every pad taking audio.
+     *
+     * <p>Runs on the calling thread rather than being posted off it: a volume change is one short
+     * GIP command per pad, not the format renegotiation and thread teardown that enabling and
+     * disabling involve.
+     */
+    public void setPadAudioVolume(int percent) {
+        padAudioSink.setVolume(percent);
+    }
+
     /** Disabling always succeeds; wrapped so the toggle above can treat both directions alike. */
     private boolean disablePadAudio(XboxWirelessController controller) {
         padAudioSink.disable(controller);
