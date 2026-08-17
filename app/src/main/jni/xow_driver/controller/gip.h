@@ -36,8 +36,8 @@ class Bytes;
  *   <- Identify             (metadata response)
  *   -> Set device state     (start)                    Idle -> Active
  *   -> LED mode: dim
- *   -> Serial number: 0x04
- *   <- Serial number        (from controller)
+ *   -> Extended command     (get serial number)
+ *   <- Extended command     (serial number response)
  *
  * Start comes after the metadata response rather than alongside the request: a device leaves the
  * Hello stage only on receipt of a state message, and an audio sub-device announces itself only
@@ -171,9 +171,27 @@ protected:
         uint8_t brightness;
     } __attribute__((packed));
 
+    /*
+     * Sub-commands of the Extended Command message, 0x1e (MS-GIPUSB 3.1.5.5.10). The message type
+     * is an envelope rather than a single command - xow named it CMD_SERIAL_NUM after the only one
+     * of these it uses.
+     */
+    enum ExtendedCommand
+    {
+        EXT_CMD_CAPABILITIES = 0x00,
+        EXT_CMD_TELEMETRY = 0x02,
+        EXT_CMD_SERIAL_NUMBER = 0x04,
+    };
+
+    /*
+     * Response to Get Serial Number (MS-GIPUSB 3.1.5.5.10.2). Every extended response opens with
+     * its sub-command byte and a status byte - which is what xow read as one 16-bit "unknown" -
+     * and the fields after status are present only when status is 0, EXT_CMD_STATUS_OK.
+     */
     struct SerialData
     {
-        uint16_t unknown;
+        uint8_t subcommand;
+        uint8_t status;
         char serialNumber[14];
     } __attribute__((packed));
 

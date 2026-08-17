@@ -36,7 +36,7 @@ enum FrameCommand
     CMD_AUDIO_CONFIG = 0x08,
     CMD_RUMBLE = 0x09,
     CMD_LED_MODE = 0x0a,
-    CMD_SERIAL_NUM = 0x1e,
+    CMD_EXTENDED = 0x1e,
     CMD_INPUT = 0x20,
     CMD_AUDIO_SAMPLES = 0x60,
 };
@@ -403,7 +403,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
     }
 
     else if (
-        frame->command == CMD_SERIAL_NUM &&
+        frame->command == CMD_EXTENDED &&
         payloadLength == sizeof(SerialData) &&
         data.size() >= sizeof(SerialData)
     ) {
@@ -492,16 +492,18 @@ bool GipDevice::requestSerialNumber()
 {
     Frame frame = {};
 
-    frame.command = CMD_SERIAL_NUM;
+    frame.command = CMD_EXTENDED;
     frame.type = TYPE_REQUEST | TYPE_ACK;
     frame.sequence = getSequence();
     frame.length = sizeof(uint8_t);
 
     Bytes out;
 
-    // The purpose of other values is still to be discovered
+    // The payload of an extended command is its sub-command byte (MS-GIPUSB 3.1.5.5.10). The
+    // others are 0x00 Get Capabilities, which every device supporting 0x1e must implement, and
+    // 0x02 Get Telemetry Data. Nothing here needs either.
     out.append(frame);
-    out.append(static_cast<uint8_t>(0x04));
+    out.append(static_cast<uint8_t>(EXT_CMD_SERIAL_NUMBER));
 
     return sendPacket(out);
 }
