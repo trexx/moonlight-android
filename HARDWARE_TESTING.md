@@ -428,6 +428,15 @@ something other than the Xbox button.
       line may be reading the wrong bytes entirely, and a 48 kHz answer cannot be believed.
 - [ ] **No `Malformed chunk`, `Truncated chunk` or `Chunk overruns` lines** in normal operation.
       Occasional ones during pairing are worth noting rather than ignoring.
+- [x] **Accessory clients are reported rather than dropped in silence.** Debug builds log every
+      packet addressed to a device id above zero, at the parser's accessory filter, at the
+      fragmented-message branch that runs ahead of it, and at the wcid lookup above both. Confirm
+      `Accessory diagnostics compiled in` appears once per pad connect first — without it an empty
+      result means nothing, since it cannot be told from the diagnostics being compiled out.
+      *Xbox One pad (PID `02dd`) on adapter `045e:02fe`, Shield TV: zero accessory packets with the
+      headset connected before power-on, zero when hot-plugged mid-stream, and zero across 24 s of
+      audio actually being transmitted. Worth re-running on a different pad generation — a pad that
+      does expose a headset would appear in the same lines.*
 - [ ] **Nothing regresses if metadata never arrives.** A pad that does not answer should still work
       exactly as before — the request failing is logged and otherwise ignored.
 

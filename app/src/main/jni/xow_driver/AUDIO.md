@@ -123,9 +123,23 @@ So the audio endpoint is **never** device 0 — integrated jack or old stereo-he
 `handlePacket()` discards every packet with device id > 0, so we could not see such a client even
 if it appeared.
 
-**But no accessory client ever announced**, with or without a headset connected, so lifting that
-filter is necessary and not sufficient. The same pad plays headset audio on Windows, so the
-hardware is capable and the gap is in this driver.
+**No accessory client ever announces**, and that has now been tested rather than inferred. Debug
+builds report every packet addressed to a device id above zero, at both places one could be lost -
+the parser's accessory filter and the fragmented-message branch that runs ahead of it - plus the
+wcid lookup above them, in case a headset were to associate as its own wireless client instead of
+sharing the pad's. Across three conditions on an Xbox One pad (PID `02dd`) over adapter
+`045e:02fe`, all three counters stayed at zero:
+
+| Condition | Accessory packets |
+|---|---|
+| Headset connected before the pad powers on | 0 |
+| Headset hot-plugged while connected and streaming | 0 |
+| Audio config sent anyway, 24 s of transmission | 0 |
+
+The metadata was byte-identical in all three: two data classes, `0x20` and `0x09`, no audio
+formats. So lifting the accessory filter would achieve nothing on its own - there is nothing
+behind it to let through. The same pad plays headset audio on Windows, so the hardware is capable
+and the gap is in this driver.
 
 Two candidates, neither tested:
 
@@ -160,11 +174,12 @@ is not the cause of what is described above, but it is a real gap.
 The order below is deliberately diagnosis-first. Building more of the protocol against a device
 that announces no audio client only repeats the result above.
 
-1. **Find out why no accessory client announces.** Lift the `deviceId > 0` filter in
-   `handlePacket()` behind a debug log first and watch what, if anything, arrives when a headset
-   is plugged in. That is one build cycle and it decides everything after it.
-2. If nothing announces, **try the missing setup messages** — `gip_set_audio_volume` above all,
-   since it is the one real GIP message xone sends that we do not.
+1. ~~Find out whether an accessory client announces.~~ **Done — it does not**, under any of the
+   three conditions in the table above. The reporting lives in the driver behind `_DEBUG`, so this
+   is re-checkable on another pad without a further build, and a pad that *does* expose a headset
+   would show up in the same lines.
+2. **Try the missing setup messages** — `gip_set_audio_volume` above all, since it is the one real
+   GIP message xone sends that we do not. Now the cheapest untried lead.
 3. If that changes nothing, **the security handshake is the remaining lead**, and it is a large
    piece of work: xone's `auth/` module is crypto plus certificate handling, and porting it is its
    own project rather than a step in this one.
