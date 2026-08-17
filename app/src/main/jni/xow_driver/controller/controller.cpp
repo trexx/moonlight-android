@@ -252,7 +252,7 @@ void Controller::deviceAnnounced(uint8_t id, const AnnounceData *announce)
         return;
     }
 
-    initInput(announce);
+    initInput();
 }
 
 void Controller::statusReceived(uint8_t id, const StatusData *status)
@@ -392,7 +392,7 @@ void Controller::notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge)
                         static_cast<jbyte>(level), static_cast<jbyte>(charge));
 }
 
-void Controller::initInput(const AnnounceData *announce)
+void Controller::initInput()
 {
     // Ask for metadata and wait for the answer before starting the device. MS-GIPUSB 3.1.1 has the
     // device go Arrival -> Idle on the metadata request and Idle -> Active on Set Device State, and
@@ -910,9 +910,25 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
     }
 }
 
-bool Controller::resetDevice()
+void Controller::begin()
 {
-    return setDeviceState(DEVICE_ID_CONTROLLER, STATE_RESET);
+    /*
+     * For a transport whose device never announces. A cabled pad has already been through Arrival
+     * by the time we claim it, and MS-GIPUSB 2.2.1 has a device Hello only while in Arrival, so
+     * waiting for one waits forever.
+     *
+     * Set Device State: RESET was tried here first, on the reasoning that 3.1.1 makes it a
+     * protocol-level return to Arrival. On this hardware it takes the device off the USB bus
+     * entirely - the read fails with NO_DEVICE and Android re-attaches it, permission prompt and
+     * all, round and round. So nothing is reset and nothing is restarted: the device is simply
+     * asked for its metadata where it stands, which is the least it can be sent.
+     */
+    if (inputInitialised.exchange(true))
+    {
+        return;
+    }
+
+    initInput();
 }
 
 void Controller::setAudioPacketBytes(size_t bytes)

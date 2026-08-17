@@ -63,19 +63,18 @@ public:
     bool supportsAudioOut() const;
 
     /*
-     * Sends the device back through its own state machine with Set Device State: RESET.
+     * Starts initialisation without waiting for an announce, for a transport whose device will
+     * never send one.
      *
-     * For a transport that attaches to a device already past Arrival. MS-GIPUSB 2.2.1 has a device
-     * send Hello only while in Arrival and "no other messages" until the host answers, so a device
-     * already in Active never announces and the whole initialisation sequence - metadata, start,
-     * the security handshake, the audio sub-device - never begins. A GIP reset returns it to
-     * Arrival, where it Hellos and the ordinary path takes over.
+     * MS-GIPUSB 2.2.1 has a device Hello only while in the Arrival state, and a cabled pad has
+     * already been taken through Arrival by Android's own driver before we claim it - which is why
+     * it works without us. Everything here hangs off the announce, so on a cable it has to be
+     * started by hand instead.
      *
-     * Deliberately not a USB reset, which is what xone does here. That re-enumerates the device and
-     * would invalidate the descriptor and interface claim Android handed us; this is a protocol
-     * message and leaves USB alone.
+     * Idempotent, and shares the guard with the announce path so the two cannot both build the
+     * input state.
      */
-    bool resetDevice();
+    void begin();
 
     /*
      * Bytes per audio packet, which sets the cadence with it: the ring paces itself by waiting for
@@ -141,7 +140,7 @@ private:
     std::vector<uint8_t> audioFormats;
 
     /* Device initialization */
-    void initInput(const AnnounceData *announce);
+    void initInput();
 
     /*
      * Moves the device from Idle to Active and finishes setup. Idempotent: whichever of the
