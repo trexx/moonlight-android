@@ -136,11 +136,21 @@ void Controller::deviceAnnounced(uint8_t id, const AnnounceData *announce)
         announce->firmwareVersion.revision
     );
     Log::debug(
-        "Hardware version: %d.%d.%d.%d",
+        "Hardware version: %d.%d",
         announce->hardwareVersion.major,
-        announce->hardwareVersion.minor,
-        announce->hardwareVersion.build,
-        announce->hardwareVersion.revision
+        announce->hardwareVersion.minor
+    );
+
+    // Logged because the security version decides which handshake a pad expects, and because the
+    // specification requires all three to be 1.0 - anything else is a device worth knowing about.
+    Log::debug(
+        "Protocol versions: RF %d.%d, security %d.%d, GIP %d.%d",
+        announce->rfVersion.major,
+        announce->rfVersion.minor,
+        announce->securityVersion.major,
+        announce->securityVersion.minor,
+        announce->gipVersion.major,
+        announce->gipVersion.minor
     );
 
     initInput(announce);

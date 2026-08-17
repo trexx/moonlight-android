@@ -94,7 +94,23 @@ protected:
             uint16_t minor;
             uint16_t build;
             uint16_t revision;
-        } __attribute__((packed)) firmwareVersion, hardwareVersion;
+        } __attribute__((packed)) firmwareVersion;
+
+        /*
+         * Four separate versions, one byte per part (MS-GIPUSB Table 27, offsets 24 to 31). xow
+         * read all eight bytes as a second four-part 16-bit version and called the lot
+         * "hardwareVersion", which is why a pad reporting hardware 2.1 logged as "258.1.1.1":
+         * 0x0102 is the major and minor bytes read as one little-endian word.
+         *
+         * The last three are protocol versions the specification pins: RF and GIP MUST both be
+         * 1.0, and so MUST security. The security one is the useful one - it says which handshake
+         * a pad expects before we have to infer it from what it answers.
+         */
+        struct
+        {
+            uint8_t major;
+            uint8_t minor;
+        } __attribute__((packed)) hardwareVersion, rfVersion, securityVersion, gipVersion;
     } __attribute__((packed));
 
     struct StatusData
