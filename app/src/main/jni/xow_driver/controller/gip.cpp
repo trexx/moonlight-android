@@ -795,7 +795,9 @@ bool GipDevice::sendAuthPacket(uint8_t command, const uint8_t *payload, size_t l
     putBigEndian16(raw + 4, static_cast<uint16_t>(dataLength));
 
     raw[6] = command;
-    raw[7] = 0x01;                                      // security protocol major version
+    // Security protocol major version, which the command itself determines: the v2 command set
+    // starts at AUTH2_HOST_HELLO.
+    raw[7] = command >= AUTH2_HOST_HELLO ? 0x02 : 0x01;
     putBigEndian16(raw + 8, static_cast<uint16_t>(length));
 
     if (length > 0)
@@ -814,7 +816,12 @@ bool GipDevice::sendAuthPacket(uint8_t command, const uint8_t *payload, size_t l
 
 bool GipDevice::sendAuthHostHello()
 {
+    // Always opens as v1; a v2 device upgrades from here. Reset so a reconnecting pad is not still
+    // treated as v2 from its previous session.
+    authVersion2 = false;
+
     authTranscript.clear();
+    authPublicKeyClient2.clear();
     authMasterSecret.clear();
     authPublicKey.clear();
     authRandomClient.clear();
@@ -984,6 +991,81 @@ bool GipDevice::sendAuthHostSecret()
 }
 
 /*
+ * Restarts the exchange as version 2, after a device declined version 1.
+ *
+ * Everything from the first attempt is discarded, the transcript above all: it is hashed into both
+ * finish messages, so carrying a v1 message into a v2 transcript would make the two sides disagree
+ * about what was said and fail the exchange at the very last step.
+ */
+bool GipDevice::sendAuthHostHello2()
+{
+    authVersion2 = true;
+
+    authTranscript.clear();
+    authMasterSecret.clear();
+    authPublicKey.clear();
+    authPublicKeyClient2.clear();
+    authRandomClient.clear();
+
+    // A fresh random too - the first one belongs to an exchange that is being abandoned
+    authRandomHost = GipCrypto::randomBytes(AUTH_RANDOM_LENGTH);
+
+    if (authRandomHost.size() != AUTH_RANDOM_LENGTH)
+    {
+        Log::error("Security: no random source");
+
+        return false;
+    }
+
+    // 32 random bytes then four the capture leaves zero, where v1 has eight
+    std::vector<uint8_t> payload(AUTH_RANDOM_LENGTH + 4, 0);
+
+    std::copy(authRandomHost.begin(), authRandomHost.end(), payload.begin());
+
+    return sendAuthPacket(AUTH2_HOST_HELLO, payload.data(), payload.size());
+}
+
+/*
+ * Version 2's replacement for the RSA-encrypted pre-master secret: agree a secret by ECDH and send
+ * our public key so the device can agree the same one.
+ *
+ * The certificate is not involved. v1 encrypts to the key inside it, which at least ties the secret
+ * to that certificate; v2 never uses it, so the exchange is unauthenticated either way - there was
+ * no trust decision in v1 either, since the certificate is never validated.
+ */
+bool GipDevice::sendAuthHostPubkey()
+{
+    // Our public key and the agreed secret in one call; the private half is never needed again
+    std::vector<uint8_t> result = GipCrypto::ecdhP256(authPublicKeyClient2.data(),
+                                                      authPublicKeyClient2.size());
+
+    if (result.size() != AUTH2_PUBKEY_LENGTH + AUTH2_SECRET_LENGTH)
+    {
+        Log::error("Security: ECDH failed");
+
+        return false;
+    }
+
+    std::vector<uint8_t> randoms(authRandomHost);
+
+    randoms.insert(randoms.end(), authRandomClient.begin(), authRandomClient.end());
+
+    authMasterSecret = computePrf("Master Secret",
+                                  std::vector<uint8_t>(result.begin() + AUTH2_PUBKEY_LENGTH,
+                                                       result.end()),
+                                  randoms, AUTH_SECRET_LENGTH);
+
+    if (authMasterSecret.empty())
+    {
+        Log::error("Security: failed to derive the master secret");
+
+        return false;
+    }
+
+    return sendAuthPacket(AUTH2_HOST_PUBKEY, result.data(), AUTH2_PUBKEY_LENGTH);
+}
+
+/*
  * Proves we derived the same master secret, by sending a value derived from it and from every
  * handshake message so far. The device checks it and answers with its own.
  */
@@ -1005,7 +1087,8 @@ bool GipDevice::sendAuthFinish()
         return false;
     }
 
-    return sendAuthPacket(AUTH_HOST_FINISH, finish.data(), finish.size());
+    return sendAuthPacket(authVersion2 ? AUTH2_HOST_FINISH : AUTH_HOST_FINISH,
+                          finish.data(), finish.size());
 }
 
 /*
@@ -1026,6 +1109,23 @@ void GipDevice::handleAuthAcknowledge()
 
         case AUTH_HOST_FINISH:
             requestAuthPacket(AUTH_CLIENT_FINISH, 0x0044);
+            break;
+
+        /*
+         * Version 2. Sizes are xone's packet structures: a client hello is 32 random plus 140
+         * unknown, a certificate 768, a public key 64 plus 64 unknown, and a finish two 32-byte
+         * halves. Unverified against hardware - see the header.
+         */
+        case AUTH2_HOST_HELLO:
+            requestAuthPacket(AUTH2_CLIENT_HELLO, 172);
+            break;
+
+        case AUTH2_HOST_PUBKEY:
+            sendAuthFinish();
+            break;
+
+        case AUTH2_HOST_FINISH:
+            requestAuthPacket(AUTH2_CLIENT_FINISH, 64);
             break;
 
         default:
@@ -1089,7 +1189,26 @@ void GipDevice::handleAuthPacket(const uint8_t *data, size_t length)
      */
     uint8_t version = data[7];
 
-    if (version != 0x01 || data[3] != data[6])
+    /*
+     * A device that wants version 2 says so twice over: the data header's version byte reads 0x02,
+     * and its two command bytes disagree because the handshake header still echoes the v1 command
+     * we sent. Either is enough, and both are checked - the version byte is the direct statement
+     * and the mismatch is the consequence, which is all xone looks at.
+     *
+     * The response is to start again rather than to translate mid-exchange: the transcript is
+     * hashed into the finish messages, so a v2 handshake has to hash a v2 transcript and nothing
+     * exchanged so far may remain in it.
+     */
+    if (!authVersion2 && (version == 0x02 || data[3] != data[6]))
+    {
+        Log::info("Security: device wants protocol v2, restarting the exchange");
+
+        sendAuthHostHello2();
+
+        return;
+    }
+
+    if (version != (authVersion2 ? 0x02 : 0x01) || data[3] != data[6])
     {
         Log::error("Security: device wants protocol v%u, which is not implemented", version);
 
@@ -1104,9 +1223,19 @@ void GipDevice::handleAuthPacket(const uint8_t *data, size_t length)
     switch (command)
     {
         case AUTH_CLIENT_HELLO:
+        case AUTH2_CLIENT_HELLO:
             if (payloadLength >= AUTH_RANDOM_LENGTH)
             {
                 authRandomClient.assign(payload, payload + AUTH_RANDOM_LENGTH);
+            }
+            break;
+
+        // Version 2 asks for the certificate and hashes it into the transcript, but takes no key
+        // from it - the key material is the ECDH exchange two messages later.
+        case AUTH2_CLIENT_PUBKEY:
+            if (payloadLength >= AUTH2_PUBKEY_LENGTH)
+            {
+                authPublicKeyClient2.assign(payload, payload + AUTH2_PUBKEY_LENGTH);
             }
             break;
 
@@ -1139,6 +1268,26 @@ void GipDevice::handleAuthPacket(const uint8_t *data, size_t length)
             }
             break;
 
+        case AUTH2_CLIENT_HELLO:
+            requestAuthPacket(AUTH2_CLIENT_CERTIFICATE, 768);
+            break;
+
+        case AUTH2_CLIENT_CERTIFICATE:
+            requestAuthPacket(AUTH2_CLIENT_PUBKEY, 128);
+            break;
+
+        case AUTH2_CLIENT_PUBKEY:
+            if (!authPublicKeyClient2.empty())
+            {
+                sendAuthHostPubkey();
+            }
+            else
+            {
+                Log::error("Security: device sent no usable public key");
+            }
+            break;
+
+        case AUTH2_CLIENT_FINISH:
         case AUTH_CLIENT_FINISH:
         {
             /*

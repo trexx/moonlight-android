@@ -369,8 +369,13 @@ protected:
     } __attribute__((packed));
 
     /*
-     * Handshake commands, version 1. The v2 set at 0x21-0x27 negotiates ECDH instead of RSA and is
-     * deliberately absent: the captured exchange is v1 throughout, so nothing needs it yet.
+     * Handshake commands. Version 1 exchanges an RSA-encrypted pre-master secret; version 2
+     * replaces that one step with an ECDH exchange over P-256 and leaves everything else alone -
+     * same framing, same transcript, same PRF, same finish.
+     *
+     * Which one is in use is not chosen up front. The host opens with a v1 hello and a v2 device
+     * answers with its two header command bytes disagreeing, at which point the handshake restarts
+     * as v2 from a fresh transcript. See handleAuthPacket().
      */
     enum AuthCommand
     {
@@ -380,6 +385,14 @@ protected:
         AUTH_HOST_SECRET = 0x05,
         AUTH_HOST_FINISH = 0x07,
         AUTH_CLIENT_FINISH = 0x08,
+
+        AUTH2_HOST_HELLO = 0x21,
+        AUTH2_CLIENT_HELLO = 0x22,
+        AUTH2_CLIENT_CERTIFICATE = 0x23,
+        AUTH2_CLIENT_PUBKEY = 0x24,
+        AUTH2_HOST_PUBKEY = 0x25,
+        AUTH2_HOST_FINISH = 0x26,
+        AUTH2_CLIENT_FINISH = 0x27,
     };
 
     enum AuthOption
@@ -401,6 +414,14 @@ protected:
     static const size_t AUTH_SECRET_LENGTH = 48;
 
     /*
+     * Version 2's key material. The public key is a raw affine point on NIST P-256 - 32 bytes of X
+     * then 32 of Y, no uncompressed-point prefix - and the agreed secret is the X coordinate,
+     * hashed with SHA-256 before the PRF sees it.
+     */
+    static const size_t AUTH2_PUBKEY_LENGTH = 64;
+    static const size_t AUTH2_SECRET_LENGTH = 32;
+
+    /*
      * Payload bytes per fragment of a handshake message.
      *
      * MS-GIPUSB 2.2.10.4 gives the Command data class an MTU of 64 bytes, and a fragment header is
@@ -410,7 +431,7 @@ protected:
      */
     static const size_t AUTH_FRAGMENT_LENGTH = 58;
 
-    /* Opens the security exchange. */
+    /* Opens the security exchange, as version 1. A v2 device upgrades it from there. */
     bool sendAuthHostHello();
 
     /*
@@ -477,6 +498,11 @@ private:
     bool sendAuthPacket(uint8_t command, const uint8_t *payload, size_t length);
     bool sendAuthHostSecret();
     bool sendAuthFinish();
+
+    /* Version 2: restarts the exchange after a device declines version 1. */
+    bool sendAuthHostHello2();
+    /* Version 2: agrees the secret and sends our half of the ECDH exchange. */
+    bool sendAuthHostPubkey();
     bool extractPublicKey(const uint8_t *data, size_t length);
 
     /*
@@ -493,6 +519,10 @@ private:
     std::vector<uint8_t> authRandomClient;
     std::vector<uint8_t> authPublicKey;
     std::vector<uint8_t> authMasterSecret;
+    // The device's raw P-256 public key, kept only from its arrival until the secret is agreed
+    std::vector<uint8_t> authPublicKeyClient2;
+    // Whether the exchange in progress is version 2, which changes which commands are expected
+    bool authVersion2 = false;
 
     /*
      * Every handshake message, ours and the device's, from the data header onward - the handshake

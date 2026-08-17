@@ -3,13 +3,23 @@ package com.limelight.binding.input.driver;
 import com.limelight.LimeLog;
 
 import java.math.BigInteger;
+import java.security.AlgorithmParameters;
 import java.security.KeyFactory;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.security.PublicKey;
+import java.security.interfaces.ECPublicKey;
+import java.security.spec.ECGenParameterSpec;
+import java.security.spec.ECParameterSpec;
+import java.security.spec.ECPoint;
+import java.security.spec.ECPublicKeySpec;
 import java.security.spec.RSAPublicKeySpec;
+import java.util.Arrays;
 
 import javax.crypto.Cipher;
+import javax.crypto.KeyAgreement;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -31,6 +41,10 @@ import javax.crypto.spec.SecretKeySpec;
  * it once during {@code registerNative()}, which does run on a real Java thread.
  */
 final class GipCrypto {
+    /** The v2 handshake's curve, and the raw X‖Y key length it carries. */
+    private static final String P256_CURVE = "secp256r1";
+    private static final int P256_KEY_LENGTH = 64;
+
     private GipCrypto() {
     }
 
@@ -86,6 +100,98 @@ final class GipCrypto {
             LimeLog.warning("GipCrypto: RSA encrypt failed: " + e);
             return null;
         }
+    }
+
+    /**
+     * Performs the v2 handshake's ECDH exchange over NIST P-256.
+     *
+     * <p>Generates an ephemeral key pair, agrees a shared secret with the device's public key, and
+     * returns both halves the caller needs. Done in one call because the private key has no life
+     * beyond it — the device's public key is already in hand when the host sends its own, so there
+     * is nothing to keep between the two steps and no key material to store.
+     *
+     * <p>Keys are raw affine coordinates, 32 bytes of X then 32 of Y, with no {@code 0x04}
+     * uncompressed-point prefix and no DER — that is what the Linux ECDH implementation xone uses
+     * emits, and what the protocol carries.
+     *
+     * @param peerPublicKey the device's 64-byte public key
+     * @return 96 bytes: our 64-byte public key, then the SHA-256 of the agreed secret, which is
+     *         what the PRF takes as its own secret. Null if the key is refused or the curve is
+     *         unavailable.
+     */
+    static byte[] ecdhP256(byte[] peerPublicKey) {
+        if (peerPublicKey == null || peerPublicKey.length != P256_KEY_LENGTH) {
+            LimeLog.warning("GipCrypto: ECDH needs a 64-byte peer key");
+            return null;
+        }
+
+        try {
+            ECParameterSpec params = p256Parameters();
+
+            KeyPairGenerator generator = KeyPairGenerator.getInstance("EC");
+            generator.initialize(new ECGenParameterSpec(P256_CURVE));
+            KeyPair pair = generator.generateKeyPair();
+
+            // The agreed secret is the X coordinate alone, which the protocol then hashes rather
+            // than using directly.
+            KeyAgreement agreement = KeyAgreement.getInstance("ECDH");
+            agreement.init(pair.getPrivate());
+            agreement.doPhase(decodePoint(peerPublicKey, params), true);
+
+            byte[] hashed = sha256(agreement.generateSecret());
+            if (hashed == null) {
+                return null;
+            }
+
+            byte[] out = new byte[P256_KEY_LENGTH + hashed.length];
+            encodePoint(((ECPublicKey) pair.getPublic()).getW(), out);
+            System.arraycopy(hashed, 0, out, P256_KEY_LENGTH, hashed.length);
+
+            return out;
+        } catch (Exception e) {
+            LimeLog.warning("GipCrypto: ECDH failed: " + e);
+            return null;
+        }
+    }
+
+    /** @return the named curve's parameters, needed to rebuild a bare point into a key */
+    private static ECParameterSpec p256Parameters() throws Exception {
+        AlgorithmParameters params = AlgorithmParameters.getInstance("EC");
+        params.init(new ECGenParameterSpec(P256_CURVE));
+        return params.getParameterSpec(ECParameterSpec.class);
+    }
+
+    /** Rebuilds a public key from the raw X‖Y the protocol carries. */
+    private static PublicKey decodePoint(byte[] raw, ECParameterSpec params) throws Exception {
+        int half = P256_KEY_LENGTH / 2;
+        // Positive, so a coordinate with the high bit set is not read as negative
+        BigInteger x = new BigInteger(1, Arrays.copyOfRange(raw, 0, half));
+        BigInteger y = new BigInteger(1, Arrays.copyOfRange(raw, half, P256_KEY_LENGTH));
+
+        return KeyFactory.getInstance("EC")
+                .generatePublic(new ECPublicKeySpec(new ECPoint(x, y), params));
+    }
+
+    /**
+     * Writes a point as raw X‖Y into the first 64 bytes of {@code out}.
+     *
+     * <p>Each coordinate is left-padded to exactly 32 bytes. {@code BigInteger.toByteArray} gives
+     * neither a fixed width nor a guaranteed absence of a leading sign byte, so copying it in
+     * directly would misalign the key whenever a coordinate happened to be short or signed.
+     */
+    private static void encodePoint(ECPoint point, byte[] out) {
+        int half = P256_KEY_LENGTH / 2;
+
+        writeCoordinate(point.getAffineX(), out, 0, half);
+        writeCoordinate(point.getAffineY(), out, half, half);
+    }
+
+    private static void writeCoordinate(BigInteger value, byte[] out, int offset, int width) {
+        byte[] bytes = value.toByteArray();
+        int from = Math.max(0, bytes.length - width);
+        int length = bytes.length - from;
+
+        System.arraycopy(bytes, from, out, offset + width - length, length);
     }
 
     /**
