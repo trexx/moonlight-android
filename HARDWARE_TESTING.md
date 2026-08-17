@@ -421,6 +421,15 @@ something other than the Xbox button.
 - [ ] **Record the `audio formats` line verbatim** for each pad tested, in the table below. Two
       bytes per entry. This is the specific thing the controller-audio question needs: if a pad
       reports a 48 kHz format, Moonlight's decoded audio would need no resampling to reach it.
+- [x] **A cabled pad's USB descriptors are logged**, so whether a given pad has the audio interface
+      of MS-GIPUSB 2.2.12 can be answered by plugging it in rather than inferred. Debug builds only,
+      logged for every enumerated device including ones the driver declines to claim, from both the
+      attach broadcast and the startup enumeration. Note `UsbDriverService` only runs while a stream
+      is bound, so plug the pad in and then start a stream, or plug it in while already streaming.
+      *Xbox One pad (PID `02dd`, model 1697) cabled to the Homatics Box R 4K Plus: five interfaces,
+      with `interface 1 alt 1` carrying isochronous endpoints `0x02`/`0x82` at 228 bytes and 1 ms -
+      the audio interface, exactly as specified. Its three interfaces are the three sub-devices of
+      Table 1: primary, 3.5 mm audio, other.*
 - [ ] **Sanity-check the element parse before trusting anything in that table.** The same Shield
       run reported `Metadata commands: 2 item(s): 17 00`, and a `firmware versions` dump whose
       bytes visibly ran on into the elements printed after it — so the offsets or item widths in
@@ -428,12 +437,179 @@ something other than the Xbox button.
       line may be reading the wrong bytes entirely, and a 48 kHz answer cannot be believed.
 - [ ] **No `Malformed chunk`, `Truncated chunk` or `Chunk overruns` lines** in normal operation.
       Occasional ones during pairing are worth noting rather than ignoring.
+- [x] **Accessory clients are reported rather than dropped in silence.** Debug builds log every
+      packet addressed to a device id above zero, at the parser's accessory filter, at the
+      fragmented-message branch that runs ahead of it, and at the wcid lookup above both. Confirm
+      `Accessory diagnostics compiled in` appears once per pad connect first — without it an empty
+      result means nothing, since it cannot be told from the diagnostics being compiled out.
+      *Xbox One pad (PID `02dd`) on adapter `045e:02fe`, Shield TV: zero accessory packets with the
+      headset connected before power-on, zero when hot-plugged mid-stream, and zero across 24 s of
+      audio actually being transmitted.*
+
+      **Since explained, and no longer a mystery.** Those zeroes were correct and their cause was
+      upstream: [MS-GIPUSB] §2.2.1.4 only enumerates sub-devices after a successful security
+      handshake, and this driver had never authenticated. With the handshake implemented (§9) the
+      same pad announces `dev=3` within a second of initialising. The diagnostics are still worth
+      keeping — they are what proved the absence was real rather than a parser fault, and they are
+      how a pad that announces something unexpected would be spotted.
 - [ ] **Nothing regresses if metadata never arrives.** A pad that does not answer should still work
       exactly as before — the request failing is logged and otherwise ignored.
 
 | Pad | Firmware | `audio formats` bytes | Notes |
 |---|---|---|---|
 | *(fill in)* | | | |
+
+---
+
+## 9. GIP security handshake
+
+The driver now performs the [MS-GIPUSB] security exchange when a pad connects. **This is not a
+security feature** — the certificate is never validated and the link is still unencrypted. It is
+here because §2.2.1.4 makes it the gate on everything else: *"GIP supports enumeration of additional
+sub-devices after the primary device has completed the Security Handshake successfully."* No
+handshake, no sub-devices, and therefore no headphone audio.
+
+Only **v1** (RSA, commands `0x01`–`0x08`) is implemented. The data header's version byte selects,
+and a device asking for v2 (ECDH P-256, `0x21`–`0x27`) is logged and left unauthenticated rather
+than failed obscurely.
+
+**This runs on every pad connect, whether or not audio is wanted**, so the regression checks matter
+far more than the feature check. Two connect-loops were inflicted on a real pad while getting the
+fragmentation right, so the failure mode is known and unpleasant: the pad cycles connect/disconnect,
+its light flashing, with the add/remove device sounds looping.
+
+- [x] **Input works after the handshake.** Buttons, sticks and triggers — not just the guide button,
+      which kept working through an earlier regression where everything else was dead (§8).
+      *Verified repeatedly on the Shield TV, Xbox One pad (PID `02dd`) on adapter `045e:02fe`.*
+- [x] **The pad connects and stays connected**, with no add/remove sound looping and no flashing
+      light. *Stable across many sessions after the fragmentation fix.*
+- [x] **The exchange completes**, logged as `Security: command 0x…` per message. The sizes to expect
+      on a v1 pad, matching the Windows capture:
+
+      | Message | Bytes |
+      |---|---|
+      | `HOST_HELLO` acknowledged | 6 |
+      | `CLIENT_HELLO` | 90 |
+      | certificate, reassembled | 825 |
+
+- [x] **A sub-device announces afterwards.** `dev=3` (VID `045e`, PID `02e4`) appears within about a
+      second of the pad initialising — the 500–1000 ms §2.2.11 describes. Before the handshake
+      existed this never happened under any condition (§8).
+- [ ] **A pad that never completes the handshake still works for input.** Pull the batteries mid
+      exchange, or test a pad that wants v2. Authentication failing must degrade to "no audio",
+      never to "no pad".
+- [ ] **Repeated connect/disconnect cycles**, ten or more, with no leak of the per-pad security
+      state and no slot exhaustion. Each connect runs a fresh exchange.
+- [ ] **Four pads on one adapter** authenticate independently and all four keep working. Each has
+      its own sequence pool; a shared counter would show up here and nowhere else.
+- [ ] **A v2 pad is detected and logged**, not silently broken. Expect `device wants protocol v2,
+      which is not implemented`. **No v2 hardware has been available** — this is the item that
+      needs it.
+- [ ] **Timing on a cold boot.** The handshake is sent at the end of `startDevice()`, behind the
+      metadata response with a 500 ms fallback. Confirm a pad powered on *before* the adapter, and
+      one powered on long after, both authenticate.
+
+Link encryption is deliberately **not** implemented. xone programs a per-client key into the MT76
+from the derived session key; the working assumption here was that a pad might withhold audio until
+the link was encrypted, and that turned out to be false. `authCompleted()` exists as an unused hook
+if it is ever needed. Leaving it out also avoids its failure mode, which is severe: a wrong key
+silences the pad completely, input included.
+
+---
+
+## 10. Audio to the controller's headphone jack
+
+Off until switched on from the in-game menu, **Controller headphone audio**, which only appears
+when an adapter is running, a pad is paired, and the stream's audio is 48 kHz stereo. Up to two
+pads at once; while any pad is on, the TV gets nothing.
+
+**This works.** An Xbox One pad (PID `02dd`) over adapter `045e:02fe` on the Shield TV plays the
+stream's audio through its headphone jack, and the TV falls silent while it does. It took the
+security handshake in §9 to get there — audio is a sub-device, and sub-devices do not appear until
+the pad has authenticated. Details in `app/src/main/jni/xow_driver/AUDIO.md`.
+
+The first two items are the ones that decide whether this ships at all, and **the second is still
+open** — the feature works but has not been shown to be worth using.
+
+- [x] **No pad enabled: nothing changes.** Audio behaves exactly as before, no new logging, and
+      the menu entry is the only visible difference. This is what makes the feature safe to have.
+      *An empty target list is the normal path and is checked with one volatile read per audio
+      frame; the overlay line is likewise absent entirely rather than reading zero.*
+- [ ] **Input latency, audio off vs one pad vs two pads.** Audio puts ~192 KB/s per pad onto the
+      same 2.4 GHz link the controller input uses. xone gives audio its own hardware queue, which
+      *suggests* the radio prioritises input, but that is inference. **If input latency worsens
+      measurably, this feature is not worth using** — record the numbers either way. Take them
+      from the end-of-stream summary, not the overlay, and compare like with like.
+- [x] **Audio is audible in the pad's headphones**, at the right pitch and speed. Wrong pitch
+      means the negotiated format and what is being sent disagree.
+      *Verified on the Shield TV, Xbox One pad (PID `02dd`) on adapter `045e:02fe`, 4K60 stream.
+      Format `09/10`, negotiated from the sub-device's first advertised pair rather than assumed.
+      Sender held 125.04 packets/s against an expected 125.00 over 102 s.*
+- [ ] **Two pads at once**, both correct. A third shows "Off (two controllers already)" and
+      refuses rather than silently doing nothing.
+- [x] **Toggling mid-game** moves audio between the TV and a pad promptly, both directions,
+      repeatedly. The toggle runs off the main thread — watch for any UI stall regardless, since
+      disabling joins a sender thread that may be inside a USB write with a one-second timeout.
+      *Verified both directions across several sessions on the Shield; the TV mutes on enable and
+      returns on disable, with no observed stall.*
+- [ ] **A pad powering off mid-session** returns audio to the TV, does not silence the stream,
+      and does not wedge or leak its sender thread.
+- [x] **Input still works on a pad that is streaming audio.** It shares the link and the GIP
+      command path with audio, which is much the larger traffic.
+      *Verified on every build in this series — buttons, sticks and triggers, not just the guide
+      button, per the warning in §8.*
+- [ ] **Rumble still works on a pad that is streaming audio.** Not separately checked; input was
+      the regression this series kept producing, and rumble was never exercised with audio on.
+- [ ] **No pops, clicks or drift over a long session.** Sends are a fixed 1536 bytes and the pad's
+      requested flow rate is ignored — and per MS-GIPUSB 3.2.5.1.5 honouring it *is* the mechanism
+      that eliminates pops and clicks, so this is the item most likely to fail. If anything is
+      heard, that is the fix to reach for.
+      *Nothing audible across sessions of up to ~100 s, but that is far short of "long". The
+      counters give an objective proxy while listening: 0 dropped and 0 send failures means
+      nothing was discarded or refused.*
+- [x] **Record what flow rate the pad actually asks for**, in the table below — it was unverified
+      for this transport. The spec's examples are per-1 ms USB message (192 bytes for 48 kHz
+      stereo) while we send one 8 ms message of 1536, and xone assumes the whole-buffer figure.
+      *Answered: **1536**, so the units are whole-buffer and xone's assumption is right. Steady
+      throughout, never straying outside the ±32-byte band the device is permitted to modulate
+      within.* To see every value rather than only outliers, lower `AUDIO_FLOW_RATE_TOLERANCE` to
+      0 in a debug build.
+- [x] **The session's health is measurable without a listener.** Four counters — packets sent,
+      bytes dropped, packets late by more than 12 ms, send failures — plus the last flow rate, on
+      the performance overlay while audio runs and in a summary line when it stops.
+      *Reference session: 12816 packets over 102.5 s (125.04/s vs 125.00 expected), 0 dropped,
+      0 failed, 179 late (1.4%).* Some lates are structural, not a fault: the host feeds 960 bytes
+      every 5 ms and the pad drains 1536 every 8 ms, so the sender's wait alternates 5/10 ms and
+      the 10 ms half needs only 2 ms of jitter to cross. **If a stream ever negotiates 10 ms Opus
+      frames, expect the late count to rise sharply with no change in audio quality** — four
+      packets in five then wait a full 10 ms. Read the count against the frame duration, never on
+      its own.
+
+| Pad | Nominal flow rate reported | Range observed | Pops/clicks? |
+|---|---|---|---|
+| Xbox One, PID `02dd`, adapter `045e:02fe` (Shield TV) | 1536 | no excursions logged | none heard, ~100 s |
+- [x] **Headphone volume can be changed from the menu**, and the level shown is the one actually
+      in force. Needed because pad audio bypasses AudioTrack and AAudio, so Android's volume and
+      the TV remote do not reach it, and a pad with an integrated jack has no volume buttons.
+      *Xbox One pad (PID `02dd`) reports `speaker 80% (writable), balance 50, mic 100%, flags
+      0x84` — so it comes up at 80, not full scale, and 0x84 is writable plus headset-detected.
+      The speaker field being writable means the device does the attenuation itself and the
+      software scaling fallback never runs here.*
+
+      The first version of this displayed a nominal 100% before anything had been sent, so
+      selecting "100%" raised a volume already shown as 100. **Check the displayed figure against
+      the `device volume` log line, not just that the control works.**
+- [ ] **A pad that flags its speaker volume read-only** falls back to software scaling. No such
+      pad has been seen — this one is writable — so that path is unexercised.
+- [ ] **Volume changed on the device itself** is picked up. 3.2.5.1.1 has the device re-send the
+      volume message whenever a field changes; nothing here has a device-side control to try it
+      with.
+- [ ] **A surround stream hides the menu entry** rather than offering something that would send
+      6-channel audio to a stereo device.
+- [ ] **A pad on a USB cable is not offered pad audio at all**, rather than being offered it and
+      going silent. Wired audio needs isochronous transfers (interface 1 alt 1, 228 B at 1 ms) and
+      Android's `UsbDeviceConnection` has no isochronous API, so the cabled path is unimplemented
+      rather than merely untested. Confirm the menu entry stays absent for a cabled-only pad.
 
 ---
 
@@ -453,3 +629,6 @@ something other than the Xbox button.
 | §7 battery, extended status | Xbox Series X\|S pad, plus a play-and-charge kit or USB cable |
 | §7 JNI input path | Four pads on one adapter, for a sustained session |
 | §8 metadata | Any adapter pad; ideally several generations, since what they report is the point |
+| §9 v2 security | A pad that uses the ECDH handshake — none has been available to test against |
+| §9 multi-pad | Four pads on one adapter, to confirm per-pad sequence pools |
+| §10 pad audio | Two adapter pads with integrated 3.5 mm jacks, and wired headphones for each |

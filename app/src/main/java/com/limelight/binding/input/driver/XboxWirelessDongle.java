@@ -8,7 +8,9 @@ import com.limelight.binding.input.driver.UsbDriverListener;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Xbox One wireless adapter, driven through the bundled native {@code xow-driver}.
@@ -145,6 +147,20 @@ public class XboxWirelessDongle {
         var controller = new XboxWirelessController(id + 0x045e0000, listener, vid, pid, handle);
         controllers.put(id, controller);
         this.listener.deviceAdded(controller);
+    }
+
+    /**
+     * @return the controllers currently paired to this adapter, ordered by slot so the first is
+     *         the first that paired. Used by the in-game audio menu, which needs stable names.
+     */
+    public List<XboxWirelessController> getControllers() {
+        var found = new ArrayList<XboxWirelessController>();
+        for (var entry : new TreeMap<>(controllers).entrySet()) {
+            if (entry.getValue() instanceof XboxWirelessController wireless) {
+                found.add(wireless);
+            }
+        }
+        return found;
     }
 
     /** Called from the native driver when a controller drops off. Unknown slots are ignored. */

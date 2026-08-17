@@ -93,6 +93,21 @@ clean copy. Differences from the baseline commit:
   The unfragmented path is deliberately left byte-for-byte as it was: fragmented messages take a
   separate branch, so input, status and announce parsing is unchanged. What metadata reports is
   currently only logged.
+* **Added** GIP audio output, in `controller/gip.{h,cpp}` and `controller/controller.{h,cpp}`, so
+  stream audio can be rendered to a pad's headphone jack. Upstream xow declares `CMD_AUDIO_CONFIG`
+  and `CMD_AUDIO_SAMPLES` and implements neither.
+
+  Ported from xone's protocol half — `gip_set_audio_format`, `gip_copy_audio_samples`,
+  `gip_make_audio_config` and `gip_handle_pkt_audio_samples` in `bus/protocol.c`. Its ALSA half
+  (`driver/headset.c`) has no Android analogue and is replaced by a bounded ring and a sender
+  thread per controller, shaped like the existing rumble producer/consumer pair.
+
+  This also required `encodeVarint()`/`encodeHeader()` and extended-length decoding on the
+  *unfragmented* receive path: a 48 kHz stereo packet is 1536 bytes, and anything over 127 must
+  use the multi-byte length encoding. Audio is the only message here that needs it.
+
+  Audio carries its own sequence counter, since MS-GIPUSB 2.2.10.3 makes the sequence a counter per
+  data class and audio is a different class from commands.
 * **Fixed** the status message length test in `GipDevice::handlePacket()`. It required exactly
   `sizeof(StatusData)`, but MS-GIPUSB Table 26 allows payloads of `0x04` *or* `0x23`–`0x37`, and
   §3.1.5.5.2.2 requires the extended form on all new devices — whose status messages were therefore

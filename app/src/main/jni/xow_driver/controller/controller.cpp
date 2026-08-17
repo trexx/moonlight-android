@@ -19,12 +19,14 @@
 #include "controller.h"
 #include "../utils/log.h"
 #include "../utils/jni.h"
+#include "../utils/crypto.h"
 #include "gip.h"
 
 #include <cstdlib>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <utility>
 #include <linux/input.h>
@@ -62,6 +64,26 @@
 // resetting" is acted on; 01 is unused, 10 is full power and 11 is reserved.
 #define POWER_LEVEL_OFF 0x00
 
+// One packet of 48 kHz 16-bit stereo at the protocol's 8 ms cadence:
+// 48000 Hz * 2 channels * 2 bytes * 8 ms / 1000 = 1536. See gip_make_audio_config() in xone.
+#define AUDIO_PACKET_BYTES 1536
+
+// Four packets, so roughly 32 ms may queue before samples start being dropped. Enough to ride out
+// a scheduling hiccup on either thread, short enough that a real backlog is discarded rather than
+// turning into permanent lag.
+#define AUDIO_BUFFER_MAX_BYTES (AUDIO_PACKET_BYTES * 4)
+
+// How far the pad's requested flow rate may sit from our packet size before it is worth saying so.
+//
+// MS-GIPUSB 3.2.5.1.5 has the device modulate this by "+/- one sample per channel per 1 ms" to
+// absorb clock drift, which over an 8 ms packet is 8 samples per channel: 8 * 2 channels * 2 bytes.
+// Anything inside that band is the protocol working, not a fault, and logging it would be noise.
+#define AUDIO_FLOW_RATE_TOLERANCE (8 * 2 * 2)
+
+// Half again the 8 ms cadence. Past this the sender has missed its slot and audio has a hole in it,
+// where anything shorter is the jitter of two threads meeting.
+#define AUDIO_STARVE_TIMEOUT std::chrono::milliseconds(12)
+
 // Scales a 16-bit magnitude, which is what moonlight-common-c and the Android input APIs both
 // deal in, onto the protocol's 0 - 100 range.
 #define RUMBLE_SCALE(magnitude) \
@@ -94,6 +116,10 @@ Controller::~Controller()
     {
         rumbleThread.join();
     }
+
+    // Stops and joins the audio thread if it is running. Must happen before the JNI teardown
+    // below, since the thread touches nothing Java but does use this object's sendPacket.
+    setAudioEnabled(false);
 
     if (!setDeviceState(DEVICE_ID_CONTROLLER, STATE_OFF))
     {
@@ -150,7 +176,29 @@ void Controller::registerJavaContext(JavaVM *vm, JNIEnv *env, jobject thiz) {
 
 void Controller::deviceAnnounced(uint8_t id, const AnnounceData *announce)
 {
-    Log::info("Device announced, product id: %04x", announce->productId);
+    Log::info("Device %u announced, vendor %04x product %04x",
+              id, announce->vendorId, announce->productId);
+
+    /*
+     * A sub-device, which for this pad means the 3.5 mm audio one: MS-GIPUSB 2.2.1.4 has these
+     * enumerate only once the primary has completed the security handshake, and Table 1 shows them
+     * carrying their own device ID, VID and PID.
+     *
+     * It must not go through initInput(). That is the primary device's setup - it ends by assigning
+     * to rumbleThread, and assigning over a thread that is already running calls std::terminate.
+     * A sub-device has no rumble, no input reports and no LED; what it has is its own metadata,
+     * which is where its audio formats are stated.
+     */
+    if (id != DEVICE_ID_CONTROLLER)
+    {
+        if (!requestIdentify(id))
+        {
+            Log::error("Failed to request metadata from device %u", id);
+        }
+
+        return;
+    }
+
     Log::debug(
         "Firmware version: %d.%d.%d.%d",
         announce->firmwareVersion.major,
@@ -431,10 +479,10 @@ static void logCommandDescriptors(const uint8_t *payload, size_t length, uint16_
     Log::info("Metadata commands: %u item(s): %s", count, list.c_str());
 }
 
-void Controller::identifyReceived(const IdentifyData *identify,
+void Controller::identifyReceived(uint8_t id, const IdentifyData *identify,
                                   const uint8_t *payload, size_t length)
 {
-    Log::info("Metadata received: %zu bytes", length);
+    Log::info("Metadata from device %u: %zu bytes", id, length);
 
     // Item widths are xone's, which are the sizes of the structs it maps each element onto:
     // gip_command_descriptor is 23 bytes and gip_firmware_version is 4. The 1 and 8 used here
@@ -448,19 +496,34 @@ void Controller::identifyReceived(const IdentifyData *identify,
     logInfoElement("capabilities in", payload, length, identify->capabilitiesInOffset, 1);
     logInfoElement("interfaces", payload, length, identify->interfacesOffset, METADATA_GUID_LENGTH);
 
-    // Retained rather than only logged: whether a pad has a usable audio format is the one thing
-    // a caller needs to know before offering to send it audio, and metadata is the only place
-    // that says so. An empty list means the device declared none.
+    // Retained rather than only logged: whether a device has a usable audio format is the one
+    // thing a caller needs before offering to send it audio, and metadata is the only place that
+    // says so. An empty list means the device declared none.
     uint8_t formats;
     const uint8_t *items = findInfoElement(payload, length, identify->audioFormatsOffset,
                                            METADATA_AUDIO_FORMAT_LENGTH, formats);
 
-    audioFormats.clear();
+    std::vector<uint8_t> parsed;
 
     if (items != nullptr)
     {
-        audioFormats.assign(items,
-                            items + static_cast<size_t>(formats) * METADATA_AUDIO_FORMAT_LENGTH);
+        parsed.assign(items,
+                      items + static_cast<size_t>(formats) * METADATA_AUDIO_FORMAT_LENGTH);
+    }
+
+    if (id == DEVICE_ID_CONTROLLER)
+    {
+        audioFormats = parsed;
+    }
+    else if (!parsed.empty())
+    {
+        // The audio sub-device, which is where audio actually lives. Its formats are pairs of
+        // capture and render, and 2.2.11 has the host take the first rather than choose.
+        audioDeviceId = id;
+        audioDeviceFormats = parsed;
+
+        Log::info("Audio device %u offers %zu format pair(s), first %02x/%02x",
+                  id, parsed.size() / METADATA_AUDIO_FORMAT_LENGTH, parsed[0], parsed[1]);
     }
 
     // The metadata exchange is done, so the device is in Idle and can be started. Wakes the
@@ -501,6 +564,16 @@ void Controller::startDevice()
     {
         Log::error("Failed to request serial number");
     }
+
+    // The security exchange, once the device is Active. A capture of a Windows host has it here -
+    // set state, LED, then the handshake, about 170 ms after the announce - and sending it any
+    // earlier, while the pad is still in Arrival, got no answer at all. Its audio sub-device
+    // appears seconds after this completes; this driver has never sent it and none has appeared.
+    // Failing is not fatal, the driver has always run without it.
+    if (!sendAuthHostHello())
+    {
+        Log::error("Failed to start the security exchange");
+    }
 }
 
 void Controller::waitForMetadata()
@@ -524,6 +597,441 @@ void Controller::waitForMetadata()
     }
 
     startDevice();
+}
+
+void Controller::audioSamplesReceived(const AudioSamplesData *samples)
+{
+    // How many bytes of render data the pad wants in each message (MS-GIPUSB Table 69). It nudges
+    // this up and down to absorb the difference between its clock and ours, and per 3.2.5.1.5 that
+    // is "the mechanism GIP devices use to eliminate pops and clicks in audio".
+    //
+    // We send a fixed AUDIO_PACKET_BYTES regardless, as xone does, so we are declining that
+    // mechanism rather than implementing it - see AUDIO.md. Small movement is therefore expected
+    // and says nothing; only a request that sits well outside the band the spec describes is worth
+    // reporting, and it would mean the pad is asking for a rate we never give it.
+    if (samples->flowRate == audioFlowRate)
+    {
+        return;
+    }
+
+    audioFlowRate = samples->flowRate;
+
+    int delta = static_cast<int>(audioFlowRate) - AUDIO_PACKET_BYTES;
+
+    if (delta > AUDIO_FLOW_RATE_TOLERANCE || delta < -AUDIO_FLOW_RATE_TOLERANCE)
+    {
+        Log::debug("Audio flow rate %u is outside the expected band around %u",
+                   audioFlowRate, AUDIO_PACKET_BYTES);
+    }
+}
+
+/*
+ * Whether the pad declared an audio format we can render to.
+ *
+ * Metadata lists these as (capture, render) pairs, which is how xone reads the same element -
+ * it hands data[0] and data[1] straight to its format request. A pad that declared none has no
+ * audio endpoint on this device id, and asking it to take audio is answered with silence.
+ */
+void Controller::audioStats(uint32_t out[5]) const
+{
+    out[0] = audioPacketsSent.load(std::memory_order_relaxed);
+    out[1] = audioBytesDropped.load(std::memory_order_relaxed);
+    out[2] = audioStarved.load(std::memory_order_relaxed);
+    out[3] = audioSendFailures.load(std::memory_order_relaxed);
+    out[4] = audioFlowRate;
+}
+
+bool Controller::supportsAudioOut() const
+{
+    /*
+     * The audio sub-device's formats, not the pad's. A pad reports none of its own and is not
+     * supposed to: audio is a separate GIP device with its own metadata, and it only announces
+     * once the security handshake has completed (MS-GIPUSB 2.2.1.4). Asking device 0 was always
+     * going to answer no, whatever was plugged into the jack.
+     */
+    if (audioDeviceId == 0)
+    {
+        return false;
+    }
+
+    // Render is the second of each capture/render pair
+    for (size_t i = 1; i < audioDeviceFormats.size(); i += METADATA_AUDIO_FORMAT_LENGTH)
+    {
+        if (audioDeviceFormats[i] == AUDIO_FORMAT_48KHZ_STEREO)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool Controller::setAudioEnabled(bool enable)
+{
+    if (enable == audioEnabled)
+    {
+        return true;
+    }
+
+    if (enable)
+    {
+        /*
+         * Refuse rather than half-succeed. Enabling routes the stream's audio away from the TV, so
+         * a pad with nowhere to put it leaves the user with silence everywhere and no explanation.
+         * The sub-device's metadata is what says, and it only exists once the security handshake
+         * has completed (MS-GIPUSB 2.2.1.4).
+         */
+        if (audioDeviceId == 0 || audioDeviceFormats.size() < METADATA_AUDIO_FORMAT_LENGTH)
+        {
+            Log::info("No audio sub-device has announced; refusing audio");
+
+            return false;
+        }
+
+        /*
+         * 2.2.11's sequence, and the order is the point: stop the device, propose a format, and
+         * wait. The host does not choose a format - it takes the first pair the device advertised,
+         * capture then render. Sending a format and streaming immediately, which is what this did
+         * before, skips three steps the device is waiting on.
+         */
+        if (!setDeviceState(audioDeviceId, STATE_STOP))
+        {
+            Log::error("Failed to stop the audio device");
+
+            return false;
+        }
+
+        auto in = static_cast<AudioFormat>(audioDeviceFormats[0]);
+        auto out = static_cast<AudioFormat>(audioDeviceFormats[1]);
+
+        if (!setAudioFormat(audioDeviceId, in, out))
+        {
+            Log::error("Failed to propose an audio format");
+
+            return false;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(audioMutex);
+
+            audioBuffer.clear();
+            audioBuffer.reserve(AUDIO_BUFFER_MAX_BYTES);
+        }
+
+        audioFlowRate = 0;
+        audioPacketsSent = 0;
+        audioBytesDropped = 0;
+        audioSendFailures = 0;
+        audioStarved = 0;
+        audioState = AUDIO_AWAITING_FORMAT;
+        audioEnabled = true;
+
+        Log::info("Audio: proposed format %02x/%02x to device %u, awaiting its reply",
+                  in, out, audioDeviceId);
+
+        // Sending begins once the device has echoed the format and reported its volume
+        return true;
+    }
+
+    audioEnabled = false;
+    audioState = AUDIO_IDLE;
+    stopAudioThread = true;
+    audioCondition.notify_one();
+
+    if (audioThread.joinable())
+    {
+        audioThread.join();
+    }
+
+    if (audioDeviceId != 0)
+    {
+        setDeviceState(audioDeviceId, STATE_STOP);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(audioMutex);
+
+        audioBuffer.clear();
+        audioBuffer.shrink_to_fit();
+    }
+
+    /*
+     * The session's totals, reported where they will actually be read. CLAUDE.md's note about the
+     * end-of-stream summary applies: this is what reaches a bug report, whereas anything only on
+     * screen is gone the moment the stream ends.
+     *
+     * Expect packets at 125 a second - one per 8 ms - so the count against the time audio was on
+     * says whether the stream kept up. Dropped bytes mean the host outran the link and audio would
+     * have drifted; starved counts mean the reverse, a ring emptied and a gap heard.
+     */
+    Log::info("Audio session: %u packets sent, %u bytes dropped, %u late by >12ms, %u send failures, "
+              "last flow rate %u",
+              audioPacketsSent.load(std::memory_order_relaxed),
+              audioBytesDropped.load(std::memory_order_relaxed),
+              audioStarved.load(std::memory_order_relaxed),
+              audioSendFailures.load(std::memory_order_relaxed),
+              (unsigned)audioFlowRate);
+
+    Log::info("Audio disabled for controller");
+
+    return true;
+}
+
+/*
+ * Drives the rest of 2.2.11's sequence, which is answer-driven rather than timed.
+ *
+ * The device echoes the format it actually adopted; only then may it be started. After starting it
+ * sends a volume message, and the specification is explicit that the host "might not start to play
+ * audio data until a volume indication is received" - so that message, not the start, is what opens
+ * the stream.
+ */
+void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t length)
+{
+    if (id != audioDeviceId || length < 1)
+    {
+        return;
+    }
+
+    uint8_t subcommand = data[0];
+
+    if (subcommand == AUDIO_CTRL_FORMAT && length >= 3)
+    {
+        if (audioState != AUDIO_AWAITING_FORMAT)
+        {
+            return;
+        }
+
+        // A device that cannot manage what was proposed answers with one it can, from its own
+        // list. Nothing here renegotiates yet; say so rather than starting it on a mismatch.
+        if (data[1] != audioDeviceFormats[0] || data[2] != audioDeviceFormats[1])
+        {
+            Log::error("Audio: device adopted %02x/%02x, not the %02x/%02x proposed",
+                       data[1], data[2], audioDeviceFormats[0], audioDeviceFormats[1]);
+
+            return;
+        }
+
+        Log::info("Audio: device confirmed format %02x/%02x, starting it", data[1], data[2]);
+
+        audioState = AUDIO_AWAITING_VOLUME;
+
+        if (!setDeviceState(audioDeviceId, STATE_START))
+        {
+            Log::error("Failed to start the audio device");
+        }
+
+        return;
+    }
+
+    if (subcommand == AUDIO_CTRL_VOLUME)
+    {
+        /*
+         * Record what the device says before anything else, and do it whenever it arrives rather
+         * than only during startup - 3.2.5.1.1 has the device re-send this whenever a field
+         * changes, which is how a volume control on the device itself would reach us.
+         */
+        if (length >= sizeof(AudioVolumeData))
+        {
+            memcpy(&audioVolumeReported, data, sizeof(AudioVolumeData));
+            audioVolumeKnown = true;
+
+            Log::info(
+                "Audio: device volume, speaker %u%% (%s), balance %u, mic %u%%, flags 0x%02x",
+                audioVolumeReported.speaker & AUDIO_VOLUME_LEVEL,
+                (audioVolumeReported.speaker & AUDIO_VOLUME_WRITABLE) ? "writable" : "read-only",
+                audioVolumeReported.balance & AUDIO_VOLUME_LEVEL,
+                audioVolumeReported.microphone & AUDIO_VOLUME_LEVEL,
+                audioVolumeReported.flags
+            );
+        }
+        else
+        {
+            // The plain Volume message, which the specification names but never gives a layout
+            // for. Nothing can be read from it, so volume falls back to software scaling.
+            Log::info("Audio: device reported volume in %zu bytes, not the extended form", length);
+        }
+
+        /*
+         * Adopt the device's own level unless the user has chosen one. A pad here comes up at 80%,
+         * so assuming 100 both misreported it in the menu and made "select 100%" audibly raise the
+         * volume from a value that claimed to already be 100.
+         *
+         * Re-applying the user's choice on every volume message is deliberate: 3.2.5.1.1 has the
+         * device re-send this whenever a field changes, so this is also what puts the level back
+         * if something else moved it.
+         */
+        if (audioVolumeChosen)
+        {
+            setAudioVolume(audioVolumePercent);
+        }
+        else if (audioVolumeKnown)
+        {
+            audioVolumePercent = audioVolumeReported.speaker & AUDIO_VOLUME_LEVEL;
+        }
+
+        if (audioState != AUDIO_AWAITING_VOLUME)
+        {
+            return;
+        }
+
+        Log::info("Audio: device reported volume, streaming");
+
+        audioState = AUDIO_STREAMING;
+        stopAudioThread = false;
+        audioThread = std::thread(&Controller::processAudio, this);
+    }
+}
+
+bool Controller::setAudioVolume(uint8_t percent)
+{
+    if (percent > 100)
+    {
+        percent = 100;
+    }
+
+    audioVolumePercent = percent;
+    audioVolumeChosen = true;
+
+    // The device does the attenuation itself where it will let us ask, which is both free and what
+    // 3.2.5.1.1 intends. Only the speaker field is touched: chat balance and microphone are not
+    // ours to move, and this client has no microphone at all.
+    if (audioVolumeKnown && (audioVolumeReported.speaker & AUDIO_VOLUME_WRITABLE))
+    {
+        audioSoftwareScale.store(256, std::memory_order_relaxed);
+
+        AudioVolumeData volume = audioVolumeReported;
+
+        volume.subcommand = AUDIO_CTRL_VOLUME;
+        volume.speaker = AUDIO_VOLUME_WRITABLE | percent;
+
+        return GipDevice::setAudioVolume(audioDeviceId, volume);
+    }
+
+    /*
+     * Nothing to ask, so attenuate the samples ourselves. 8.8 fixed point, so 100% lands exactly on
+     * unity and skips the scaling loop rather than multiplying every sample by 1.
+     */
+    audioSoftwareScale.store(static_cast<uint16_t>((percent * 256) / 100),
+                             std::memory_order_relaxed);
+
+    if (audioVolumeKnown)
+    {
+        Log::info("Audio: device volume is read-only, scaling in software to %u%%", percent);
+    }
+
+    return true;
+}
+
+void Controller::queueAudio(const int16_t *samples, size_t count)
+{
+    if (!audioEnabled)
+    {
+        return;
+    }
+
+    const uint8_t *bytes = reinterpret_cast<const uint8_t *>(samples);
+    size_t length = count * sizeof(int16_t);
+
+    {
+        std::lock_guard<std::mutex> lock(audioMutex);
+
+        // Drop the oldest rather than growing without bound. A backlog here is heard as audio
+        // drifting permanently behind the video, which is worse than losing a few milliseconds -
+        // the same trade AudioRenderer's own documentation describes for the AudioTrack path.
+        if (audioBuffer.size() + length > AUDIO_BUFFER_MAX_BYTES)
+        {
+            size_t excess = audioBuffer.size() + length - AUDIO_BUFFER_MAX_BYTES;
+
+            audioBytesDropped.fetch_add(static_cast<uint32_t>(excess), std::memory_order_relaxed);
+
+            if (excess >= audioBuffer.size())
+            {
+                audioBuffer.clear();
+            }
+            else
+            {
+                audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + excess);
+            }
+        }
+
+        audioBuffer.insert(audioBuffer.end(), bytes, bytes + length);
+    }
+
+    audioCondition.notify_one();
+}
+
+/*
+ * Drains the ring one packet at a time. There is no timer: the host delivers audio in real time,
+ * so waiting for a packet's worth of samples paces this at the protocol's 8 ms on its own.
+ */
+void Controller::processAudio()
+{
+    uint8_t packet[AUDIO_PACKET_BYTES];
+
+    while (!stopAudioThread)
+    {
+        {
+            std::unique_lock<std::mutex> lock(audioMutex);
+
+            auto ready = [this] {
+                return stopAudioThread || audioBuffer.size() >= AUDIO_PACKET_BYTES;
+            };
+
+            /*
+             * Waiting is normal and says nothing: the ring is how this paces itself, so the sender
+             * waits on every packet by design, and at a perfectly matched rate it finds the ring
+             * empty every time. Waiting *longer than the cadence* is the thing worth counting -
+             * that is the host failing to supply in time, which is what a gap sounds like.
+             *
+             * An earlier version counted an empty ring instead and reported 20% starvation through
+             * audio that was audibly fine.
+             */
+            if (!audioCondition.wait_for(lock, AUDIO_STARVE_TIMEOUT, ready))
+            {
+                audioStarved.fetch_add(1, std::memory_order_relaxed);
+
+                audioCondition.wait(lock, ready);
+            }
+
+            if (stopAudioThread)
+            {
+                return;
+            }
+
+            std::copy(audioBuffer.begin(), audioBuffer.begin() + AUDIO_PACKET_BYTES, packet);
+            audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + AUDIO_PACKET_BYTES);
+        }
+
+        /*
+         * Only reached on a device that refuses host volume requests; setAudioVolume() leaves this
+         * at unity otherwise, so the usual cost is one relaxed load and a comparison per 8 ms
+         * packet rather than anything per sample.
+         */
+        uint16_t scale = audioSoftwareScale.load(std::memory_order_relaxed);
+
+        if (scale != 256)
+        {
+            int16_t *samples = reinterpret_cast<int16_t *>(packet);
+
+            for (size_t i = 0; i < sizeof(packet) / sizeof(int16_t); i++)
+            {
+                samples[i] = static_cast<int16_t>((samples[i] * scale) >> 8);
+            }
+        }
+
+        // Outside the lock: this is a blocking USB transfer, and the decode thread must never
+        // wait behind it.
+        if (!sendAudioSamples(audioDeviceId, packet, sizeof(packet)))
+        {
+            audioSendFailures.fetch_add(1, std::memory_order_relaxed);
+
+            Log::error("Failed to send audio samples");
+
+            return;
+        }
+
+        audioPacketsSent.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void Controller::processRumble()

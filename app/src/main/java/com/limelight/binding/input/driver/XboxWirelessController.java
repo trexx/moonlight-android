@@ -130,7 +130,75 @@ public class XboxWirelessController extends AbstractController{
         reportBattery(state, percentage);
     }
 
+    /**
+     * @return true if this pad told us, in its metadata, that it can render 48 kHz stereo. A pad
+     *         that did not has no audio endpoint reachable this way, and enabling would move the
+     *         stream's audio off the TV and into silence.
+     */
+    public boolean hasAudioSupport() {
+        return hasAudioSupportNative(handle);
+    }
+
+    /**
+     * Starts or stops rendering stream audio to this pad's headphone jack.
+     *
+     * @return true if the pad accepted the change
+     */
+    public boolean setAudioEnabled(boolean enable) {
+        return setAudioEnabledNative(handle, enable);
+    }
+
+    /**
+     * Sets the headphone volume on this pad, 0 - 100.
+     *
+     * <p>Needed because pad audio bypasses AudioTrack and AAudio entirely, so Android's own volume
+     * — and therefore the TV remote — never reaches it. The driver asks the device to do the
+     * attenuation where the device allows it, and scales in software where it does not.
+     *
+     * @return whether the level was applied
+     */
+    public boolean setAudioVolume(int percent) {
+        return setAudioVolumeNative(handle, percent);
+    }
+
+    /**
+     * @return the headphone volume actually in force, 0 - 100 — the pad's own setting until a
+     *         level is chosen, and the chosen level after that. Not an assumed default: a pad here
+     *         comes up at 80, so assuming 100 misreports it.
+     */
+    public int getAudioVolume() {
+        return audioVolumeNative(handle);
+    }
+
+    /**
+     * @return audio session counters: packets sent, bytes dropped, packets late, send failures and
+     *         the pad's last requested flow rate. For the performance overlay; reads relaxed
+     *         atomics, so it neither locks nor disturbs the sending path.
+     */
+    public int[] getAudioStats() {
+        return audioStatsNative(handle);
+    }
+
+    /**
+     * Queues interleaved 16-bit stereo PCM for this pad.
+     *
+     * <p>Called from Moonlight's audio decode thread. The native side copies into a bounded ring
+     * and returns, so this does not block on the wireless link.
+     *
+     * @param audioData interleaved samples; the caller reuses the buffer, so it is not retained
+     * @param count     number of samples to take from the front of {@code audioData}
+     */
+    public void queueAudio(short[] audioData, int count) {
+        queueAudioNative(handle, audioData, count);
+    }
+
     native void registerNative(long handle);
+    native boolean setAudioEnabledNative(long handle, boolean enable);
+    native int[] audioStatsNative(long handle);
+    native boolean setAudioVolumeNative(long handle, int percent);
+    native int audioVolumeNative(long handle);
+    native boolean hasAudioSupportNative(long handle);
+    native void queueAudioNative(long handle, short[] samples, int count);
     native void sendRumble(long handle, short lowFreqMotor, short highFreqMotor);
     native void sendrumbleTriggers(long handle, short leftTrigger, short rightTrigger);
 

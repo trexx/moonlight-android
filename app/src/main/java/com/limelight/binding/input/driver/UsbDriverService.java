@@ -7,8 +7,11 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.hardware.usb.UsbConstants;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbEndpoint;
+import android.hardware.usb.UsbInterface;
 import android.hardware.usb.UsbManager;
 import android.os.Binder;
 import android.os.Build;
@@ -18,11 +21,15 @@ import android.os.IBinder;
 import android.view.InputDevice;
 import android.widget.Toast;
 
+import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.preferences.PreferenceConfiguration;
 
+import com.limelight.binding.audio.PadAudioSink;
+
 import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Bound service that owns every USB controller this app drives itself.
@@ -97,6 +104,15 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         // Remove the the controller from our list (if not removed already)
         controllers.remove(controller);
 
+        // A pad taking stream audio must leave the sink before its native driver instance is
+        // destroyed, or the audio thread keeps queueing into a freed handle. This is the only
+        // place a removal is known - the audio renderer is not on the listener chain - so the
+        // coupling to the audio package is deliberate and lives here rather than being invented
+        // somewhere with less claim to know.
+        if (padAudioSink != null && controller instanceof XboxWirelessController wireless) {
+            padAudioSink.disable(wireless);
+        }
+
         // Call through to the client's listener
         if (listener != null) {
             listener.deviceRemoved(controller);
@@ -121,6 +137,8 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             // Initial attachment broadcast
             if (action.equals(UsbManager.ACTION_USB_DEVICE_ATTACHED)) {
                 final UsbDevice device = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+
+                logUsbInterfaces(device);
 
                 // shouldClaimDevice() looks at the kernel's enumerated input
                 // devices to make its decision about whether to prompt to take
@@ -189,7 +207,30 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         public void setDonglePairingMode(boolean enable) {
             UsbDriverService.this.setDonglePairingMode(enable);
         }
+
+        /**
+         * @return every controller currently paired through an adapter, in pairing order, which
+         *         is what the in-game menu lists so the user can pick which pads get audio
+         */
+        public List<XboxWirelessController> getWirelessControllers() {
+            List<XboxWirelessController> found = new ArrayList<>();
+            for (XboxWirelessDongle dongle : xboxWirelessDongles) {
+                found.addAll(dongle.getControllers());
+            }
+            return found;
+        }
+
+        /**
+         * Hands the service the sink so a disconnecting pad can be taken out of it before its
+         * native instance goes away. Without this the sink would keep a dangling handle.
+         */
+        public void setPadAudioSink(PadAudioSink sink) {
+            padAudioSink = sink;
+        }
     }
+
+    // Set by the client once it binds; see UsbDriverBinder.setPadAudioSink()
+    private PadAudioSink padAudioSink;
 
     /**
      * Puts every claimed Xbox wireless adapter into (or out of) pairing mode, reporting the
@@ -225,6 +266,48 @@ public class UsbDriverService extends Service implements UsbDriverListener {
      * Advances a device through claim, permission and construction. Re-entered after the
      * permission dialog completes, hence the repeated eligibility check.
      */
+    /**
+     * Logs a device's interfaces and endpoints, in debug builds only.
+     *
+     * <p>Written to answer one question about controller audio: MS-GIPUSB 2.2.12 puts a cabled
+     * pad's audio on interface #1 with isochronous endpoints — 228 bytes out, 64 in, at 1 ms — and
+     * whether a given pad actually has them decides whether audio over a cable is worth pursuing.
+     * Android cannot perform isochronous transfers, so this can only look; driving those endpoints
+     * would mean libusb, the way the wireless adapter is already driven.
+     */
+    private static void logUsbInterfaces(UsbDevice device) {
+        if (!BuildConfig.DEBUG) {
+            return;
+        }
+
+        LimeLog.info("USB device " + String.format("%04x:%04x", device.getVendorId(), device.getProductId()) +
+                " has " + device.getInterfaceCount() + " interface(s)");
+
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            UsbInterface iface = device.getInterface(i);
+            StringBuilder line = new StringBuilder();
+
+            line.append("  interface ").append(iface.getId())
+                    .append(" alt ").append(iface.getAlternateSetting())
+                    .append(String.format(" class %02x sub %02x proto %02x",
+                            iface.getInterfaceClass(), iface.getInterfaceSubclass(),
+                            iface.getInterfaceProtocol()));
+
+            for (int e = 0; e < iface.getEndpointCount(); e++) {
+                UsbEndpoint endpt = iface.getEndpoint(e);
+
+                line.append(String.format(" | ep %02x %s max %d interval %d",
+                        endpt.getAddress(),
+                        endpt.getType() == UsbConstants.USB_ENDPOINT_XFER_ISOC ? "ISOC"
+                                : endpt.getType() == UsbConstants.USB_ENDPOINT_XFER_BULK ? "bulk"
+                                : String.valueOf(endpt.getType()),
+                        endpt.getMaxPacketSize(), endpt.getInterval()));
+            }
+
+            LimeLog.info(line.toString());
+        }
+    }
+
     private void handleUsbDeviceState(UsbDevice device) {
         // Are we able to operate it?
         if (shouldClaimDevice(device, prefConfig.bindAllUsb)) {
@@ -422,6 +505,9 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
         // Enumerate existing devices
         for (UsbDevice dev : usbManager.getDeviceList().values()) {
+            // Before the claim check, so a device we decline is still described
+            logUsbInterfaces(dev);
+
             if (shouldClaimDevice(dev, prefConfig.bindAllUsb)) {
                 // Start the process of claiming this device
                 handleUsbDeviceState(dev);

@@ -49,6 +49,53 @@ public:
     void inputRumble(short lowFreqMotor, short highFreqMotor);
     void inputRumbleTrigger(short leftTrigger, short rightTrigger);
 
+    /*
+     * Starts or stops rendering stream audio to this pad's headphone jack. Negotiates the format
+     * and spins up the sender thread on enable; stops and releases both on disable, so a pad
+     * nobody is listening to costs nothing.
+     *
+     * Safe to call repeatedly with the same value.
+     */
+    bool setAudioEnabled(bool enable);
+    bool isAudioEnabled() const { return audioEnabled; }
+
+    /* Whether this pad declared an audio format we can render to; see supportsAudioOut(). */
+    bool supportsAudioOut() const;
+
+    /*
+     * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
+     * dropped, packets late by more than the cadence, send failures, and the pad's last requested
+     * flow rate. Reads relaxed atomics, so it costs nothing on the sending path and needs no lock.
+     */
+    void audioStats(uint32_t out[5]) const;
+
+    /*
+     * Sets the headphone volume, 0 - 100.
+     *
+     * Prefers the protocol: a device that flags its speaker volume writable is sent an Audio
+     * Control Volume Extended message, which costs nothing per packet and lets the device do the
+     * attenuation in its own hardware. A device that flags it read-only is scaled in software on
+     * the sender thread instead, because the alternative is no volume control at all - the pad
+     * audio path bypasses AudioTrack and AAudio, so Android's own volume never reaches it.
+     *
+     * Safe to call before audio starts; the level is remembered and applied once the device
+     * reports its volume state.
+     */
+    bool setAudioVolume(uint8_t percent);
+
+    /*
+     * @return the level actually in force, 0 - 100: the device's own reported setting until the
+     *         user picks one, and their choice after that.
+     */
+    uint8_t audioVolume() const { return audioVolumePercent; }
+
+    /*
+     * Queues interleaved 16-bit stereo PCM for this pad. Called from Moonlight's audio decode
+     * thread, so it only copies into the ring and returns - the blocking USB write happens on the
+     * sender thread. Samples are dropped rather than queued without limit when the ring is full.
+     */
+    void queueAudio(const int16_t *samples, size_t count);
+
 private:
     /* GIP events */
     void deviceAnnounced(uint8_t id, const AnnounceData *announce) override;
@@ -56,7 +103,7 @@ private:
     void guideButtonPressed(const GuideButtonData *button) override;
     void serialNumberReceived(const SerialData *serial) override;
     void inputReceived(const InputData *input) override;
-    void identifyReceived(const IdentifyData *identify,
+    void identifyReceived(uint8_t id, const IdentifyData *identify,
                           const uint8_t *payload, size_t length) override;
 
     void updateButtonStatus(const InputData *input);
@@ -102,6 +149,101 @@ private:
     std::mutex rumbleMutex;
     std::condition_variable rumbleCondition;
     Buffer<RumbleData> rumbleBuffer;
+
+    /* Audio producer/consumer, built on the same shape as the rumble pair above */
+    void processAudio();
+    void audioSamplesReceived(const AudioSamplesData *samples) override;
+
+    void audioControlReceived(uint8_t id, const uint8_t *data, size_t length) override;
+
+    /*
+     * The audio sub-device: its GIP device id, and the capture/render format pairs it advertised.
+     * Zero id means none has announced, which is the state until the security handshake completes -
+     * MS-GIPUSB 2.2.1.4 gates sub-device enumeration on it.
+     */
+    uint8_t audioDeviceId = 0;
+    std::vector<uint8_t> audioDeviceFormats;
+
+    /*
+     * Where 2.2.11's initialisation sequence has got to. The host cannot simply send a format and
+     * start playing: it stops the device, proposes a format, waits for the device to echo the one
+     * it adopted, starts it, and waits for the device's volume message before any audio counts as
+     * playable.
+     */
+    enum AudioState
+    {
+        AUDIO_IDLE,
+        AUDIO_AWAITING_FORMAT,
+        AUDIO_AWAITING_VOLUME,
+        AUDIO_STREAMING,
+    };
+
+    std::atomic<AudioState> audioState{AUDIO_IDLE};
+
+    std::atomic<bool> audioEnabled{false};
+    std::atomic<bool> stopAudioThread{false};
+    std::thread audioThread;
+    std::mutex audioMutex;
+    std::condition_variable audioCondition;
+    // Bytes awaiting transmission, drained one 8 ms packet at a time. Guarded by audioMutex.
+    std::vector<uint8_t> audioBuffer;
+    // Last flow rate the pad reported, tracked only to notice it drifting from the packet size
+    uint16_t audioFlowRate = 0;
+
+    /*
+     * Audio stream health, following the VideoStats pattern: exact counts accumulated on the
+     * sending path, with all formatting done off it. Relaxed atomics because they are written on
+     * the sender and decode threads and read from neither - a few cycles at 125 packets a second,
+     * next to a blocking USB transfer.
+     *
+     * Deliberately counts rather than averages. An averaged figure is what let "Average decoding
+     * time" read 0.00 ms through a total decoder hang; a count of things that happened cannot be
+     * quietly wrong in the same way.
+     */
+    std::atomic<uint32_t> audioPacketsSent{0};
+    std::atomic<uint32_t> audioBytesDropped{0};
+    std::atomic<uint32_t> audioSendFailures{0};
+
+    /*
+     * Times the sender waited longer than the cadence for a packet's worth of samples. Waiting as
+     * such is normal and says nothing - the ring is how this paces itself, so the sender waits on
+     * every packet by design. Waiting *past* AUDIO_STARVE_TIMEOUT is the host failing to supply in
+     * time, which is what a gap in the audio sounds like.
+     *
+     * An earlier version counted an empty ring instead, which is the normal steady state: it read
+     * 20% through audio that was audibly perfect.
+     */
+    std::atomic<uint32_t> audioStarved{0};
+
+    /*
+     * The device's own volume state, as it last reported it (MS-GIPUSB 3.2.5.1.1). Kept because a
+     * host volume request has to echo the device's writability flags back, and because whether the
+     * speaker field is writable at all decides how volume is applied - see setAudioVolume().
+     */
+    AudioVolumeData audioVolumeReported = {};
+    bool audioVolumeKnown = false;
+
+    /*
+     * The level in force, 0 - 100. Starts as a guess and is replaced by the device's own reported
+     * level the moment it arrives, so it is only ever the assumed 100 before a pad has said
+     * otherwise - a real pad here reports 80.
+     */
+    uint8_t audioVolumePercent = 100;
+
+    /*
+     * Whether the user has picked a level this session. Until they have, the device's own setting
+     * is adopted rather than overridden: a pad that came up at 80% is left there, and the menu
+     * shows 80 rather than claiming a 100 that was never applied.
+     */
+    bool audioVolumeChosen = false;
+
+    /*
+     * Fallback gain for a device that reports its speaker volume read-only, as 8.8 fixed point:
+     * 256 is unity and skips the scaling entirely. Applied on the sender thread rather than at
+     * queue time so the decode thread stays a plain copy, and read once per packet rather than
+     * once per sample so the common unity case costs one comparison per 8 ms.
+     */
+    std::atomic<uint16_t> audioSoftwareScale{256};
 
     void notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge);
 
