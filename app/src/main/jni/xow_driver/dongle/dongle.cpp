@@ -260,6 +260,15 @@ void Dongle::handleControllerPacket(uint8_t wcid, const Bytes &packet)
     // Ignore unconnected controllers
     if (!controllers[wcid - 1])
     {
+#ifdef _DEBUG
+        // The one drop above GipDevice that could hide a second client. A GIP accessory is
+        // supposed to share its pad's wireless client and be told apart by device id, not to
+        // associate separately - but that is an assumption, and this is where a packet would
+        // vanish if it were wrong. Reported so that "no accessory ever appeared" can be stated
+        // about the whole path rather than only about the parser.
+        Log::info("Data frame for wcid %u with no controller", (unsigned)wcid);
+#endif
+
         return;
     }
 

@@ -222,7 +222,31 @@ static size_t encodeHeader(uint8_t *buf, uint8_t command, uint8_t deviceId, uint
     return used;
 }
 
-GipDevice::GipDevice(SendPacket sendPacket) : sendPacket(sendPacket) {}
+GipDevice::GipDevice(SendPacket sendPacket) : sendPacket(sendPacket)
+{
+#ifdef _DEBUG
+    // Printed so that an empty accessory log can be read as "nothing arrived" rather than "the
+    // diagnostics were compiled out". Those look identical afterwards, and telling them apart
+    // after the fact is not possible.
+    Log::info("Accessory diagnostics compiled in");
+#endif
+}
+
+#ifdef _DEBUG
+void GipDevice::logAccessoryPacket(const Frame &frame, size_t size, const char *where)
+{
+    // First twenty, then one in two hundred. The question is whether anything arrives at all, not
+    // at what rate, and an accessory streaming audio would match the input report rate.
+    if (accessoryPackets < 20 || accessoryPackets % 200 == 0)
+    {
+        Log::info("Accessory %s: #%u id=%u cmd=%02x ty=%u len=%u size=%zu",
+                  where, accessoryPackets, (unsigned)frame.deviceId, (unsigned)frame.command,
+                  (unsigned)frame.type, (unsigned)frame.length, size);
+    }
+
+    accessoryPackets++;
+}
+#endif
 
 bool GipDevice::handlePacket(const Bytes &packet)
 {
@@ -240,6 +264,17 @@ bool GipDevice::handlePacket(const Bytes &packet)
     // left exactly as it was rather than routed through the reassembly code.
     if (frame->type & (TYPE_CHUNK | TYPE_CHUNK_START))
     {
+#ifdef _DEBUG
+        // Logged here as well as at the accessory filter below, because this branch runs first:
+        // a fragmented accessory message is reassembled as though it belonged to device 0, and
+        // dispatchChunked() would hand it to identifyReceived(). Worth knowing whether that ever
+        // happens before deciding whether it needs fixing.
+        if (frame->deviceId > 0)
+        {
+            logAccessoryPacket(*frame, packet.size(), "chunk");
+        }
+#endif
+
         const uint8_t *raw = packet.raw();
         // Command, flags and sequence are fixed width; the length field starts after them
         size_t offset = 3;
@@ -287,6 +322,10 @@ bool GipDevice::handlePacket(const Bytes &packet)
     // Ignore packets from accessories
     if (frame->deviceId > 0)
     {
+#ifdef _DEBUG
+        logAccessoryPacket(*frame, packet.size(), "packet");
+#endif
+
         return true;
     }
 

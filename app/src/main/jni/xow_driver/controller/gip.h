@@ -380,6 +380,27 @@ private:
     void dispatchChunked(uint8_t command, const uint8_t *data, size_t length);
     uint8_t getSequence(bool accessory = false);
 
+#ifdef _DEBUG
+    /*
+     * Reports a packet addressed to an accessory, which handlePacket() otherwise discards without
+     * trace. Debug builds only.
+     *
+     * This exists to answer one question: whether a pad ever announces a second GIP client. Audio
+     * lives on one - in xone the headset is its own client, never device 0 - so if a headset is
+     * reachable at all, its announce arrives here and is currently thrown away silently. A pad
+     * tested against this driver produced no such packet at all, and that negative result is only
+     * worth anything if it can be re-checked rather than taken on trust.
+     *
+     * Observational: nothing here dispatches. Routing an accessory announce into the normal path
+     * would reach Controller::initInput() and assign over a joinable rumble thread, which
+     * terminates the process.
+     */
+    void logAccessoryPacket(const Frame &frame, size_t size, const char *where);
+
+    // Rate limiter for the above. An accessory that streams would arrive as fast as input does.
+    uint32_t accessoryPackets = 0;
+#endif
+
     uint8_t sequence = 0x01;
     uint8_t accessorySequence = 0x01;
     /*
