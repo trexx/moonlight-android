@@ -28,7 +28,7 @@ enum FrameCommand
     CMD_ANNOUNCE = 0x02,
     CMD_STATUS = 0x03,
     CMD_IDENTIFY = 0x04,
-    CMD_POWER_MODE = 0x05,
+    CMD_SET_DEVICE_STATE = 0x05,
     CMD_AUTHENTICATE = 0x06,
     CMD_GUIDE_BTN = 0x07,
     CMD_AUDIO_CONFIG = 0x08,
@@ -273,11 +273,11 @@ bool GipDevice::handlePacket(const Bytes &packet)
     return true;
 }
 
-bool GipDevice::setPowerMode(uint8_t id, PowerMode mode)
+bool GipDevice::setDeviceState(uint8_t id, DeviceState state)
 {
     Frame frame = {};
 
-    frame.command = CMD_POWER_MODE;
+    frame.command = CMD_SET_DEVICE_STATE;
     frame.deviceId = id;
     frame.type = TYPE_REQUEST;
     frame.sequence = getSequence();
@@ -286,7 +286,7 @@ bool GipDevice::setPowerMode(uint8_t id, PowerMode mode)
     Bytes out;
 
     out.append(frame);
-    out.append(static_cast<uint8_t>(mode));
+    out.append(static_cast<uint8_t>(state));
 
     return sendPacket(out);
 }

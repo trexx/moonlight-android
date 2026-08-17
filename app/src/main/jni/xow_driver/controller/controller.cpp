@@ -74,6 +74,19 @@ Controller::Controller(
 
 Controller::~Controller()
 {
+    {
+        std::lock_guard<std::mutex> lock(startMutex);
+
+        stopStartThread = true;
+    }
+
+    startCondition.notify_one();
+
+    if (startThread.joinable())
+    {
+        startThread.join();
+    }
+
     stopRumbleThread = true;
     rumbleCondition.notify_one();
 
@@ -82,7 +95,7 @@ Controller::~Controller()
         rumbleThread.join();
     }
 
-    if (!setPowerMode(DEVICE_ID_CONTROLLER, POWER_OFF))
+    if (!setDeviceState(DEVICE_ID_CONTROLLER, STATE_OFF))
     {
         Log::error("Failed to turn off controller");
     }
@@ -305,48 +318,24 @@ void Controller::notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge)
 
 void Controller::initInput(const AnnounceData *announce)
 {
-    LedModeData ledMode = {};
-
-    // Dim the LED a little bit, like the original driver
-    // Brightness ranges from 0x00 to 0x20
-    ledMode.mode = LED_ON;
-    ledMode.brightness = 0x14;
-
-    // Diagnostic only for now: nothing below acts on what comes back. It is asked for because the
-    // answer is the prerequisite for anything that needs to know what a given pad supports rather
-    // than assuming - audio formats above all. Failing is not fatal; the driver has always run
-    // without it.
+    // Ask for metadata and wait for the answer before starting the device. MS-GIPUSB 3.1.1 has the
+    // device go Arrival -> Idle on the metadata request and Idle -> Active on Set Device State, and
+    // 2.2.11 has an audio sub-device send its own Hello 500-1000 ms after "the primary device
+    // initializes". Starting the device while it is still transmitting metadata gets that order
+    // wrong, which is the one part of this handshake we can see is not what the spec describes.
     //
-    // It goes first, before power mode, which is where the handshake at the top of gip.h puts it.
-    // That order is load-bearing rather than cosmetic: asked afterwards - once the pad has powered
-    // on and started its data classes - the pad answers with its metadata and then stops sending
-    // input (0x20) and status (0x03) for the rest of the connection. Protocol-control messages such
-    // as the guide button keep arriving, so the pad looks connected and only the sticks, buttons,
-    // triggers and battery are dead.
+    // What comes back is also worth having on its own: the audio formats a pad declares are the
+    // only statement of what it can be sent, and this is where they arrive.
     if (!requestIdentify())
     {
         Log::error("Failed to request metadata");
+
+        // Nothing will answer, so do not wait for it
+        startDevice();
     }
-
-    if (!setPowerMode(DEVICE_ID_CONTROLLER, POWER_ON))
+    else
     {
-        Log::error("Failed to set initial power mode");
-
-        return;
-    }
-
-    if (!setLedMode(ledMode))
-    {
-        Log::error("Failed to set initial LED mode");
-
-        return;
-    }
-
-    if (!requestSerialNumber())
-    {
-        Log::error("Failed to request serial number");
-
-        return;
+        startThread = std::thread(&Controller::waitForMetadata, this);
     }
 
     rumbleThread = std::thread(&Controller::processRumble, this);
@@ -473,6 +462,68 @@ void Controller::identifyReceived(const IdentifyData *identify,
         audioFormats.assign(items,
                             items + static_cast<size_t>(formats) * METADATA_AUDIO_FORMAT_LENGTH);
     }
+
+    // The metadata exchange is done, so the device is in Idle and can be started. Wakes the
+    // fallback waiter too, so it stops waiting rather than sitting out its full timeout.
+    startDevice();
+    startCondition.notify_one();
+}
+
+void Controller::startDevice()
+{
+    if (deviceStarted.exchange(true))
+    {
+        return;
+    }
+
+    if (!setDeviceState(DEVICE_ID_CONTROLLER, STATE_START))
+    {
+        Log::error("Failed to start controller");
+
+        return;
+    }
+
+    LedModeData ledMode = {};
+
+    // Dim the LED a little bit, like the original driver
+    // Brightness ranges from 0x00 to 0x20
+    ledMode.mode = LED_ON;
+    ledMode.brightness = 0x14;
+
+    if (!setLedMode(ledMode))
+    {
+        Log::error("Failed to set initial LED mode");
+
+        return;
+    }
+
+    if (!requestSerialNumber())
+    {
+        Log::error("Failed to request serial number");
+    }
+}
+
+void Controller::waitForMetadata()
+{
+    std::unique_lock<std::mutex> lock(startMutex);
+
+    // The same 500 ms the spec gives a device for assuming a lost state message (MS-GIPUSB 3.1.1).
+    // Metadata has arrived within about 60 ms on every pad measured here, so this is a fallback
+    // for one that never answers rather than a delay anything normally waits out.
+    startCondition.wait_for(lock, std::chrono::milliseconds(500),
+                            [this] { return stopStartThread || deviceStarted.load(); });
+
+    if (stopStartThread)
+    {
+        return;
+    }
+
+    if (!deviceStarted.load())
+    {
+        Log::info("No metadata after 500 ms; starting the controller anyway");
+    }
+
+    startDevice();
 }
 
 void Controller::processRumble()

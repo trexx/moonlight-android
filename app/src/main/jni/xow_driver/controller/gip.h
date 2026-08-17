@@ -27,19 +27,25 @@ struct Frame;
 class Bytes;
 
 /*
- * Base class for GIP (Game Input Protocol) devices
- * Performs basic handshake process:
- *   <- Announce            (from controller)
- *   -> Identify            (from dongle, unused)
- *   <- Identify            (from controller, unused)
- *   -> Power mode: on      (from dongle)
- *   -> LED mode: dim       (from dongle)
- *   -> Authenticate        (from dongle, unused)
- *   <- Authenticate        (from controller, unused)
- *   -> Serial number: 0x00 (from dongle, unused)
- *   <- Serial number       (from controller, unused)
- *   -> Serial number: 0x04 (from dongle)
- *   <- Serial number       (from controller)
+ * Base class for GIP (Game Input Protocol) devices.
+ *
+ * The handshake, and the state it drives the device through (MS-GIPUSB 3.1.1):
+ *
+ *   <- Announce             (from controller)          device is in Arrival
+ *   -> Identify             (metadata request)         Arrival -> Idle
+ *   <- Identify             (metadata response)
+ *   -> Set device state     (start)                    Idle -> Active
+ *   -> LED mode: dim
+ *   -> Serial number: 0x04
+ *   <- Serial number        (from controller)
+ *
+ * Start comes after the metadata response rather than alongside the request: a device leaves the
+ * Hello stage only on receipt of a state message, and an audio sub-device announces itself only
+ * once the primary has initialised (2.2.11). A device that never answers the metadata request is
+ * started anyway after a timeout - see Controller::waitForMetadata().
+ *
+ * The security exchange (command 6) is not implemented. MS-GIPUSB 5 says the host succeeds it by
+ * default, and a device may opt out of it entirely, so nothing here depends on it.
  */
 class GipDevice
 {
@@ -64,12 +70,23 @@ protected:
         BATT_LEVEL_FULL = 0x03,
     };
 
-    // Controller input can be paused temporarily
-    enum PowerMode
+    /*
+     * States for the Set Device State command (MS-GIPUSB 3.1.5.5.5, Table 39). xow called this
+     * "power mode" and named 0x01 SLEEP, which is wrong twice over: the message drives the device
+     * state machine in 3.1.1 rather than a power rail, and 0x01 is Stop - the state the spec has
+     * the host send to an *audio* device where a non-audio device gets Start.
+     *
+     * The device leaves the Hello stage only on receipt of one of these, so when it is sent is as
+     * load-bearing as what it says. 0x03 (Full power) and 0x06 (Reserved) are omitted; nothing
+     * here sends them.
+     */
+    enum DeviceState
     {
-        POWER_ON = 0x00,
-        POWER_SLEEP = 0x01,
-        POWER_OFF = 0x04,
+        STATE_START = 0x00,
+        STATE_STOP = 0x01,
+        STATE_OFF = 0x04,
+        // Full teardown and reinitialise. The device must reply with a "powering off" status first
+        STATE_RESET = 0x07,
     };
 
     enum LedMode
@@ -228,7 +245,11 @@ protected:
     virtual void identifyReceived(const IdentifyData *identify,
                                   const uint8_t *payload, size_t length) {}
 
-    bool setPowerMode(uint8_t id, PowerMode mode);
+    /*
+     * Sets the device state (MS-GIPUSB 3.1.5.5.5). 'id' is the expansion index: 0 is the primary
+     * device, and a secondary device such as an audio sub-device is addressed by its own index.
+     */
+    bool setDeviceState(uint8_t id, DeviceState state);
     bool performRumble(RumbleData rumble);
     bool setLedMode(LedModeData mode);
     bool requestSerialNumber();
