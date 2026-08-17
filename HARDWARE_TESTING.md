@@ -588,6 +588,22 @@ open** — the feature works but has not been shown to be worth using.
 | Pad | Nominal flow rate reported | Range observed | Pops/clicks? |
 |---|---|---|---|
 | Xbox One, PID `02dd`, adapter `045e:02fe` (Shield TV) | 1536 | no excursions logged | none heard, ~100 s |
+- [x] **Headphone volume can be changed from the menu**, and the level shown is the one actually
+      in force. Needed because pad audio bypasses AudioTrack and AAudio, so Android's volume and
+      the TV remote do not reach it, and a pad with an integrated jack has no volume buttons.
+      *Xbox One pad (PID `02dd`) reports `speaker 80% (writable), balance 50, mic 100%, flags
+      0x84` — so it comes up at 80, not full scale, and 0x84 is writable plus headset-detected.
+      The speaker field being writable means the device does the attenuation itself and the
+      software scaling fallback never runs here.*
+
+      The first version of this displayed a nominal 100% before anything had been sent, so
+      selecting "100%" raised a volume already shown as 100. **Check the displayed figure against
+      the `device volume` log line, not just that the control works.**
+- [ ] **A pad that flags its speaker volume read-only** falls back to software scaling. No such
+      pad has been seen — this one is writable — so that path is unexercised.
+- [ ] **Volume changed on the device itself** is picked up. 3.2.5.1.1 has the device re-send the
+      volume message whenever a field changes; nothing here has a device-side control to try it
+      with.
 - [ ] **A surround stream hides the menu entry** rather than offering something that would send
       6-channel audio to a stereo device.
 - [ ] **A pad on a USB cable is not offered pad audio at all**, rather than being offered it and
