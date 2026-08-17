@@ -8,6 +8,8 @@ LOCAL_SRC_FILES := \
     dongle/usb.cpp \
     dongle/mt76.cpp \
     dongle/dongle.cpp \
+    wired/usb_wired.cpp \
+    wired/wired.cpp \
     utils/log.cpp \
     utils/crypto.cpp \
     controller/controller.cpp \

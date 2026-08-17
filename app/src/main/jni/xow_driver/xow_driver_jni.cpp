@@ -8,6 +8,7 @@
 #include <jni.h>
 #include "dongle/usb.h"
 #include "dongle/dongle.h"
+#include "wired/wired.h"
 
 #include "utils/log.h"
 
@@ -181,4 +182,55 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_registerNative(JN
 
     auto *controller = (Controller *) handle;
     controller->registerJavaContext(jvm, env, env->NewGlobalRef(thiz));
+}
+/*
+ * A cabled GIP pad. Separate entry points from the dongle's because the two share nothing at the
+ * transport level - one cable is one device, with no pairing, no client slots and no firmware to
+ * load - while everything above GipDevice is common.
+ */
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_com_limelight_binding_input_driver_XboxWiredGipController_createWiredDriver(JNIEnv *env,
+                                                                                 jobject thiz,
+                                                                                 jint fd) {
+    JavaVM *jvm = nullptr;
+
+    if (env->GetJavaVM(&jvm) != JNI_OK) {
+        return 0;
+    }
+
+    // Global, because the read thread outlives this call and calls back through it
+    jobject self = env->NewGlobalRef(thiz);
+
+    return (jlong) new WiredController(fd, self, jvm);
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_binding_input_driver_XboxWiredGipController_startWiredDriver(JNIEnv *env,
+                                                                                jobject thiz,
+                                                                                jlong handle) {
+    auto *wired = (WiredController *) handle;
+
+    return wired->start() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_com_limelight_binding_input_driver_XboxWiredGipController_wiredControllerHandle(JNIEnv *env,
+                                                                                     jobject thiz,
+                                                                                     jlong handle) {
+    auto *wired = (WiredController *) handle;
+
+    // The GIP device beneath, so rumble and audio reuse XboxWirelessController's entry points
+    // rather than being duplicated for the cable.
+    return (jlong) wired->controller();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_limelight_binding_input_driver_XboxWiredGipController_destroyWiredDriver(JNIEnv *env,
+                                                                                  jobject thiz,
+                                                                                  jlong handle) {
+    delete (WiredController *) handle;
 }
