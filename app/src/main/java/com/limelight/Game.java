@@ -510,7 +510,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 .setRemoteConfiguration(StreamConfiguration.STREAM_CFG_AUTO) // NvConnection will perform LAN and VPN detection
                 .setSupportedVideoFormats(supportedVideoFormats)
                 .setAttachedGamepadMask(gamepadMask)
-                .setClientRefreshRateX100((int)(displayRefreshRate * 100))
+                // Rounded, not truncated: the host paces against this value, and a cast loses
+                // a hundredth of a hertz on the fractional NTSC modes both target boxes use.
+                // 59.94f * 100 is 5993.99986 in float, so a cast sends 5993.
+                .setClientRefreshRateX100(Math.round(displayRefreshRate * 100))
                 .setAudioConfiguration(prefConfig.audioConfiguration)
                 .setEncryptionFlags(prefConfig.encryptionFlags)
                 .setColorSpace(decoderRenderer.getPreferredColorSpace())

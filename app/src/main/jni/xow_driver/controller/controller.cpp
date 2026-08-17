@@ -22,6 +22,7 @@
 
 #include <cstdlib>
 #include <cmath>
+#include <cstdint>
 #include <utility>
 #include <linux/input.h>
 
@@ -40,8 +41,16 @@
 #define INPUT_TRIGGER_FUZZ 3
 #define INPUT_TRIGGER_FLAT 63
 
+// Motor levels are a percentage, not a raw byte: MS-GIPUSB v20240916 section 3.1.5.6.1
+// (Direct Motor Command) specifies every level field as "Percentage, 0 - 100% (0x00 to 0x64),
+// of PWM for motor". Anything above 0x64 is out of spec.
 #define RUMBLE_MAX_POWER 100
 #define RUMBLE_DELAY std::chrono::milliseconds(10)
+
+// Scales a 16-bit magnitude, which is what moonlight-common-c and the Android input APIs both
+// deal in, onto the protocol's 0 - 100 range.
+#define RUMBLE_SCALE(magnitude) \
+    static_cast<uint8_t>((static_cast<uint32_t>(magnitude) * RUMBLE_MAX_POWER) / UINT16_MAX)
 
 Controller::Controller(
     SendPacket sendPacket
@@ -249,10 +258,10 @@ void Controller::sendRumble() {
     rumble.setRight = true;
     rumble.setLeftTrigger = true;
     rumble.setRightTrigger = true;
-    rumble.left = this->rumbleLeft >> 9;
-    rumble.right = this->rumbleRight >> 9;
-    rumble.leftTrigger = this->rumbleTriggerLeft >> 9;
-    rumble.rightTrigger = this->rumbleTriggerRight >> 9;
+    rumble.left = RUMBLE_SCALE(this->rumbleLeft);
+    rumble.right = RUMBLE_SCALE(this->rumbleRight);
+    rumble.leftTrigger = RUMBLE_SCALE(this->rumbleTriggerLeft);
+    rumble.rightTrigger = RUMBLE_SCALE(this->rumbleTriggerRight);
     rumble.duration = 10;
     rumble.repeat = 1;
 

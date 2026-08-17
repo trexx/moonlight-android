@@ -264,6 +264,73 @@ log rather than assuming, per the commands above.
 
 ---
 
+## 6. Fixes ported from moonlight-vplus and xone
+
+Four fixes re-implemented from the two more active forks. None is verifiable on CI — the
+first needs a host and induced packet loss, the middle two need Xbox hardware, the last needs
+a display running a fractional refresh rate.
+
+### Decoder hang reporting
+
+The wait for an input buffer was unbounded, so a genuine hang spun forever and was only ever
+reported once the user quit — which also meant an ordinary quit after a few seconds of
+backpressure recorded a decoder crash that never happened. The wait is now bounded at 5 s and
+the shutdown path returns before the timing checks.
+
+- [ ] **Quitting during heavy packet loss records no crash.** Induce sustained loss until the
+      picture freezes, then quit from the game menu. Check
+      `adb shell dumpsys dropbox --print data_app_crash` and confirm no new
+      `DecoderHungException`. This is the false positive the fix removes.
+- [ ] **A real hang is now reported while streaming.** Harder to provoke deliberately; if a
+      decoder ever wedges mid-stream, the stream should end with a `DecoderHungException`
+      after ~5 s rather than sitting on a frozen picture indefinitely. **This is a behaviour
+      change** — streams that previously froze forever now terminate with an error.
+- [ ] Ordinary stream exit is unaffected, and no `Dequeue input buffer ran long` lines appear
+      during normal teardown.
+
+### GIP rumble levels
+
+Both Xbox rumble paths sent levels above the protocol maximum. MS-GIPUSB v20240916 §3.1.5.6.1
+specifies every motor level as "Percentage, 0 – 100% (0x00 to 0x64)". The wireless path sent
+up to 127; the wired path was worse, because `short` is signed in Java and `>> 9`
+sign-extended — it climbed to 63 across the bottom half of the range, then jumped to 192 at
+the midpoint and reached 255 at full strength.
+
+What the firmware *did* with those out-of-range values is unverified. Clamping is the likely
+behaviour, which would mean the wired pad was effectively at full rumble for anything above
+half strength.
+
+- [ ] **Wired Xbox One/Series pad: rumble still reaches full strength**, and no longer jolts
+      at the halfway point of a ramp. A game with variable force feedback (racing games are
+      easiest) shows this best.
+- [ ] **Wireless pad via the adapter: same check.** It had no discontinuity, only a ceiling
+      27% too high, so expect a subtler change than the wired path.
+- [ ] **Wired and wireless now feel the same** at the same in-game intensity. They did not
+      before, and that is the clearest single check that both paths are right.
+- [ ] Trigger rumble (impulse motors) tracks the same way on a pad that has them.
+
+### Duplicate controller over the wireless adapter
+
+A retransmitted association request allocated a second WCID and built a second `Controller`
+for one physical pad, so it could appear twice in Moonlight with only one copy receiving
+input, and repeated retries could exhaust all 16 slots.
+
+- [ ] **Pair a controller and confirm exactly one appears.** Repeat several times, and try to
+      provoke a retransmission by powering the pad on at the edge of adapter range.
+- [ ] **Disconnect and reconnect the same pad.** It must associate again — the address slot is
+      cleared on disconnect, and getting that wrong would lock the pad out until replug.
+- [ ] Four pads still pair and work simultaneously.
+
+### Display refresh rate
+
+`setClientRefreshRateX100` truncated instead of rounding, sending 5993 for a 59.94 Hz mode.
+
+- [ ] On a display running **59.94 Hz** (or 23.976/29.97), confirm the host is told 5994 and
+      that pacing is unchanged or better. Harvest `globalVideoStats` from the end-of-stream
+      summary rather than reading the overlay, and compare overlay-on with overlay-on.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -274,3 +341,6 @@ log rather than assuming, per the commands above.
 | §4 pads | Xbox Series S/X pad, 8BitDo pad, PowerA Pro |
 | §4 decoder | Amlogic-based Android TV device |
 | §1 Win+Shift+Left | Dual-display host |
+| §6 rumble | Wired Xbox pad **and** a wireless pad + Xbox Wireless Adapter, to compare the two |
+| §6 duplicate pads | Xbox Wireless Adapter, ideally with four pads |
+| §6 refresh rate | Display running a fractional mode (59.94/29.97/23.976 Hz) |

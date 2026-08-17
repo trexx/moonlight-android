@@ -45,6 +45,17 @@ clean copy. Differences from the baseline commit:
 * **Removed** `controller/input.{cpp,h}`, `utils/reader.{cpp,h}` and `xow.cpp` —
   Linux input-device handling and the standalone daemon entry point, none of which
   apply on Android.
+* **Fixed** rumble scaling in `controller/controller.cpp`. `sendRumble()` — part of the JNI
+  rumble path added above — mapped the 16-bit magnitude with `>> 9`, giving 0–127 where
+  MS-GIPUSB v20240916 §3.1.5.6.1 specifies every motor level as "Percentage, 0 – 100% (0x00 to
+  0x64)". Upstream's `RUMBLE_MAX_POWER 100` was left behind unused when `controller/input.cpp`
+  was removed; the new `RUMBLE_SCALE` macro uses it. xone reached the same value independently
+  (`6ff332d`), having tried 255 in `dbc270b` and reverted it.
+* **Added** duplicate-association rejection in `Dongle::handleControllerConnect()`, with a
+  `clientAddresses` array in `dongle.h` parallel to `controllers`. Upstream's
+  `Mt76::associateClient()` allocates from a free-slot bitmask without comparing the requesting
+  MAC, so a controller retransmitting its association request took a second WCID and appeared
+  twice. Ported from xone `030f16c`, which fixes the same defect in `xone_dongle_add_client`.
 
 Files that are byte-identical to upstream (for example `controller/gip.h` and
 `utils/bytes.h`) can be refreshed directly; the rest need a manual three-way merge.

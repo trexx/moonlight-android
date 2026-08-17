@@ -89,6 +89,21 @@ void Dongle::handleControllerConnect(Bytes address)
     Log::debug("handleControllerConnect");
     std::lock_guard<std::mutex> lock(controllerMutex);
 
+    // A controller retransmits its association request if it doesn't see the response quickly
+    // enough. associateClient() keys purely off a free-slot bitmask and never looks at the
+    // address, so without this the retransmission takes a second WCID and builds a second
+    // Controller for one physical pad - which then shows up twice in Moonlight, with only one
+    // of the two receiving input. There are 16 slots, so repeated retries exhaust them too.
+    for (uint8_t i = 0; i < MT_WCID_COUNT; i++)
+    {
+        if (controllers[i] && clientAddresses[i] == address)
+        {
+            Log::debug("Ignoring duplicate association for controller '%d'", i + 1);
+
+            return;
+        }
+    }
+
     uint8_t wcid = associateClient(address);
 
     if (wcid == 0)
@@ -108,6 +123,7 @@ void Dongle::handleControllerConnect(Bytes address)
     auto uptr = std::make_unique<Controller>(sendPacket);
     Controller *rawptr = uptr.get();
     controllers[wcid - 1] = std::move(uptr);
+    clientAddresses[wcid - 1] = address;
     notifyJavaControllerAdd(wcid - 1, rawptr, 0xdead, 0xbeef);
     Log::info("Controller '%d' connected", wcid);
 }
@@ -147,6 +163,9 @@ void Dongle::handleControllerDisconnect(uint8_t wcid)
     notifyJavaControllerRemove(wcid - 1);
 
     controllers[wcid - 1].reset();
+
+    // Release the address alongside the slot, so the same pad can associate again later
+    clientAddresses[wcid - 1] = Bytes();
 
     if (!removeClient(wcid))
     {
