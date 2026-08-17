@@ -63,6 +63,19 @@ public:
     bool supportsAudioOut() const;
 
     /*
+     * Bytes per audio packet, which sets the cadence with it: the ring paces itself by waiting for
+     * one packet's worth of samples, so the size is the clock.
+     *
+     * The wireless adapter carries one 8 ms GIP message of 1536 bytes. A cabled pad is a different
+     * shape entirely - MS-GIPUSB 2.2.12 puts its audio on an isochronous endpoint at 228 bytes
+     * every 1 ms - so this belongs to the transport rather than being a constant here.
+     *
+     * Must be set before audio is enabled; changing it under a running sender is not supported and
+     * there is no reason to, since a transport does not change mid-session.
+     */
+    void setAudioPacketBytes(size_t bytes);
+
+    /*
      * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
      * dropped, packets late by more than the cadence, send failures, and the pad's last requested
      * flow rate. Reads relaxed atomics, so it costs nothing on the sending path and needs no lock.
@@ -189,6 +202,15 @@ private:
     std::vector<uint8_t> audioBuffer;
     // Last flow rate the pad reported, tracked only to notice it drifting from the packet size
     uint16_t audioFlowRate = 0;
+
+    /*
+     * One 8 ms GIP message of 48 kHz 16-bit stereo, which is what the wireless adapter carries and
+     * what every pad tested here has asked for. setAudioPacketBytes() replaces it for a transport
+     * that wants something else.
+     */
+    static const size_t AUDIO_PACKET_BYTES_DEFAULT = 1536;
+
+    size_t audioPacketBytes = AUDIO_PACKET_BYTES_DEFAULT;
 
     /*
      * Audio stream health, following the VideoStats pattern: exact counts accumulated on the

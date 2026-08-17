@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 #include <string>
 #include <utility>
 #include <linux/input.h>
@@ -64,14 +65,14 @@
 // resetting" is acted on; 01 is unused, 10 is full power and 11 is reserved.
 #define POWER_LEVEL_OFF 0x00
 
-// One packet of 48 kHz 16-bit stereo at the protocol's 8 ms cadence:
-// 48000 Hz * 2 channels * 2 bytes * 8 ms / 1000 = 1536. See gip_make_audio_config() in xone.
-#define AUDIO_PACKET_BYTES 1536
+// Bytes per second of 48 kHz 16-bit stereo, which is what the ring holds whatever the transport
+// packetises it into: 48000 Hz * 2 channels * 2 bytes.
+#define AUDIO_BYTES_PER_SECOND (48000 * 2 * 2)
 
-// Four packets, so roughly 32 ms may queue before samples start being dropped. Enough to ride out
-// a scheduling hiccup on either thread, short enough that a real backlog is discarded rather than
-// turning into permanent lag.
-#define AUDIO_BUFFER_MAX_BYTES (AUDIO_PACKET_BYTES * 4)
+// Four packets, so roughly four cadences may queue before samples start being dropped. Enough to
+// ride out a scheduling hiccup on either thread, short enough that a real backlog is discarded
+// rather than turning into permanent lag.
+#define AUDIO_BUFFER_MAX_BYTES (audioPacketBytes * 4)
 
 // How far the pad's requested flow rate may sit from our packet size before it is worth saying so.
 //
@@ -80,9 +81,16 @@
 // Anything inside that band is the protocol working, not a fault, and logging it would be noise.
 #define AUDIO_FLOW_RATE_TOLERANCE (8 * 2 * 2)
 
-// Half again the 8 ms cadence. Past this the sender has missed its slot and audio has a hole in it,
-// where anything shorter is the jitter of two threads meeting.
-#define AUDIO_STARVE_TIMEOUT std::chrono::milliseconds(12)
+/*
+ * Half again the cadence, derived rather than fixed: at the wireless adapter's 1536-byte packet
+ * that is the 12 ms this was originally written as, and a transport with a shorter packet gets a
+ * proportionally shorter one. Past this the sender has missed its slot and the audio has a hole in
+ * it, where anything shorter is the jitter of two threads meeting.
+ *
+ * Floored at 2 ms so a very short packet does not make the counter fire on ordinary scheduling.
+ */
+#define AUDIO_STARVE_TIMEOUT std::chrono::microseconds( \
+    std::max<int64_t>(2000, (audioPacketBytes * 1500000LL) / AUDIO_BYTES_PER_SECOND))
 
 // Scales a 16-bit magnitude, which is what moonlight-common-c and the Android input APIs both
 // deal in, onto the protocol's 0 - 100 range.
@@ -605,7 +613,7 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
     // this up and down to absorb the difference between its clock and ours, and per 3.2.5.1.5 that
     // is "the mechanism GIP devices use to eliminate pops and clicks in audio".
     //
-    // We send a fixed AUDIO_PACKET_BYTES regardless, as xone does, so we are declining that
+    // We send a fixed audioPacketBytes regardless, as xone does, so we are declining that
     // mechanism rather than implementing it - see AUDIO.md. Small movement is therefore expected
     // and says nothing; only a request that sits well outside the band the spec describes is worth
     // reporting, and it would mean the pad is asking for a rate we never give it.
@@ -616,12 +624,12 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
 
     audioFlowRate = samples->flowRate;
 
-    int delta = static_cast<int>(audioFlowRate) - AUDIO_PACKET_BYTES;
+    int delta = static_cast<int>(audioFlowRate) - static_cast<int>(audioPacketBytes);
 
     if (delta > AUDIO_FLOW_RATE_TOLERANCE || delta < -AUDIO_FLOW_RATE_TOLERANCE)
     {
         Log::debug("Audio flow rate %u is outside the expected band around %u",
-                   audioFlowRate, AUDIO_PACKET_BYTES);
+                   audioFlowRate, (unsigned)audioPacketBytes);
     }
 }
 
@@ -882,6 +890,16 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
     }
 }
 
+void Controller::setAudioPacketBytes(size_t bytes)
+{
+    if (bytes == 0)
+    {
+        return;
+    }
+
+    audioPacketBytes = bytes;
+}
+
 bool Controller::setAudioVolume(uint8_t percent)
 {
     if (percent > 100)
@@ -966,7 +984,9 @@ void Controller::queueAudio(const int16_t *samples, size_t count)
  */
 void Controller::processAudio()
 {
-    uint8_t packet[AUDIO_PACKET_BYTES];
+    // Sized once here rather than per packet: the loop below must not allocate, and the size is
+    // fixed for the life of the sender because a transport does not change mid-session.
+    std::vector<uint8_t> packet(audioPacketBytes);
 
     while (!stopAudioThread)
     {
@@ -974,7 +994,7 @@ void Controller::processAudio()
             std::unique_lock<std::mutex> lock(audioMutex);
 
             auto ready = [this] {
-                return stopAudioThread || audioBuffer.size() >= AUDIO_PACKET_BYTES;
+                return stopAudioThread || audioBuffer.size() >= audioPacketBytes;
             };
 
             /*
@@ -998,8 +1018,8 @@ void Controller::processAudio()
                 return;
             }
 
-            std::copy(audioBuffer.begin(), audioBuffer.begin() + AUDIO_PACKET_BYTES, packet);
-            audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + AUDIO_PACKET_BYTES);
+            std::copy(audioBuffer.begin(), audioBuffer.begin() + audioPacketBytes, packet.begin());
+            audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + audioPacketBytes);
         }
 
         /*
@@ -1011,9 +1031,9 @@ void Controller::processAudio()
 
         if (scale != 256)
         {
-            int16_t *samples = reinterpret_cast<int16_t *>(packet);
+            int16_t *samples = reinterpret_cast<int16_t *>(packet.data());
 
-            for (size_t i = 0; i < sizeof(packet) / sizeof(int16_t); i++)
+            for (size_t i = 0; i < packet.size() / sizeof(int16_t); i++)
             {
                 samples[i] = static_cast<int16_t>((samples[i] * scale) >> 8);
             }
@@ -1021,7 +1041,7 @@ void Controller::processAudio()
 
         // Outside the lock: this is a blocking USB transfer, and the decode thread must never
         // wait behind it.
-        if (!sendAudioSamples(audioDeviceId, packet, sizeof(packet)))
+        if (!sendAudioSamples(audioDeviceId, packet.data(), packet.size()))
         {
             audioSendFailures.fetch_add(1, std::memory_order_relaxed);
 
