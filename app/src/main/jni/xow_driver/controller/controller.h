@@ -27,6 +27,7 @@
 #include <thread>
 #include <mutex>
 #include <condition_variable>
+#include <vector>
 
 /*
  * Forwards gamepad events to virtual input device
@@ -55,11 +56,42 @@ private:
     void guideButtonPressed(const GuideButtonData *button) override;
     void serialNumberReceived(const SerialData *serial) override;
     void inputReceived(const InputData *input) override;
+    void identifyReceived(const IdentifyData *identify,
+                          const uint8_t *payload, size_t length) override;
 
     void updateButtonStatus(const InputData *input);
 
+    // Audio formats the pad declared in its metadata, two bytes per entry, empty if it declared
+    // none. Written once when metadata arrives and read afterwards; see identifyReceived().
+    std::vector<uint8_t> audioFormats;
+
     /* Device initialization */
     void initInput(const AnnounceData *announce);
+
+    /*
+     * Moves the device from Idle to Active and finishes setup. Idempotent: whichever of the
+     * metadata response or the timeout below gets there first wins, and the other does nothing.
+     */
+    void startDevice();
+
+    // Set once the device has been told to start, so it is told exactly once
+    std::atomic<bool> deviceStarted{false};
+
+    /*
+     * Waits out the metadata response before starting the device anyway.
+     *
+     * MS-GIPUSB 3.1.1 has a device leave the Hello stage only on a Set Device State, and 2.2.11
+     * has an audio sub-device announce itself only once the primary has initialised - so start
+     * belongs after the metadata exchange, not racing it. A pad that never answers still has to
+     * be started or it would never report input at all, which is what this is for.
+     */
+    void waitForMetadata();
+
+    std::thread startThread;
+    std::mutex startMutex;
+    std::condition_variable startCondition;
+    // Guarded by startMutex, so teardown can cut the wait short rather than sleeping it out
+    bool stopStartThread = false;
 
     /* Rumble buffer consumer */
     void processRumble();

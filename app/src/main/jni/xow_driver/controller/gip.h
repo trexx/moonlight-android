@@ -18,26 +18,34 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <vector>
 
 struct Frame;
 class Bytes;
 
 /*
- * Base class for GIP (Game Input Protocol) devices
- * Performs basic handshake process:
- *   <- Announce            (from controller)
- *   -> Identify            (from dongle, unused)
- *   <- Identify            (from controller, unused)
- *   -> Power mode: on      (from dongle)
- *   -> LED mode: dim       (from dongle)
- *   -> Authenticate        (from dongle, unused)
- *   <- Authenticate        (from controller, unused)
- *   -> Serial number: 0x00 (from dongle, unused)
- *   <- Serial number       (from controller, unused)
- *   -> Serial number: 0x04 (from dongle)
- *   <- Serial number       (from controller)
+ * Base class for GIP (Game Input Protocol) devices.
+ *
+ * The handshake, and the state it drives the device through (MS-GIPUSB 3.1.1):
+ *
+ *   <- Announce             (from controller)          device is in Arrival
+ *   -> Identify             (metadata request)         Arrival -> Idle
+ *   <- Identify             (metadata response)
+ *   -> Set device state     (start)                    Idle -> Active
+ *   -> LED mode: dim
+ *   -> Serial number: 0x04
+ *   <- Serial number        (from controller)
+ *
+ * Start comes after the metadata response rather than alongside the request: a device leaves the
+ * Hello stage only on receipt of a state message, and an audio sub-device announces itself only
+ * once the primary has initialised (2.2.11). A device that never answers the metadata request is
+ * started anyway after a timeout - see Controller::waitForMetadata().
+ *
+ * The security exchange (command 6) is not implemented. MS-GIPUSB 5 says the host succeeds it by
+ * default, and a device may opt out of it entirely, so nothing here depends on it.
  */
 class GipDevice
 {
@@ -62,12 +70,23 @@ protected:
         BATT_LEVEL_FULL = 0x03,
     };
 
-    // Controller input can be paused temporarily
-    enum PowerMode
+    /*
+     * States for the Set Device State command (MS-GIPUSB 3.1.5.5.5, Table 39). xow called this
+     * "power mode" and named 0x01 SLEEP, which is wrong twice over: the message drives the device
+     * state machine in 3.1.1 rather than a power rail, and 0x01 is Stop - the state the spec has
+     * the host send to an *audio* device where a non-audio device gets Start.
+     *
+     * The device leaves the Hello stage only on receipt of one of these, so when it is sent is as
+     * load-bearing as what it says. 0x03 (Full power) and 0x06 (Reserved) are omitted; nothing
+     * here sends them.
+     */
+    enum DeviceState
     {
-        POWER_ON = 0x00,
-        POWER_SLEEP = 0x01,
-        POWER_OFF = 0x04,
+        STATE_START = 0x00,
+        STATE_STOP = 0x01,
+        STATE_OFF = 0x04,
+        // Full teardown and reinitialise. The device must reply with a "powering off" status first
+        STATE_RESET = 0x07,
     };
 
     enum LedMode
@@ -158,6 +177,27 @@ protected:
         char serialNumber[14];
     } __attribute__((packed));
 
+    /*
+     * Metadata response header (MS-GIPUSB 2.2.2.4, "Device Metadata Object"), the reply to a
+     * metadata request. Every field after the opening blob is a byte offset into the payload
+     * that follows it - zero meaning "this device has none" - and each of those points at a
+     * count byte followed by that many fixed-size items.
+     *
+     * Offsets are relative to the end of 'unknown', not to the start of the message.
+     */
+    struct IdentifyData
+    {
+        uint8_t unknown[16];
+        uint16_t clientCommandsOffset;
+        uint16_t firmwareVersionsOffset;
+        uint16_t audioFormatsOffset;
+        uint16_t capabilitiesOutOffset;
+        uint16_t capabilitiesInOffset;
+        uint16_t classesOffset;
+        uint16_t interfacesOffset;
+        uint16_t hidDescriptorOffset;
+    } __attribute__((packed));
+
     struct InputData
     {
         struct
@@ -196,16 +236,43 @@ protected:
     virtual void serialNumberReceived(const SerialData *serial) = 0;
     virtual void inputReceived(const InputData *input) = 0;
 
-    bool setPowerMode(uint8_t id, PowerMode mode);
+    /*
+     * The reassembled metadata response. 'payload' points at the bytes the offsets in 'identify'
+     * are relative to, and is valid only for the duration of the call.
+     *
+     * Not pure virtual: a device that never asks for metadata has no reason to implement it.
+     */
+    virtual void identifyReceived(const IdentifyData *identify,
+                                  const uint8_t *payload, size_t length) {}
+
+    /*
+     * Sets the device state (MS-GIPUSB 3.1.5.5.5). 'id' is the expansion index: 0 is the primary
+     * device, and a secondary device such as an audio sub-device is addressed by its own index.
+     */
+    bool setDeviceState(uint8_t id, DeviceState state);
     bool performRumble(RumbleData rumble);
     bool setLedMode(LedModeData mode);
     bool requestSerialNumber();
+    bool requestIdentify();
 
 private:
     bool acknowledgePacket(Frame frame);
+    bool acknowledgeChunk(const Frame &frame, uint32_t received, uint32_t remaining);
+    bool handleChunk(const Frame &frame, uint32_t length, uint32_t offset, const Bytes &data);
+    void dispatchChunked(uint8_t command, const uint8_t *data, size_t length);
     uint8_t getSequence(bool accessory = false);
 
     uint8_t sequence = 0x01;
     uint8_t accessorySequence = 0x01;
     SendPacket sendPacket;
+
+    /*
+     * Reassembly state for the one fragmented transfer a device may have in flight. Fragmented
+     * messages are rare - metadata and security only - so this is allocated when one starts and
+     * released when it completes, rather than kept around.
+     */
+    std::vector<uint8_t> chunkBuffer;
+    uint32_t chunkLength = 0;
+    uint8_t chunkCommand = 0;
+    bool chunkActive = false;
 };
