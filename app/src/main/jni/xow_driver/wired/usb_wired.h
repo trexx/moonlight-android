@@ -44,11 +44,21 @@ public:
     // The Command data class MTU is 64 bytes, and a fragment never exceeds one interrupt packet
     static const size_t MAX_TRANSFER_SIZE = 64;
 
+    /*
+     * The caller must already have claimed interface 0 on this fd, and must keep it claimed for
+     * the life of this object.
+     *
+     * Claiming is left to Java deliberately. Android's own driver holds a cabled pad's interface,
+     * and the only thing that detaches it is UsbDeviceConnection.claimInterface(iface, true) -
+     * which is what every other cabled driver here does. libusb_claim_interface on the wrapped fd
+     * would just fail with EBUSY against the kernel driver, so this does not attempt it: one
+     * owner, and it is the one with the API that can win.
+     */
     explicit UsbWiredDevice(int fd);
     ~UsbWiredDevice();
 
-    /* @return whether the device opened and interface 0 was claimed */
-    bool isOpen() const { return handle != nullptr && claimed; }
+    /* @return whether the device opened */
+    bool isOpen() const { return handle != nullptr; }
 
     /*
      * @return bytes read, 0 on timeout, negative on error. A timeout is not a failure: a pad with
@@ -61,5 +71,4 @@ public:
 private:
     libusb_context *ctx = nullptr;
     libusb_device_handle *handle = nullptr;
-    bool claimed = false;
 };

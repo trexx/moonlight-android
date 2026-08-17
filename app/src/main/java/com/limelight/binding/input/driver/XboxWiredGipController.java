@@ -2,6 +2,7 @@ package com.limelight.binding.input.driver;
 
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
+import android.hardware.usb.UsbInterface;
 
 import com.limelight.LimeLog;
 
@@ -24,21 +25,27 @@ import com.limelight.LimeLog;
  * as an argument, and that handle only exists once the transport has claimed the device.
  */
 public class XboxWiredGipController extends GipController {
+    // Interface 0 carries every GIP message; MS-GIPUSB 2.2.12 puts audio on interface 1
+    private static final int GIP_INTERFACE = 0;
+
     // Native transport instance, or 0 once destroyed
     private long wiredHandle;
 
     private final UsbDeviceConnection connection;
+    private final UsbInterface gipInterface;
 
     static {
         System.loadLibrary("xow-driver");
     }
 
-    private XboxWiredGipController(UsbDevice device, UsbDeviceConnection connection, int deviceId,
+    private XboxWiredGipController(UsbDevice device, UsbDeviceConnection connection,
+                                   UsbInterface gipInterface, int deviceId,
                                    UsbDriverListener listener, long wiredHandle, long gipHandle) {
         super(deviceId, listener, device.getVendorId(), device.getProductId(), gipHandle);
 
         this.wiredHandle = wiredHandle;
         this.connection = connection;
+        this.gipInterface = gipInterface;
     }
 
     /**
@@ -49,9 +56,23 @@ public class XboxWiredGipController extends GipController {
      */
     public static XboxWiredGipController create(UsbDevice device, UsbDeviceConnection connection,
                                                 int deviceId, UsbDriverListener listener) {
+        /*
+         * Claimed here rather than natively, and forced. Android's own driver holds this interface
+         * - that is the whole reason the pad works without us - and the only thing that detaches it
+         * is this call with force set. libusb_claim_interface on the wrapped descriptor would lose
+         * to the kernel driver with EBUSY, so the native side deliberately does not attempt it.
+         */
+        UsbInterface gipInterface = device.getInterface(GIP_INTERFACE);
+
+        if (!connection.claimInterface(gipInterface, true)) {
+            LimeLog.warning("Wired GIP: could not claim the GIP interface from the kernel driver");
+            return null;
+        }
+
         long wired = createWiredDriver(connection.getFileDescriptor());
         if (wired == 0) {
             LimeLog.warning("Wired GIP: could not create the native transport");
+            connection.releaseInterface(gipInterface);
             return null;
         }
 
@@ -60,6 +81,7 @@ public class XboxWiredGipController extends GipController {
         if (!startWiredDriver(wired)) {
             LimeLog.warning("Wired GIP: transport failed to start");
             destroyWiredDriver(wired);
+            connection.releaseInterface(gipInterface);
             return null;
         }
 
@@ -67,10 +89,12 @@ public class XboxWiredGipController extends GipController {
         if (gip == 0) {
             LimeLog.warning("Wired GIP: transport started without a controller");
             destroyWiredDriver(wired);
+            connection.releaseInterface(gipInterface);
             return null;
         }
 
-        return new XboxWiredGipController(device, connection, deviceId, listener, wired, gip);
+        return new XboxWiredGipController(device, connection, gipInterface, deviceId, listener,
+                                          wired, gip);
     }
 
     /**
@@ -105,7 +129,9 @@ public class XboxWiredGipController extends GipController {
         long handle = wiredHandle;
         wiredHandle = 0;
 
+        // Transport first: it is still reading from the interface until it is destroyed
         destroyWiredDriver(handle);
+        connection.releaseInterface(gipInterface);
         connection.close();
 
         // Tells the service to drop us, which is also what takes this pad out of PadAudioSink

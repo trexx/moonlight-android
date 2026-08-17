@@ -58,23 +58,12 @@ UsbWiredDevice::UsbWiredDevice(int fd)
     }
 
     /*
-     * No reset and no set_configuration, unlike the dongle path. Android has already configured
-     * the device, and resetting it would drop it out from under whatever else is using it - which
-     * during development is Android's own input stack, still driving the pad we are about to take
-     * over.
+     * No reset, no set_configuration and no claim, unlike the dongle path. Android has already
+     * configured the device and the Java layer has already claimed interface 0 off the kernel
+     * driver on this same fd; resetting or re-claiming here would either fail or drop the device
+     * out from under the claim that just succeeded.
      */
-    error = libusb_claim_interface(handle, GIP_INTERFACE);
-
-    if (error)
-    {
-        Log::error("Wired: error claiming interface 0: %s", libusb_error_name(error));
-
-        return;
-    }
-
-    claimed = true;
-
-    Log::info("Wired: claimed GIP interface");
+    Log::info("Wired: device opened");
 }
 
 UsbWiredDevice::~UsbWiredDevice()
@@ -89,16 +78,7 @@ UsbWiredDevice::~UsbWiredDevice()
         return;
     }
 
-    if (claimed)
-    {
-        int error = libusb_release_interface(handle, GIP_INTERFACE);
-
-        if (error)
-        {
-            Log::error("Wired: error releasing interface: %s", libusb_error_name(error));
-        }
-    }
-
+    // Releasing is the Java layer's job too, for the same reason claiming is
     libusb_close(handle);
 
     if (ctx != nullptr)
