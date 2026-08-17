@@ -79,6 +79,10 @@
 // Anything inside that band is the protocol working, not a fault, and logging it would be noise.
 #define AUDIO_FLOW_RATE_TOLERANCE (8 * 2 * 2)
 
+// Half again the 8 ms cadence. Past this the sender has missed its slot and audio has a hole in it,
+// where anything shorter is the jitter of two threads meeting.
+#define AUDIO_STARVE_TIMEOUT std::chrono::milliseconds(12)
+
 // Scales a 16-bit magnitude, which is what moonlight-common-c and the Android input APIs both
 // deal in, onto the protocol's 0 - 100 range.
 #define RUMBLE_SCALE(magnitude) \
@@ -627,6 +631,15 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
  * it hands data[0] and data[1] straight to its format request. A pad that declared none has no
  * audio endpoint on this device id, and asking it to take audio is answered with silence.
  */
+void Controller::audioStats(uint32_t out[5]) const
+{
+    out[0] = audioPacketsSent.load(std::memory_order_relaxed);
+    out[1] = audioBytesDropped.load(std::memory_order_relaxed);
+    out[2] = audioStarved.load(std::memory_order_relaxed);
+    out[3] = audioSendFailures.load(std::memory_order_relaxed);
+    out[4] = audioFlowRate;
+}
+
 bool Controller::supportsAudioOut() const
 {
     /*
@@ -705,6 +718,10 @@ bool Controller::setAudioEnabled(bool enable)
         }
 
         audioFlowRate = 0;
+        audioPacketsSent = 0;
+        audioBytesDropped = 0;
+        audioSendFailures = 0;
+        audioStarved = 0;
         audioState = AUDIO_AWAITING_FORMAT;
         audioEnabled = true;
 
@@ -736,6 +753,23 @@ bool Controller::setAudioEnabled(bool enable)
         audioBuffer.clear();
         audioBuffer.shrink_to_fit();
     }
+
+    /*
+     * The session's totals, reported where they will actually be read. CLAUDE.md's note about the
+     * end-of-stream summary applies: this is what reaches a bug report, whereas anything only on
+     * screen is gone the moment the stream ends.
+     *
+     * Expect packets at 125 a second - one per 8 ms - so the count against the time audio was on
+     * says whether the stream kept up. Dropped bytes mean the host outran the link and audio would
+     * have drifted; starved counts mean the reverse, a ring emptied and a gap heard.
+     */
+    Log::info("Audio session: %u packets sent, %u bytes dropped, %u late by >12ms, %u send failures, "
+              "last flow rate %u",
+              audioPacketsSent.load(std::memory_order_relaxed),
+              audioBytesDropped.load(std::memory_order_relaxed),
+              audioStarved.load(std::memory_order_relaxed),
+              audioSendFailures.load(std::memory_order_relaxed),
+              (unsigned)audioFlowRate);
 
     Log::info("Audio disabled for controller");
 
@@ -823,6 +857,8 @@ void Controller::queueAudio(const int16_t *samples, size_t count)
         {
             size_t excess = audioBuffer.size() + length - AUDIO_BUFFER_MAX_BYTES;
 
+            audioBytesDropped.fetch_add(static_cast<uint32_t>(excess), std::memory_order_relaxed);
+
             if (excess >= audioBuffer.size())
             {
                 audioBuffer.clear();
@@ -852,9 +888,25 @@ void Controller::processAudio()
         {
             std::unique_lock<std::mutex> lock(audioMutex);
 
-            audioCondition.wait(lock, [this] {
+            auto ready = [this] {
                 return stopAudioThread || audioBuffer.size() >= AUDIO_PACKET_BYTES;
-            });
+            };
+
+            /*
+             * Waiting is normal and says nothing: the ring is how this paces itself, so the sender
+             * waits on every packet by design, and at a perfectly matched rate it finds the ring
+             * empty every time. Waiting *longer than the cadence* is the thing worth counting -
+             * that is the host failing to supply in time, which is what a gap sounds like.
+             *
+             * An earlier version counted an empty ring instead and reported 20% starvation through
+             * audio that was audibly fine.
+             */
+            if (!audioCondition.wait_for(lock, AUDIO_STARVE_TIMEOUT, ready))
+            {
+                audioStarved.fetch_add(1, std::memory_order_relaxed);
+
+                audioCondition.wait(lock, ready);
+            }
 
             if (stopAudioThread)
             {
@@ -869,10 +921,14 @@ void Controller::processAudio()
         // wait behind it.
         if (!sendAudioSamples(audioDeviceId, packet, sizeof(packet)))
         {
+            audioSendFailures.fetch_add(1, std::memory_order_relaxed);
+
             Log::error("Failed to send audio samples");
 
             return;
         }
+
+        audioPacketsSent.fetch_add(1, std::memory_order_relaxed);
     }
 }
 

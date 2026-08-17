@@ -63,6 +63,13 @@ public:
     bool supportsAudioOut() const;
 
     /*
+     * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
+     * dropped, packets late by more than the cadence, send failures, and the pad's last requested
+     * flow rate. Reads relaxed atomics, so it costs nothing on the sending path and needs no lock.
+     */
+    void audioStats(uint32_t out[5]) const;
+
+    /*
      * Queues interleaved 16-bit stereo PCM for this pad. Called from Moonlight's audio decode
      * thread, so it only copies into the ring and returns - the blocking USB write happens on the
      * sender thread. Samples are dropped rather than queued without limit when the ring is full.
@@ -162,6 +169,28 @@ private:
     std::vector<uint8_t> audioBuffer;
     // Last flow rate the pad reported, tracked only to notice it drifting from the packet size
     uint16_t audioFlowRate = 0;
+
+    /*
+     * Audio stream health, following the VideoStats pattern: exact counts accumulated on the
+     * sending path, with all formatting done off it. Relaxed atomics because they are written on
+     * the sender and decode threads and read from neither - a few cycles at 125 packets a second,
+     * next to a blocking USB transfer.
+     *
+     * Deliberately counts rather than averages. An averaged figure is what let "Average decoding
+     * time" read 0.00 ms through a total decoder hang; a count of things that happened cannot be
+     * quietly wrong in the same way.
+     */
+    std::atomic<uint32_t> audioPacketsSent{0};
+    std::atomic<uint32_t> audioBytesDropped{0};
+    std::atomic<uint32_t> audioSendFailures{0};
+
+    /*
+     * Times the sender found the ring completely empty. Waiting as such is normal - the ring is
+     * how this paces itself, so the sender waits on every packet by design - but a ring drained to
+     * nothing means the host stopped supplying in time, which is what a gap in the audio sounds
+     * like.
+     */
+    std::atomic<uint32_t> audioStarved{0};
 
     void notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge);
 
