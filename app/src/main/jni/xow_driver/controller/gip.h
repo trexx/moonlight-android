@@ -250,6 +250,72 @@ protected:
      * device, and a secondary device such as an audio sub-device is addressed by its own index.
      */
     bool setDeviceState(uint8_t id, DeviceState state);
+    /*
+     * Security exchange (MS-GIPUSB 3.1.5.5, message type 0x06), the handshake a Windows host runs
+     * against every pad. A capture of one shows it completing, and the pad's audio sub-device
+     * announcing a few seconds later; this driver has never sent any of it and no sub-device has
+     * ever appeared. See AUDIO.md.
+     *
+     * The framing follows xone: an outer handshake header, an inner data header, the payload, then
+     * an eight-byte trailer. Lengths in both headers are **big-endian**, unlike everywhere else in
+     * GIP, and each counts the bytes after the header it sits in.
+     */
+    struct AuthHandshakeHeader
+    {
+        uint8_t context;
+        uint8_t options;
+        uint8_t error;
+        uint8_t command;
+        uint16_t length;   // big-endian
+    } __attribute__((packed));
+
+    struct AuthDataHeader
+    {
+        uint8_t command;
+        uint8_t version;
+        uint16_t length;   // big-endian
+    } __attribute__((packed));
+
+    /*
+     * Handshake commands, version 1. The v2 set at 0x21-0x27 negotiates ECDH instead of RSA and is
+     * deliberately absent: the captured exchange is v1 throughout, so nothing needs it yet.
+     */
+    enum AuthCommand
+    {
+        AUTH_HOST_HELLO = 0x01,
+        AUTH_CLIENT_HELLO = 0x02,
+        AUTH_CLIENT_CERTIFICATE = 0x03,
+        AUTH_HOST_SECRET = 0x05,
+        AUTH_HOST_FINISH = 0x07,
+        AUTH_CLIENT_FINISH = 0x08,
+    };
+
+    enum AuthOption
+    {
+        AUTH_OPT_ACKNOWLEDGE = 0x01,
+        AUTH_OPT_REQUEST = 0x02,
+        AUTH_OPT_FROM_HOST = 0x40,
+    };
+
+    // Random bytes in a hello, and the fixed trailer every handshake message ends with
+    static const size_t AUTH_RANDOM_LENGTH = 32;
+    static const size_t AUTH_TRAILER_LENGTH = 8;
+
+    /* Opens the security exchange. */
+    bool sendAuthHostHello();
+
+    /*
+     * Asks the device for a handshake message it owes us. The exchange is host-driven: a reply is
+     * requested rather than merely awaited.
+     */
+    bool requestAuthPacket(uint8_t command, uint16_t length);
+
+    /*
+     * A security message from the device, payload only. Not pure virtual - a device that never
+     * starts a handshake has no reason to implement it.
+     */
+    virtual void authReceived(const uint8_t *data, size_t length) {}
+
     bool performRumble(RumbleData rumble);
     bool setLedMode(LedModeData mode);
     bool requestSerialNumber();
@@ -264,6 +330,12 @@ private:
 
     uint8_t sequence = 0x01;
     uint8_t accessorySequence = 0x01;
+    /*
+     * Security is a Unique pool in MS-GIPUSB 2.2.9, so it counts separately from the Command
+     * class. A capture of a Windows host shows exactly that: metadata, set-state and LED go out as
+     * 1, 2, 3 and the first security message is 1 again.
+     */
+    uint8_t securitySequence = 0x01;
     SendPacket sendPacket;
 
     /*

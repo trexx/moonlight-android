@@ -21,6 +21,7 @@
 #include "../utils/bytes.h"
 
 #include <algorithm>
+#include <random>
 
 enum FrameCommand
 {
@@ -251,6 +252,13 @@ bool GipDevice::handlePacket(const Bytes &packet)
     }
 
     else if (
+        frame->command == CMD_AUTHENTICATE &&
+        data.size() >= payloadLength
+    ) {
+        authReceived(data.raw(), payloadLength);
+    }
+
+    else if (
         frame->command == CMD_SERIAL_NUM &&
         payloadLength == sizeof(SerialData) &&
         data.size() >= sizeof(SerialData)
@@ -458,6 +466,13 @@ void GipDevice::dispatchChunked(uint8_t command, const uint8_t *data, size_t len
         return;
     }
 
+    if (command == CMD_AUTHENTICATE)
+    {
+        authReceived(data, length);
+
+        return;
+    }
+
     Log::debug("Ignoring chunked message: command 0x%02x, %zu bytes", command, length);
 }
 
@@ -489,6 +504,107 @@ bool GipDevice::acknowledgeChunk(const Frame &frame, uint32_t received, uint32_t
 
     out.append(header);
     out.append(ack);
+
+    return sendPacket(out);
+}
+
+/*
+ * Big-endian, because the auth headers are - the rest of GIP is little-endian, so this is written
+ * out rather than reusing anything.
+ */
+static void putBigEndian16(uint8_t *buf, uint16_t value)
+{
+    buf[0] = static_cast<uint8_t>(value >> 8);
+    buf[1] = static_cast<uint8_t>(value);
+}
+
+bool GipDevice::sendAuthHostHello()
+{
+    // Handshake header, data header, 32 random bytes, two unknown 4-byte fields, trailer. The
+    // captured Windows exchange sends exactly this, 58 bytes, so the shape is not inferred.
+    const size_t dataLength = sizeof(AuthDataHeader) + AUTH_RANDOM_LENGTH + 4 + 4;
+    const size_t total = sizeof(AuthHandshakeHeader) + dataLength + AUTH_TRAILER_LENGTH;
+
+    Bytes payload(total);
+    uint8_t *raw = payload.raw();
+
+    std::fill(raw, raw + total, 0);
+
+    raw[0] = 0x00;                                          // context: handshake
+    raw[1] = AUTH_OPT_ACKNOWLEDGE | AUTH_OPT_FROM_HOST;
+    raw[2] = 0x00;                                          // no error
+    raw[3] = AUTH_HOST_HELLO;
+    putBigEndian16(raw + 4, static_cast<uint16_t>(dataLength));
+
+    raw[6] = AUTH_HOST_HELLO;
+    raw[7] = 0x01;                                          // security protocol major version
+    putBigEndian16(raw + 8, static_cast<uint16_t>(dataLength - sizeof(AuthDataHeader)));
+
+    // The client mixes this into the master secret. Only unpredictability matters, so the default
+    // engine seeded from the system source is enough - nothing here is verifying anyone.
+    std::random_device source;
+
+    for (size_t i = 0; i < AUTH_RANDOM_LENGTH; i++)
+    {
+        raw[sizeof(AuthHandshakeHeader) + sizeof(AuthDataHeader) + i] =
+                static_cast<uint8_t>(source());
+    }
+
+    Frame frame = {};
+
+    frame.command = CMD_AUTHENTICATE;
+    frame.type = TYPE_REQUEST | TYPE_ACK;
+    frame.sequence = securitySequence++;
+
+    if (securitySequence == 0x00)
+    {
+        securitySequence = 0x01;
+    }
+
+    frame.length = static_cast<uint8_t>(total);
+
+    Bytes out;
+
+    out.append(frame);
+    out.append(payload);
+
+    return sendPacket(out);
+}
+
+bool GipDevice::requestAuthPacket(uint8_t command, uint16_t length)
+{
+    // A request carries the handshake header and the trailer, and no data header: the length field
+    // says how much the device should send back.
+    const size_t total = sizeof(AuthHandshakeHeader) + AUTH_TRAILER_LENGTH;
+
+    Bytes payload(total);
+    uint8_t *raw = payload.raw();
+
+    std::fill(raw, raw + total, 0);
+
+    raw[0] = 0x00;
+    raw[1] = AUTH_OPT_REQUEST | AUTH_OPT_FROM_HOST;
+    raw[2] = 0x00;
+    raw[3] = command;
+    putBigEndian16(raw + 4, length);
+
+    Frame frame = {};
+
+    frame.command = CMD_AUTHENTICATE;
+    frame.type = TYPE_REQUEST | TYPE_ACK;
+    frame.sequence = securitySequence++;
+
+    if (securitySequence == 0x00)
+    {
+        securitySequence = 0x01;
+    }
+
+    frame.length = static_cast<uint8_t>(total);
+
+    Bytes out;
+
+    out.append(frame);
+    out.append(payload);
 
     return sendPacket(out);
 }

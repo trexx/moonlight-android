@@ -316,6 +316,58 @@ void Controller::notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge)
                         static_cast<jbyte>(level), static_cast<jbyte>(charge));
 }
 
+/*
+ * Handles a security message from the pad, and asks for the next one.
+ *
+ * The exchange is host-driven: each reply is requested rather than awaited. Sizes are the ones the
+ * captured Windows exchange asks for - 0x54 for the client hello, 0x0404 for the certificate.
+ */
+void Controller::authReceived(const uint8_t *data, size_t length)
+{
+    if (length < 4)
+    {
+        Log::debug("Security message too short: %zu bytes", length);
+
+        return;
+    }
+
+    // Handshake header: context, options, error, command
+    uint8_t command = data[3];
+    uint8_t error = data[2];
+
+    Log::info("Security: command 0x%02x, error 0x%02x, %zu bytes", command, error, length);
+
+    if (error != 0)
+    {
+        Log::error("Security exchange failed with error 0x%02x", error);
+
+        return;
+    }
+
+    switch (authLastSent)
+    {
+        case AUTH_HOST_HELLO:
+            authLastSent = AUTH_CLIENT_HELLO;
+            requestAuthPacket(AUTH_CLIENT_HELLO, 0x0054);
+            break;
+
+        case AUTH_CLIENT_HELLO:
+            authLastSent = AUTH_CLIENT_CERTIFICATE;
+            requestAuthPacket(AUTH_CLIENT_CERTIFICATE, 0x0404);
+            break;
+
+        case AUTH_CLIENT_CERTIFICATE:
+            // As far as this phase goes. What follows needs an RSA-encrypted pre-master secret,
+            // and reaching here at all is what it set out to establish.
+            Log::info("Security: certificate received, %zu bytes - handshake framing works", length);
+            authLastSent = 0;
+            break;
+
+        default:
+            break;
+    }
+}
+
 void Controller::initInput(const AnnounceData *announce)
 {
     // Ask for metadata and wait for the answer before starting the device. MS-GIPUSB 3.1.1 has the
@@ -500,6 +552,20 @@ void Controller::startDevice()
     if (!requestSerialNumber())
     {
         Log::error("Failed to request serial number");
+    }
+
+    // The security exchange, once the device is Active. A capture of a Windows host has it here -
+    // set state, LED, then the handshake, about 170 ms after the announce - and sending it any
+    // earlier, while the pad is still in Arrival, got no answer at all. Its audio sub-device
+    // appears seconds after this completes; this driver has never sent it and none has appeared.
+    // Failing is not fatal, the driver has always run without it.
+    authLastSent = AUTH_HOST_HELLO;
+
+    if (!sendAuthHostHello())
+    {
+        Log::error("Failed to start the security exchange");
+
+        authLastSent = 0;
     }
 }
 
