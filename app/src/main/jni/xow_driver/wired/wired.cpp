@@ -46,6 +46,23 @@ bool WiredController::start()
     stopThread = false;
     readThread = std::thread(&WiredController::readPackets, this);
 
+    /*
+     * Sent after the reader is up, so the Hello that follows is not missed.
+     *
+     * A cabled pad has already been through Arrival by the time we claim it - Android's own driver
+     * took it there, which is why it works without us - and MS-GIPUSB 2.2.1 has a device Hello only
+     * while in Arrival. So it never announces to us, and nothing downstream of the announce ever
+     * runs: no metadata, no Set Device State, no security handshake and therefore no audio
+     * sub-device. A capture showed exactly that, with the pad happily sending battery status while
+     * never saying hello.
+     *
+     * Failure here is not fatal. The pad keeps working as it was; it simply never reaches audio.
+     */
+    if (!gipController->resetDevice())
+    {
+        Log::error("Wired: failed to reset the device into its arrival state");
+    }
+
     Log::info("Wired: controller started");
 
     return true;

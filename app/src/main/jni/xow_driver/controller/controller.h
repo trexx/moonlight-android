@@ -63,6 +63,21 @@ public:
     bool supportsAudioOut() const;
 
     /*
+     * Sends the device back through its own state machine with Set Device State: RESET.
+     *
+     * For a transport that attaches to a device already past Arrival. MS-GIPUSB 2.2.1 has a device
+     * send Hello only while in Arrival and "no other messages" until the host answers, so a device
+     * already in Active never announces and the whole initialisation sequence - metadata, start,
+     * the security handshake, the audio sub-device - never begins. A GIP reset returns it to
+     * Arrival, where it Hellos and the ordinary path takes over.
+     *
+     * Deliberately not a USB reset, which is what xone does here. That re-enumerates the device and
+     * would invalidate the descriptor and interface claim Android handed us; this is a protocol
+     * message and leaves USB alone.
+     */
+    bool resetDevice();
+
+    /*
      * Bytes per audio packet, which sets the cadence with it: the ring paces itself by waiting for
      * one packet's worth of samples, so the size is the clock.
      *
@@ -136,6 +151,9 @@ private:
 
     // Set once the device has been told to start, so it is told exactly once
     std::atomic<bool> deviceStarted{false};
+
+    // Set once the input state and rumble thread exist, so a repeated Hello cannot rebuild them
+    std::atomic<bool> inputInitialised{false};
 
     /*
      * Waits out the metadata response before starting the device anyway.

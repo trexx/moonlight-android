@@ -232,6 +232,26 @@ void Controller::deviceAnnounced(uint8_t id, const AnnounceData *announce)
         announce->gipVersion.minor
     );
 
+    /*
+     * A device in Arrival re-sends Hello every 500 ms until the host answers (MS-GIPUSB 2.2.1), so
+     * a second one is routine rather than an error - and on a cable nothing above this dedupes
+     * them, where the dongle drops duplicate associations before they reach here.
+     *
+     * Answering again is right; rebuilding the input state is not. initInput() assigns to
+     * rumbleThread, and assigning over a thread that is already running calls std::terminate.
+     */
+    if (inputInitialised.exchange(true))
+    {
+        Log::debug("Device re-announced, answering without reinitialising");
+
+        if (!requestIdentify())
+        {
+            Log::error("Failed to answer a repeated announce");
+        }
+
+        return;
+    }
+
     initInput(announce);
 }
 
@@ -888,6 +908,11 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
         stopAudioThread = false;
         audioThread = std::thread(&Controller::processAudio, this);
     }
+}
+
+bool Controller::resetDevice()
+{
+    return setDeviceState(DEVICE_ID_CONTROLLER, STATE_RESET);
 }
 
 void Controller::setAudioPacketBytes(size_t bytes)
