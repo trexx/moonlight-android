@@ -437,6 +437,62 @@ something other than the Xbox button.
 
 ---
 
+## 9. GIP security handshake
+
+The driver now performs the [MS-GIPUSB] security exchange when a pad connects. **This is not a
+security feature** — the certificate is never validated and the link is still unencrypted. It is
+here because §2.2.1.4 makes it the gate on everything else: *"GIP supports enumeration of additional
+sub-devices after the primary device has completed the Security Handshake successfully."* No
+handshake, no sub-devices, and therefore no headphone audio.
+
+Only **v1** (RSA, commands `0x01`–`0x08`) is implemented. The data header's version byte selects,
+and a device asking for v2 (ECDH P-256, `0x21`–`0x27`) is logged and left unauthenticated rather
+than failed obscurely.
+
+**This runs on every pad connect, whether or not audio is wanted**, so the regression checks matter
+far more than the feature check. Two connect-loops were inflicted on a real pad while getting the
+fragmentation right, so the failure mode is known and unpleasant: the pad cycles connect/disconnect,
+its light flashing, with the add/remove device sounds looping.
+
+- [x] **Input works after the handshake.** Buttons, sticks and triggers — not just the guide button,
+      which kept working through an earlier regression where everything else was dead (§8).
+      *Verified repeatedly on the Shield TV, Xbox One pad (PID `02dd`) on adapter `045e:02fe`.*
+- [x] **The pad connects and stays connected**, with no add/remove sound looping and no flashing
+      light. *Stable across many sessions after the fragmentation fix.*
+- [x] **The exchange completes**, logged as `Security: command 0x…` per message. The sizes to expect
+      on a v1 pad, matching the Windows capture:
+
+      | Message | Bytes |
+      |---|---|
+      | `HOST_HELLO` acknowledged | 6 |
+      | `CLIENT_HELLO` | 90 |
+      | certificate, reassembled | 825 |
+
+- [x] **A sub-device announces afterwards.** `dev=3` (VID `045e`, PID `02e4`) appears within about a
+      second of the pad initialising — the 500–1000 ms §2.2.11 describes. Before the handshake
+      existed this never happened under any condition (§8).
+- [ ] **A pad that never completes the handshake still works for input.** Pull the batteries mid
+      exchange, or test a pad that wants v2. Authentication failing must degrade to "no audio",
+      never to "no pad".
+- [ ] **Repeated connect/disconnect cycles**, ten or more, with no leak of the per-pad security
+      state and no slot exhaustion. Each connect runs a fresh exchange.
+- [ ] **Four pads on one adapter** authenticate independently and all four keep working. Each has
+      its own sequence pool; a shared counter would show up here and nowhere else.
+- [ ] **A v2 pad is detected and logged**, not silently broken. Expect `device wants protocol v2,
+      which is not implemented`. **No v2 hardware has been available** — this is the item that
+      needs it.
+- [ ] **Timing on a cold boot.** The handshake is sent at the end of `startDevice()`, behind the
+      metadata response with a 500 ms fallback. Confirm a pad powered on *before* the adapter, and
+      one powered on long after, both authenticate.
+
+Link encryption is deliberately **not** implemented. xone programs a per-client key into the MT76
+from the derived session key; the working assumption here was that a pad might withhold audio until
+the link was encrypted, and that turned out to be false. `authCompleted()` exists as an unused hook
+if it is ever needed. Leaving it out also avoids its failure mode, which is severe: a wrong key
+silences the pad completely, input included.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -453,3 +509,5 @@ something other than the Xbox button.
 | §7 battery, extended status | Xbox Series X\|S pad, plus a play-and-charge kit or USB cable |
 | §7 JNI input path | Four pads on one adapter, for a sustained session |
 | §8 metadata | Any adapter pad; ideally several generations, since what they report is the point |
+| §9 v2 security | A pad that uses the ECDH handshake — none has been available to test against |
+| §9 multi-pad | Four pads on one adapter, to confirm per-pad sequence pools |
