@@ -423,6 +423,14 @@ bool GipDevice::handlePacket(const Bytes &packet)
     // how GIP does rate adaptation (MS-GIPUSB 3.2.5.1.5). Any mic samples after it are discarded -
     // this client has no microphone support.
     else if (
+        frame->command == CMD_AUDIO_CONFIG &&
+        payloadLength >= 1 &&
+        data.size() >= payloadLength
+    ) {
+        audioControlReceived(frame->deviceId, data.raw(), payloadLength);
+    }
+
+    else if (
         frame->command == CMD_AUDIO_SAMPLES &&
         payloadLength >= sizeof(AudioSamplesData) &&
         data.size() >= sizeof(AudioSamplesData)
@@ -1163,10 +1171,11 @@ void GipDevice::handleAuthPacket(const uint8_t *data, size_t length)
     }
 }
 
-bool GipDevice::setAudioFormat(AudioFormat in, AudioFormat out)
+bool GipDevice::setAudioFormat(uint8_t id, AudioFormat in, AudioFormat out)
 {
     Frame frame = {};
 
+    frame.deviceId = id;
     frame.command = CMD_AUDIO_CONFIG;
     frame.type = TYPE_REQUEST;
     frame.sequence = getSequence();
@@ -1186,7 +1195,7 @@ bool GipDevice::setAudioFormat(AudioFormat in, AudioFormat out)
     return sendPacket(packet);
 }
 
-bool GipDevice::sendAudioSamples(const uint8_t *samples, size_t length)
+bool GipDevice::sendAudioSamples(uint8_t id, const uint8_t *samples, size_t length)
 {
     // Audio needs the extended length encoding - 1536 bytes will not fit the single byte the
     // Frame struct has - so the header is built by hand rather than through Frame.
@@ -1198,7 +1207,8 @@ bool GipDevice::sendAudioSamples(const uint8_t *samples, size_t length)
         audioSequence = 1;
     }
 
-    size_t headerLength = encodeHeader(header, CMD_AUDIO_SAMPLES, 0, TYPE_REQUEST,
+    // Addressed to the audio sub-device, which is where the audio lives - not to the pad
+    size_t headerLength = encodeHeader(header, CMD_AUDIO_SAMPLES, id, TYPE_REQUEST,
                                        audioSequence, static_cast<uint32_t>(length));
 
     // Sized once and filled directly. Bytes::append()'s template overload takes the address of

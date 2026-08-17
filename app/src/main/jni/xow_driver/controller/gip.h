@@ -232,6 +232,8 @@ protected:
     enum AudioControl
     {
         AUDIO_CTRL_FORMAT = 0x02,
+        // Sent by the device, not the host: 2.2.11 has the host wait for it before playing audio
+        AUDIO_CTRL_VOLUME = 0x03,
     };
 
     struct AudioFormatData
@@ -391,20 +393,26 @@ protected:
     /* Upstream audio from the pad. Only the flow rate is of interest - there is no mic support. */
     virtual void audioSamplesReceived(const AudioSamplesData *samples) {}
 
+    /*
+     * An Audio Control message from the device: the format it adopted, or its volume. Both are
+     * steps the host waits on in 2.2.11's initialisation sequence.
+     */
+    virtual void audioControlReceived(uint8_t id, const uint8_t *data, size_t length) {}
+
     bool performRumble(RumbleData rumble);
     bool setLedMode(LedModeData mode);
     bool requestSerialNumber();
     bool requestIdentify(uint8_t id = 0);
 
     /* Asks the device to use these formats. 'in' is capture, 'out' is what we render to it. */
-    bool setAudioFormat(AudioFormat in, AudioFormat out);
+    bool setAudioFormat(uint8_t id, AudioFormat in, AudioFormat out);
 
     /*
      * Sends one audio packet. 'length' must match the negotiated format's 8 ms buffer size, which
      * for 48 kHz stereo is 1536 bytes - the device paces on packet arrival, so a short packet is
      * heard rather than merely inefficient.
      */
-    bool sendAudioSamples(const uint8_t *samples, size_t length);
+    bool sendAudioSamples(uint8_t id, const uint8_t *samples, size_t length);
 
 private:
     /* Security exchange, driven entirely here - see the .cpp for the flow. */

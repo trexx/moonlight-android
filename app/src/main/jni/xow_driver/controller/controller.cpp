@@ -491,19 +491,34 @@ void Controller::identifyReceived(uint8_t id, const IdentifyData *identify,
     logInfoElement("capabilities in", payload, length, identify->capabilitiesInOffset, 1);
     logInfoElement("interfaces", payload, length, identify->interfacesOffset, METADATA_GUID_LENGTH);
 
-    // Retained rather than only logged: whether a pad has a usable audio format is the one thing
-    // a caller needs to know before offering to send it audio, and metadata is the only place
-    // that says so. An empty list means the device declared none.
+    // Retained rather than only logged: whether a device has a usable audio format is the one
+    // thing a caller needs before offering to send it audio, and metadata is the only place that
+    // says so. An empty list means the device declared none.
     uint8_t formats;
     const uint8_t *items = findInfoElement(payload, length, identify->audioFormatsOffset,
                                            METADATA_AUDIO_FORMAT_LENGTH, formats);
 
-    audioFormats.clear();
+    std::vector<uint8_t> parsed;
 
     if (items != nullptr)
     {
-        audioFormats.assign(items,
-                            items + static_cast<size_t>(formats) * METADATA_AUDIO_FORMAT_LENGTH);
+        parsed.assign(items,
+                      items + static_cast<size_t>(formats) * METADATA_AUDIO_FORMAT_LENGTH);
+    }
+
+    if (id == DEVICE_ID_CONTROLLER)
+    {
+        audioFormats = parsed;
+    }
+    else if (!parsed.empty())
+    {
+        // The audio sub-device, which is where audio actually lives. Its formats are pairs of
+        // capture and render, and 2.2.11 has the host take the first rather than choose.
+        audioDeviceId = id;
+        audioDeviceFormats = parsed;
+
+        Log::info("Audio device %u offers %zu format pair(s), first %02x/%02x",
+                  id, parsed.size() / METADATA_AUDIO_FORMAT_LENGTH, parsed[0], parsed[1]);
     }
 
     // The metadata exchange is done, so the device is in Idle and can be started. Wakes the
@@ -614,9 +629,21 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
  */
 bool Controller::supportsAudioOut() const
 {
-    for (size_t i = 1; i < audioFormats.size(); i += METADATA_AUDIO_FORMAT_LENGTH)
+    /*
+     * The audio sub-device's formats, not the pad's. A pad reports none of its own and is not
+     * supposed to: audio is a separate GIP device with its own metadata, and it only announces
+     * once the security handshake has completed (MS-GIPUSB 2.2.1.4). Asking device 0 was always
+     * going to answer no, whatever was plugged into the jack.
+     */
+    if (audioDeviceId == 0)
     {
-        if (audioFormats[i] == AUDIO_FORMAT_48KHZ_STEREO)
+        return false;
+    }
+
+    // Render is the second of each capture/render pair
+    for (size_t i = 1; i < audioDeviceFormats.size(); i += METADATA_AUDIO_FORMAT_LENGTH)
+    {
+        if (audioDeviceFormats[i] == AUDIO_FORMAT_48KHZ_STEREO)
         {
             return true;
         }
@@ -634,22 +661,38 @@ bool Controller::setAudioEnabled(bool enable)
 
     if (enable)
     {
-        // Refuse rather than half-succeed. Enabling routes stream audio away from the TV, so a
-        // pad that cannot play it leaves the user with silence everywhere and no explanation.
-        // The metadata is the only thing that says, and we already ask for it.
-        if (!supportsAudioOut())
+        /*
+         * Refuse rather than half-succeed. Enabling routes the stream's audio away from the TV, so
+         * a pad with nowhere to put it leaves the user with silence everywhere and no explanation.
+         * The sub-device's metadata is what says, and it only exists once the security handshake
+         * has completed (MS-GIPUSB 2.2.1.4).
+         */
+        if (audioDeviceId == 0 || audioDeviceFormats.size() < METADATA_AUDIO_FORMAT_LENGTH)
         {
-            Log::info("Controller declared no 48 kHz stereo output; refusing audio");
+            Log::info("No audio sub-device has announced; refusing audio");
 
             return false;
         }
 
-        // 48 kHz stereo both ways. The capture direction is negotiated because the protocol pairs
-        // them in one message and the pad needs a valid value, not because anything reads a
-        // microphone here.
-        if (!setAudioFormat(AUDIO_FORMAT_48KHZ_STEREO, AUDIO_FORMAT_48KHZ_STEREO))
+        /*
+         * 2.2.11's sequence, and the order is the point: stop the device, propose a format, and
+         * wait. The host does not choose a format - it takes the first pair the device advertised,
+         * capture then render. Sending a format and streaming immediately, which is what this did
+         * before, skips three steps the device is waiting on.
+         */
+        if (!setDeviceState(audioDeviceId, STATE_STOP))
         {
-            Log::error("Failed to set audio format");
+            Log::error("Failed to stop the audio device");
+
+            return false;
+        }
+
+        auto in = static_cast<AudioFormat>(audioDeviceFormats[0]);
+        auto out = static_cast<AudioFormat>(audioDeviceFormats[1]);
+
+        if (!setAudioFormat(audioDeviceId, in, out))
+        {
+            Log::error("Failed to propose an audio format");
 
             return false;
         }
@@ -662,22 +705,29 @@ bool Controller::setAudioEnabled(bool enable)
         }
 
         audioFlowRate = 0;
-        stopAudioThread = false;
+        audioState = AUDIO_AWAITING_FORMAT;
         audioEnabled = true;
-        audioThread = std::thread(&Controller::processAudio, this);
 
-        Log::info("Audio enabled for controller");
+        Log::info("Audio: proposed format %02x/%02x to device %u, awaiting its reply",
+                  in, out, audioDeviceId);
 
+        // Sending begins once the device has echoed the format and reported its volume
         return true;
     }
 
     audioEnabled = false;
+    audioState = AUDIO_IDLE;
     stopAudioThread = true;
     audioCondition.notify_one();
 
     if (audioThread.joinable())
     {
         audioThread.join();
+    }
+
+    if (audioDeviceId != 0)
+    {
+        setDeviceState(audioDeviceId, STATE_STOP);
     }
 
     {
@@ -690,6 +740,67 @@ bool Controller::setAudioEnabled(bool enable)
     Log::info("Audio disabled for controller");
 
     return true;
+}
+
+/*
+ * Drives the rest of 2.2.11's sequence, which is answer-driven rather than timed.
+ *
+ * The device echoes the format it actually adopted; only then may it be started. After starting it
+ * sends a volume message, and the specification is explicit that the host "might not start to play
+ * audio data until a volume indication is received" - so that message, not the start, is what opens
+ * the stream.
+ */
+void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t length)
+{
+    if (id != audioDeviceId || length < 1)
+    {
+        return;
+    }
+
+    uint8_t subcommand = data[0];
+
+    if (subcommand == AUDIO_CTRL_FORMAT && length >= 3)
+    {
+        if (audioState != AUDIO_AWAITING_FORMAT)
+        {
+            return;
+        }
+
+        // A device that cannot manage what was proposed answers with one it can, from its own
+        // list. Nothing here renegotiates yet; say so rather than starting it on a mismatch.
+        if (data[1] != audioDeviceFormats[0] || data[2] != audioDeviceFormats[1])
+        {
+            Log::error("Audio: device adopted %02x/%02x, not the %02x/%02x proposed",
+                       data[1], data[2], audioDeviceFormats[0], audioDeviceFormats[1]);
+
+            return;
+        }
+
+        Log::info("Audio: device confirmed format %02x/%02x, starting it", data[1], data[2]);
+
+        audioState = AUDIO_AWAITING_VOLUME;
+
+        if (!setDeviceState(audioDeviceId, STATE_START))
+        {
+            Log::error("Failed to start the audio device");
+        }
+
+        return;
+    }
+
+    if (subcommand == AUDIO_CTRL_VOLUME)
+    {
+        if (audioState != AUDIO_AWAITING_VOLUME)
+        {
+            return;
+        }
+
+        Log::info("Audio: device reported volume, streaming");
+
+        audioState = AUDIO_STREAMING;
+        stopAudioThread = false;
+        audioThread = std::thread(&Controller::processAudio, this);
+    }
 }
 
 void Controller::queueAudio(const int16_t *samples, size_t count)
@@ -756,7 +867,7 @@ void Controller::processAudio()
 
         // Outside the lock: this is a blocking USB transfer, and the decode thread must never
         // wait behind it.
-        if (!sendAudioSamples(packet, sizeof(packet)))
+        if (!sendAudioSamples(audioDeviceId, packet, sizeof(packet)))
         {
             Log::error("Failed to send audio samples");
 

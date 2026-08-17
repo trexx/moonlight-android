@@ -127,6 +127,32 @@ private:
     void processAudio();
     void audioSamplesReceived(const AudioSamplesData *samples) override;
 
+    void audioControlReceived(uint8_t id, const uint8_t *data, size_t length) override;
+
+    /*
+     * The audio sub-device: its GIP device id, and the capture/render format pairs it advertised.
+     * Zero id means none has announced, which is the state until the security handshake completes -
+     * MS-GIPUSB 2.2.1.4 gates sub-device enumeration on it.
+     */
+    uint8_t audioDeviceId = 0;
+    std::vector<uint8_t> audioDeviceFormats;
+
+    /*
+     * Where 2.2.11's initialisation sequence has got to. The host cannot simply send a format and
+     * start playing: it stops the device, proposes a format, waits for the device to echo the one
+     * it adopted, starts it, and waits for the device's volume message before any audio counts as
+     * playable.
+     */
+    enum AudioState
+    {
+        AUDIO_IDLE,
+        AUDIO_AWAITING_FORMAT,
+        AUDIO_AWAITING_VOLUME,
+        AUDIO_STREAMING,
+    };
+
+    std::atomic<AudioState> audioState{AUDIO_IDLE};
+
     std::atomic<bool> audioEnabled{false};
     std::atomic<bool> stopAudioThread{false};
     std::thread audioThread;
