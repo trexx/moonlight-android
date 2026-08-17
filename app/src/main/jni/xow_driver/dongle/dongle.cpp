@@ -227,10 +227,15 @@ void Dongle::handleControllerPair(Bytes address, const Bytes &packet)
         return;
     }
 
+    // Guarded at the call site, not left to Log::debug(): its release body is empty but its
+    // arguments are still evaluated, and formatBytes() builds a string. The only call site in
+    // this driver where a debug line costs anything when nothing is listening.
+#ifdef _DEBUG
     Log::debug(
         "Controller paired: %s",
         Log::formatBytes(address).c_str()
     );
+#endif
 }
 
 void Dongle::handleControllerPacket(uint8_t wcid, const Bytes &packet)
