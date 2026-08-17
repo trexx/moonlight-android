@@ -169,15 +169,66 @@ transport buffer, while `handlePacket()` parses only the first and ignores anyth
 frames observed here carried a single message plus a couple of bytes of alignment padding, so this
 is not the cause of what is described above, but it is a real gap.
 
+## What the specification says, and what this pad says back
+
+[MS-GIPUSB] v20240916 settles several things this file previously guessed at.
+
+**Audio is a separate GIP device, not a capability of the pad.** Table 1 shows a controller
+exposing sub-device 1, "3.5 mm Audio", with its own derived device ID and its own metadata. It
+announces itself 500-1000 ms after the primary device initialises (2.2.11). So the device-id filter
+in `handlePacket()` was never the obstacle - there has to *be* a sub-device before there is anything
+to route.
+
+**This pad states it has no audio, four independent ways.** Device 0's metadata carries an empty
+`SupportedAudioFormats` - and 2.2.2.4.3 is explicit that a device without audio omits the section
+entirely - no command `8` (Audio Control) or `96` (Audio Data) in either direction, and none of the
+interface GUIDs is `IHeadset` `{BC25D1A3-C24E-4992-9DDA-EF4F123EF5DC}` or `ICustomAudio`, which
+2.2.2.4.6 says every audio device MUST list. Its three GUIDs decode as `IController`, `IGamepad`
+and `INavigationController`: precisely the specification's own worked example of a plain gamepad.
+That the example matches byte for byte is also a useful check that the metadata parser is right.
+
+**The security exchange is not a gate.** Section 5: *"The host succeeds the security exchange by
+default"*, and a controller may list an opt-out GUID (`7a34ce77-7de2-45c6-8ca4-0042c08bd94a`) to
+skip it over USB. A port of xone's `auth/` module was planned as the last remaining explanation and
+was dropped on reading this; the research is preserved below in case a pad that *does* advertise
+audio still refuses.
+
+**The handshake order was wrong, and is now fixed.** Set Device State: START was sent immediately
+after the metadata request, roughly 60 ms before the response arrived, while 3.1.1 has the device
+go Arrival -> Idle on the request and Idle -> Active on the state message. Since an audio sub-device
+waits on the primary having initialised, that was worth correcting on its own terms. It is
+corrected, and measured: metadata now precedes the serial number rather than following it. **It did
+not produce a sub-device.**
+
+**The audio initialisation sequence in 2.2.11 is not what this driver implements**, and would not
+work even against a pad that had an audio device:
+
+| Specification | This driver |
+|---|---|
+| Set Device State: **STOP** before configuring | never sent |
+| Audio Control: Configuration using the device's **first** advertised format | hardcodes 48 kHz stereo |
+| Device replies with the format it adopted; host retries up to 4x at 1 s on mismatch | reply never read |
+| Set Device State: **START** | never sent |
+| **Device sends** Audio Control: Volume, and the host need not play audio until it arrives | sent in the wrong direction, host to device |
+| Render data only then | streamed immediately |
+
+Anyone implementing this against hardware that does advertise audio should start from that table
+rather than from what shipped.
+
 ## Next step
 
 The order below is deliberately diagnosis-first. Building more of the protocol against a device
 that announces no audio client only repeats the result above.
 
 1. ~~Find out whether an accessory client announces.~~ **Done — it does not**, under any of the
-   three conditions in the table above. The reporting lives in the driver behind `_DEBUG`, so this
-   is re-checkable on another pad without a further build, and a pad that *does* expose a headset
-   would show up in the same lines.
+   three conditions in the table above, nor after the handshake ordering was corrected. The
+   reporting lives in the driver behind `_DEBUG`, so this is re-checkable on another pad without a
+   further build, and a pad that *does* expose a headset would show up in the same lines.
+0. **Open: confirm on Windows what actually works, and over which transport.** The claim that this
+   pad plays headset audio is what keeps the question alive, and the transport is the crux — audio
+   over a USB cable or over Bluetooth says nothing about the wireless adapter, which is the only
+   path this driver uses. If it turns out the adapter does not carry audio for this pad either,
+   everything below is moot and the finding above is the answer.
 2. ~~Try the missing setup messages.~~ **Done — no effect.** `gip_set_audio_volume` was implemented
    (`CMD_AUDIO_CONFIG` subcommand `0x03`, `mute=0x04` unmuted, out/chat/in = 100/50/100, xone's own
    values) and sent between the format request and the first samples. It transmitted without error
