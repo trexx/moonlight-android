@@ -72,6 +72,12 @@ private:
     // Handshake command last sent, so a reply can be matched to its request
     uint8_t authLastSent = 0;
 
+    /* Lifts the RSA public key out of the controller's certificate; see the definition. */
+    bool extractPublicKey(const uint8_t *data, size_t length);
+
+    // DER RSAPublicKey taken from the certificate, empty until one arrives
+    std::vector<uint8_t> authPublicKey;
+
     // Audio formats the pad declared in its metadata, two bytes per entry, empty if it declared
     // none. Written once when metadata arrives and read afterwards; see identifyReceived().
     std::vector<uint8_t> audioFormats;

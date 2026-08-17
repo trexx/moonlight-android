@@ -3,6 +3,7 @@
 //
 
 #include <memory>
+#include "utils/crypto.h"
 
 #include <jni.h>
 #include "dongle/usb.h"
@@ -92,6 +93,10 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_registerNative(JN
     if(r != JNI_OK || jvm == nullptr) {
         Log::error("GetJavaVM failed");
     }
+    // Resolved here because this runs on a thread the JVM created. The driver's read threads
+    // attach themselves and get the system class loader, which cannot find application classes.
+    GipCrypto::init(env);
+
     auto *controller = (Controller *) handle;
     controller->registerJavaContext(jvm, env, env->NewGlobalRef(thiz));
 }

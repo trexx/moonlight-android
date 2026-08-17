@@ -19,6 +19,7 @@
 #include "controller.h"
 #include "../utils/log.h"
 #include "../utils/jni.h"
+#include "../utils/crypto.h"
 #include "gip.h"
 
 #include <cstdlib>
@@ -357,15 +358,57 @@ void Controller::authReceived(const uint8_t *data, size_t length)
             break;
 
         case AUTH_CLIENT_CERTIFICATE:
-            // As far as this phase goes. What follows needs an RSA-encrypted pre-master secret,
-            // and reaching here at all is what it set out to establish.
-            Log::info("Security: certificate received, %zu bytes - handshake framing works", length);
             authLastSent = 0;
+
+            if (!extractPublicKey(data, length))
+            {
+                Log::error("Security: no public key in the certificate");
+            }
+
             break;
 
         default:
             break;
     }
+}
+
+/*
+ * Lifts the controller's RSA public key out of its certificate.
+ *
+ * Scanning for a byte pattern rather than parsing, because the certificate cannot be parsed: the
+ * ones Microsoft issues have an empty subject and no subjectAltName, which RFC 5280 section 4.2.1.6
+ * forbids, and a conforming X.509 parser rejects them. xone does the same and says why. Nothing is
+ * verified here - there is no trust decision to make, only a key to encrypt a secret with, and the
+ * device proves it holds the private half by finishing the handshake.
+ *
+ * The pattern is the DER header of a 2048-bit RSAPublicKey: SEQUENCE, length 0x010a, which with its
+ * four header bytes is AUTH_PUBKEY_LENGTH.
+ */
+bool Controller::extractPublicKey(const uint8_t *data, size_t length)
+{
+    static const uint8_t marker[] = { 0x30, 0x82, 0x01, 0x0a };
+
+    for (size_t i = 0; i + sizeof(marker) <= length; i++)
+    {
+        if (memcmp(data + i, marker, sizeof(marker)) != 0)
+        {
+            continue;
+        }
+
+        if (i + AUTH_PUBKEY_LENGTH > length)
+        {
+            return false;
+        }
+
+        authPublicKey.assign(data + i, data + i + AUTH_PUBKEY_LENGTH);
+
+        Log::info("Security: public key found at offset %zu, %zu bytes",
+                  i, authPublicKey.size());
+
+        return true;
+    }
+
+    return false;
 }
 
 void Controller::initInput(const AnnounceData *announce)

@@ -9,6 +9,7 @@ LOCAL_SRC_FILES := \
     dongle/mt76.cpp \
     dongle/dongle.cpp \
     utils/log.cpp \
+    utils/crypto.cpp \
     controller/controller.cpp \
     controller/gip.cpp
 

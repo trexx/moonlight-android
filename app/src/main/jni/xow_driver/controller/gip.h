@@ -301,6 +301,13 @@ protected:
     static const size_t AUTH_RANDOM_LENGTH = 32;
     static const size_t AUTH_TRAILER_LENGTH = 8;
 
+    /*
+     * A 2048-bit DER RSAPublicKey: four header bytes plus the 0x010a the SEQUENCE declares. The
+     * pre-master secret is 48 bytes and encrypts to the modulus size, 256.
+     */
+    static const size_t AUTH_PUBKEY_LENGTH = 270;
+    static const size_t AUTH_SECRET_LENGTH = 48;
+
     /* Opens the security exchange. */
     bool sendAuthHostHello();
 
