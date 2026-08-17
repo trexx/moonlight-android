@@ -28,9 +28,9 @@ public class GipController extends AbstractController{
         super(deviceId, listener, vendorId, productId);
         this.handle = handle;
 
-        // This is an Xbox pad reached over the wireless adapter, so it declares what every other
-        // Xbox pad does. It extends AbstractController rather than AbstractXboxController - there is
-        // no USB endpoint to claim here - which is how it ended up announcing nothing at all: the
+        // An Xbox pad however it is attached, so it declares what every other Xbox pad does. It
+        // extends AbstractController rather than AbstractXboxController because the transport below
+        // owns the endpoints, not this class - which is how it ended up announcing nothing at all: the
         // host was told LI_CTYPE_UNKNOWN with no capabilities and no buttons, so it had no reason to
         // send rumble of either kind.
         this.type = MoonBridge.LI_CTYPE_XBOX;

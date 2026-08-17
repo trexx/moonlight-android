@@ -35,7 +35,13 @@
 class WiredController
 {
 public:
-    WiredController(int fd, jobject thiz, JavaVM *jvm);
+    /*
+     * Takes no jobject: nothing here calls back into Java. The GIP layer above does its own
+     * callbacks through GipController.registerNative(), and holding a reference here as well would
+     * mean the Java object had to exist before the native handle it is constructed from - which it
+     * cannot, since the handle is a constructor argument.
+     */
+    WiredController(int fd, JavaVM *jvm);
     ~WiredController();
 
     /* Claims the device and starts the read thread. */
@@ -57,6 +63,5 @@ private:
     std::atomic<bool> stopThread{false};
     std::thread readThread;
 
-    jobject jthis;
     JavaVM *jvm;
 };

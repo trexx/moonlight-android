@@ -310,7 +310,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
     private void handleUsbDeviceState(UsbDevice device) {
         // Are we able to operate it?
-        if (shouldClaimDevice(device, prefConfig.bindAllUsb)) {
+        if (shouldClaimDevice(device, prefConfig.bindAllUsb, prefConfig.wiredPadAudio)) {
             // Do we have permission yet?
             if (!usbManager.hasPermission(device)) {
                 // Let's ask for permission
@@ -357,6 +357,28 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             }
 
             AbstractController controller;
+
+            /*
+             * Checked before XboxOneController, because both match the same hardware. The
+             * difference is which driver goes on it: XboxOneController is a minimal GIP
+             * implementation with no security handshake, and MS-GIPUSB 2.2.1.4 makes that handshake
+             * the gate on the audio sub-device, so headphone audio is only reachable through the
+             * full stack.
+             */
+            if (prefConfig.wiredPadAudio && XboxWiredGipController.canClaimDevice(device)) {
+                controller = XboxWiredGipController.create(device, connection, nextDeviceId++, this);
+
+                // The transport owns the connection on success; on failure it closed nothing, so
+                // fall through to the ordinary close below rather than leaking it.
+                if (controller == null) {
+                    connection.close();
+                    return;
+                }
+
+                controllers.add(controller);
+                controller.start();
+                return;
+            }
 
             if (XboxOneController.canClaimDevice(device)) {
                 controller = new XboxOneController(device, connection, nextDeviceId++, this);
@@ -473,7 +495,19 @@ public class UsbDriverService extends Service implements UsbDriverListener {
      * @return true if this device should be claimed
      */
     public static boolean shouldClaimDevice(UsbDevice device, boolean claimAllAvailable) {
-        return ((!kernelSupportsXboxOne() || !isRecognizedInputDevice(device) || claimAllAvailable) && XboxOneController.canClaimDevice(device)) ||
+        return shouldClaimDevice(device, claimAllAvailable, false);
+    }
+
+    /**
+     * @param wiredPadAudio whether the user has asked us to drive cabled Xbox pads so their
+     *                      headphone jack can take stream audio. Off by default: Android already
+     *                      drives those pads, so claiming one trades a working input path for
+     *                      audio, and that is the user's trade to make rather than ours.
+     */
+    public static boolean shouldClaimDevice(UsbDevice device, boolean claimAllAvailable,
+                                            boolean wiredPadAudio) {
+        return (wiredPadAudio && XboxWiredGipController.canClaimDevice(device)) ||
+                ((!kernelSupportsXboxOne() || !isRecognizedInputDevice(device) || claimAllAvailable) && XboxOneController.canClaimDevice(device)) ||
                 ((!isRecognizedInputDevice(device) || claimAllAvailable) && Xbox360Controller.canClaimDevice(device)) ||
                 // We must not call isRecognizedInputDevice() because wireless controllers don't share the same product ID as the dongle
                 ((!kernelSupportsXbox360W() || claimAllAvailable) && Xbox360WirelessDongle.canClaimDevice(device) ||
@@ -508,7 +542,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             // Before the claim check, so a device we decline is still described
             logUsbInterfaces(dev);
 
-            if (shouldClaimDevice(dev, prefConfig.bindAllUsb)) {
+            if (shouldClaimDevice(dev, prefConfig.bindAllUsb, prefConfig.wiredPadAudio)) {
                 // Start the process of claiming this device
                 handleUsbDeviceState(dev);
             }

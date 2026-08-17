@@ -14,8 +14,7 @@
 #include <functional>
 #include <utility>
 
-WiredController::WiredController(int fd, jobject thiz, JavaVM *jvm)
-    : jthis(thiz), jvm(jvm)
+WiredController::WiredController(int fd, JavaVM *jvm) : jvm(jvm)
 {
     device = std::make_unique<UsbWiredDevice>(fd);
 }
@@ -29,14 +28,6 @@ WiredController::~WiredController()
     // which would put device first and destroy it last.
     gipController.reset();
     device.reset();
-
-    JNIEnv *env = getAttachedEnv(jvm);
-
-    if (env != nullptr && jthis != nullptr)
-    {
-        env->DeleteGlobalRef(jthis);
-        jthis = nullptr;
-    }
 }
 
 bool WiredController::start()

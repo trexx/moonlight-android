@@ -191,7 +191,7 @@ Java_com_limelight_binding_input_driver_GipController_registerNative(JNIEnv *env
 extern "C"
 JNIEXPORT jlong JNICALL
 Java_com_limelight_binding_input_driver_XboxWiredGipController_createWiredDriver(JNIEnv *env,
-                                                                                 jobject thiz,
+                                                                                 jclass clazz,
                                                                                  jint fd) {
     JavaVM *jvm = nullptr;
 
@@ -199,16 +199,13 @@ Java_com_limelight_binding_input_driver_XboxWiredGipController_createWiredDriver
         return 0;
     }
 
-    // Global, because the read thread outlives this call and calls back through it
-    jobject self = env->NewGlobalRef(thiz);
-
-    return (jlong) new WiredController(fd, self, jvm);
+    return (jlong) new WiredController(fd, jvm);
 }
 
 extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_limelight_binding_input_driver_XboxWiredGipController_startWiredDriver(JNIEnv *env,
-                                                                                jobject thiz,
+                                                                                jclass clazz,
                                                                                 jlong handle) {
     auto *wired = (WiredController *) handle;
 
@@ -218,7 +215,7 @@ Java_com_limelight_binding_input_driver_XboxWiredGipController_startWiredDriver(
 extern "C"
 JNIEXPORT jlong JNICALL
 Java_com_limelight_binding_input_driver_XboxWiredGipController_wiredControllerHandle(JNIEnv *env,
-                                                                                     jobject thiz,
+                                                                                     jclass clazz,
                                                                                      jlong handle) {
     auto *wired = (WiredController *) handle;
 
@@ -230,7 +227,7 @@ Java_com_limelight_binding_input_driver_XboxWiredGipController_wiredControllerHa
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_limelight_binding_input_driver_XboxWiredGipController_destroyWiredDriver(JNIEnv *env,
-                                                                                  jobject thiz,
+                                                                                  jclass clazz,
                                                                                   jlong handle) {
     delete (WiredController *) handle;
 }
