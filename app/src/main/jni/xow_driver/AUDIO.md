@@ -1,8 +1,17 @@
 # Audio to the controller's headphone jack
 
-**Implemented.** This was the assessment that preceded it; the design notes are kept because they
-explain *why* the implementation looks the way it does. What shipped, and what is still open, is at
-the bottom.
+**Working on hardware.** An Xbox One pad (PID `02dd`) over adapter `045e:02fe` on a Shield TV plays
+the stream's audio through its headphone jack, and the TV falls silent while it does.
+
+This file is chronological. The design notes came first, then a long stretch where it did not work
+and four hypotheses were disproved on hardware, then the answer. All of it is kept: the disproved
+leads are the reason the working version looks the way it does, and re-deriving them would cost
+another round of builds. **"Measured against real hardware" onwards is the historical record — read
+"What shipped" and "Known limitations" for the current state.**
+
+The short version: audio is a *sub-device*, and a sub-device only appears after the GIP security
+handshake completes. This driver had never authenticated, so no audio device had ever announced
+itself on any transport. Implementing the handshake made it appear.
 
 ## The idea
 
@@ -84,15 +93,44 @@ where the length is still read as a single byte. That path would need extending 
 messages could be parsed. Harmless today — `CMD_AUDIO_SAMPLES` is never dispatched, so such a
 packet is ignored rather than misread.
 
-Still open: whether the pad wants mono or stereo, which its metadata reports as a two-byte entry
-per supported format. That decides only the packet size above, not the shape of the work.
+Since answered by the sub-device's own metadata: it advertises `09 10`, and the driver now proposes
+whatever the device lists **first** rather than a hardcoded pair. The stereo row above is what that
+resolves to in practice, so the arithmetic stands — but it is read from the device, not assumed.
 
 ## What shipped
 
+Spread across the `gip/*` branch stack, because most of it is not about audio at all — the handshake
+and sub-device routing are general GIP work that audio happens to be the first consumer of.
+
+**`gip/security` — the reason any of this works.** The v1 (RSA) security handshake, per the capture
+and xone, with the framing and timing taken from the specification:
+
+- `HOST_HELLO` → `CLIENT_HELLO` → certificate (reassembled from fragments) → RSA-encrypted
+  pre-master secret → `FINISH`, driven by acknowledgements rather than timers.
+- Messages above 58 bytes are fragmented (§3.1.5.2), which the pre-master secret at 274 bytes
+  requires. Getting this wrong cost two pad connect-loops; see the history below.
+- Crypto lives in Java (`GipCrypto`), not mbedTLS. Android's providers already have SHA-256, HMAC
+  and RSA, and enabling bignum/RSA/ECP in the mbedTLS config shared with `moonlight-core` would
+  have grown both native libraries by a couple of hundred kilobytes for a handshake that runs once
+  per connect. Nothing on it is near a hot path.
+- The certificate is never validated — Microsoft's do not parse as RFC 5280, and there is no trust
+  decision to make here.
+- v2 (ECDH P-256, commands `0x21`–`0x27`) is **not** implemented. The data header's version byte
+  discriminates, and a v2 pad logs "device wants protocol v2, which is not implemented" rather than
+  failing obscurely.
+
+**`gip/pad-audio` — the audio itself:**
+
+- Sub-devices route. `handlePacket()` no longer discards device id > 0; the announce for a
+  sub-device requests its metadata and must **not** reach `Controller::initInput()`, which assigns
+  over a joinable `rumbleThread` and terminates the process.
+- The §2.2.11 initialisation sequence, in order: `STOP` → propose the device's **first advertised**
+  format pair → wait for the device to echo it → `START` → wait for the device's Volume message →
+  stream. Sending samples before the echo produces silence.
 - `handlePacket()` decodes an extended payload length on the unfragmented path too, and
   `encodeVarint()`/`encodeHeader()` build downstream headers at the required even length.
-- `GipDevice::setAudioFormat()` negotiates 48 kHz stereo; `sendAudioSamples()` emits `0x60` packets
-  with their own sequence counter, audio being a separate data class.
+- `sendAudioSamples()` emits `0x60` packets with their own sequence counter, audio being a separate
+  data class.
 - `Controller` gains a bounded ring and a sender thread per pad, both existing only while that pad
   has audio on. It self-clocks: audio arrives from the host in real time, so waiting for a packet's
   worth of samples paces the sends without a timer.
@@ -100,8 +138,58 @@ per supported format. That decides only the packet size above, not the shape of 
   local output, so a pad disconnecting needs no special case.
 - Control is the in-game menu only — no preference. Which pad has headphones on it is a
   per-session choice, and it means audio starts off every session.
+- Four counters — packets sent, bytes dropped, packets late, send failures — logged as a summary
+  when audio is disabled and shown on the performance overlay while it is on. See "What it
+  measures" below.
 
-## Measured against real hardware, and it does not work yet
+## What it measures
+
+A verified session on the Shield, 4K60 stream, Xbox One pad over the adapter:
+
+```
+Audio session: 12816 packets sent, 0 bytes dropped, 179 late by >12ms, 0 send failures,
+               last flow rate 1536
+```
+
+Over a 102.5 s streaming window that is **125.04 packets/s against an expected 125.00** — the 8 ms
+cadence is being held almost exactly. Nothing dropped and nothing failed, so the ring never backed
+up and no USB write was refused.
+
+**What "late" means, and why 1.4% is the floor rather than a fault.** The counter fires when the
+sender waits more than 12 ms for a packet's worth of samples. The feed and drain rates match
+exactly — moonlight-common-c negotiates 5 ms Opus frames, so 960 bytes arrive every 5 ms, and
+1536 bytes leave every 8 ms, both 192 000 B/s — but the *granularities* do not divide, so the wait
+alternates on a 40 ms cycle:
+
+| Packet | Ring when the sender wakes | Waits |
+|---|---|---|
+| 1 | 960, needs another feed | 10 ms |
+| 2 | 384 + 960 = 1344, needs another | 5 ms |
+| 3 | 768 + 960 = 1728 ✓ | 10 ms |
+| 4 | 192 + 960 = 1152, needs another | 5 ms |
+| 5 | 576 + 960 = 1536 ✓ | 10 ms |
+
+Average 8 ms, and the worst case is 10 ms — inside the 12 ms threshold, so steady-state granularity
+contributes nothing. The lates are the half of packets already waiting 10 ms that then meet more
+than 2 ms of extra jitter, from network arrival or the decode thread being descheduled.
+
+**Read the count against the frame duration.** If a stream ever negotiates **10 ms** Opus frames —
+`SdpGenerator.c` does that for a slow decoder or a bitrate under the threshold — then four packets
+in five wait a full 10 ms, leaving 2 ms of headroom instead of alternating. The same jitter would
+then read as a far higher late count with the audio no worse. The threshold is tuned for the 5 ms
+case this hardware actually negotiates.
+
+An earlier version of this counter measured the ring being *empty* on wake, which is the normal
+steady state by design — it reported 20% starvation through audio that was audibly perfect. A
+metric that alarms on healthy behaviour is worse than no metric, so it was changed to measure time.
+
+## Measured against real hardware — the historical record
+
+> **Superseded.** Everything from here to "Known limitations" describes the state *before* the
+> security handshake existed, and the conclusion it reaches — that no audio sub-device ever
+> announces itself — was true only because this driver had never authenticated. It is kept because
+> the measurements are sound and the disproved hypotheses are worth not repeating. The resolution
+> is in "What shipped" above.
 
 An implementation of the protocol half below was built and tested. It does not produce sound, and
 the reason is structural rather than a coding mistake.
@@ -141,8 +229,6 @@ formats. So lifting the accessory filter would achieve nothing on its own - ther
 behind it to let through. The same pad plays headset audio on Windows, so the hardware is capable
 and the gap is in this driver.
 
-Two candidates, neither tested:
-
 **xone does support this over the adapter**, so a working reference exists. Its clients are created
 on demand from the device id in each header — `gip_get_client(adap, hdr.options & GIP_HDR_CLIENT_ID)`
 in `gip_process_buffer()` — which is transport-independent, and `transport/dongle.c` routes a
@@ -151,7 +237,9 @@ in `gip_process_buffer()` — which is transport-independent, and `transport/don
 return success when absent: the wired path needs them to configure USB isochronous endpoints, and
 the dongle needs no transport-level setup at all.
 
-Two candidates for what we are missing, neither tested:
+Two candidates for what we are missing, neither tested at the time. **The first was half right:** the
+handshake was indeed the answer, but the link encryption bundled with it here turned out to be
+unnecessary — see step 5 below. The second was wrong and was disproved on hardware.
 
 - **Link encryption, and the handshake behind it.** This is the strongest lead. xone's dongle
   implements `set_encryption_key`, which programs a per-client key into the MT76
@@ -363,10 +451,11 @@ deliberate. So the handshake's payload has to come from the capture and from xon
 everything around it - that it gates sub-devices, that it is a Unique sequence pool, when in the
 state machine it belongs - is in the specification and was worth searching for properly.
 
-## Next step
+## The plan that resolved it
 
-The order below is deliberately diagnosis-first. Building more of the protocol against a device
-that announces no audio client only repeats the result above.
+Kept with each step's outcome. The order was deliberately diagnosis-first: building more of the
+protocol against a device that announced no audio client would only have repeated the result above.
+That discipline is what eventually pointed at the handshake instead of at the sender.
 
 1. ~~Find out whether an accessory client announces.~~ **Done — it does not**, under any of the
    three conditions in the table above, nor after the handshake ordering was corrected. The
@@ -390,9 +479,15 @@ that announces no audio client only repeats the result above.
    volume only to an accessory client and never to device 0, which makes sending it to the pad
    itself speculative and it is now also known to be useless. `gip_init_extra_data`'s undocumented
    `0x4d`/`07 00` remains untried, but has no more reason behind it than "xone sends it".
-3. **Port the security handshake.** The capture above shows Windows performing it in full and the
-   audio sub-device appearing afterwards, so this is no longer the speculative last resort it was
-   when it was cancelled - and it was cancelled on a misreading of section 5.
+3. ~~Port the security handshake.~~ **Done, and this was the answer.** The capture showed Windows
+   performing it in full with the audio sub-device appearing afterwards, so it was no longer the
+   speculative last resort it had been when it was cancelled - and it was cancelled on a misreading
+   of section 5, which says the *host* succeeds the exchange by default. That was read as "the
+   handshake does not happen"; the capture disproved it.
+
+   With the handshake in place a `dev=3` announce (VID `045e`, PID `02e4`) appears within a second
+   of the pad initialising, exactly as Table 1 and §2.2.1.4 describe, and the §2.2.11 sequence
+   brings it up.
 
    It is still a large piece of work: xone's `auth/` module is roughly 900 lines of crypto and
    certificate handling. What has changed is that it no longer has to be built blind. The capture
@@ -408,11 +503,19 @@ that announces no audio client only repeats the result above.
    into the MT76 (`xone_mt76_set_client_key(&dongle->mt, client->wcid, key, len)`) from the session
    key the handshake derives. xow does none of it and runs the link unencrypted, which is evidently
    enough for input and rumble but may well be why nothing else appears.
-4. Only then port the rest of the protocol half described above, behind a setting that is **off by
-   default**, degrading to the existing path rather than replacing it.
-5. Measure. The claim worth testing is the one this is for: that it beats a Bluetooth headset by
-   enough to matter. Take numbers from the end-of-stream summary rather than the overlay, per
-   `CLAUDE.md`.
+4. ~~Only then port the rest of the protocol half.~~ **Done.** It is off unless chosen from the
+   in-game menu each session, and an empty target list is the fallback, so the existing path is
+   untouched when it is off.
+5. **Measure.** Partly done: the throughput and health numbers are under "What it measures" above,
+   and the sender is holding cadence. **The latency claim this feature exists for — that it beats a
+   Bluetooth headset by enough to matter — is still unmeasured.** `HARDWARE_TESTING.md` §10 has the
+   checks. Take numbers from the end-of-stream summary rather than the overlay, per `CLAUDE.md`.
+
+   Link encryption was **not** needed. xone programs a per-client key into the MT76 from the
+   session key, and the working assumption here was that a pad might withhold audio until the link
+   was encrypted. It does not: the handshake alone is sufficient, and this driver still runs the
+   link unencrypted. The key-programming step in the plan was therefore never built, which also
+   avoided its main risk — a wrong key silences the pad entirely, input included.
 
 ## Known limitations
 
@@ -431,25 +534,45 @@ that announces no audio client only repeats the result above.
   an 8 ms packet is ±32 bytes. Movement inside that band is the protocol working. Only a request
   sitting well outside it is logged.
 
-  **The units are unverified for this transport.** The spec's worked examples are per-1 ms USB
-  messages (192 bytes for 48 kHz stereo); we send one 8 ms message of 1536. xone initialises its
-  expected rate to the whole 8 ms buffer, so it assumes whole-buffer units, but what a
-  dongle-attached pad actually reports has not been observed. The log answers it.
+  **The units are now verified for this transport: whole-buffer.** This was open while no pad had
+  ever reported a rate. A working session reports **1536**, exactly the 8 ms packet size we send,
+  confirming xone's assumption and ruling out the spec's per-1 ms worked examples (192 bytes for
+  48 kHz stereo) as the unit here. The rate is reported on the overlay and in the session summary,
+  so a device that ever disagrees will be visible rather than silently mismatched.
 - **Stereo 48 kHz only.** Samples are forwarded verbatim with no downmix, so a surround stream
   disables the feature rather than sending something wrong.
-- **No pad has accepted audio yet, and the ship-blocker is upstream of this code.** The audio
-  endpoint is a separate GIP client with device id > 0 — integrated jack or old stereo-headset
-  adapter alike — and `handlePacket()` discards accessory packets outright. No such client has
-  been observed announcing itself over the adapter. The measurement and the leads are recorded
-  under "Measured against real hardware" above; nothing in the sender below is implicated.
+- **Wireless adapter only.** A pad on a USB cable still cannot carry audio. `XboxOneController`
+  drives cabled pads through `UsbDeviceConnection`, and **Android exposes no isochronous API at
+  all** — the wired audio endpoints are isochronous (interface 1 alt 1, 228 B at 1 ms, per §2.2.12
+  and confirmed by a descriptor scan). It is the wrong API rather than a missing feature; libusb
+  does isochronous and is already vendored. See "Audio over a cable" above.
 
-  Until that is resolved this ships refusing: a pad whose metadata declares no audio format is
-  rejected with a message saying so, rather than moving the stream's audio off the TV into
-  silence.
+  A pad whose sub-device declares no usable format is still refused with a message saying so,
+  rather than moving the stream's audio off the TV into silence.
+- **Two pads is untested with real audio.** `PadAudioSink` caps at two and the fan-out is written,
+  but only one pad has ever had a headset on it here. The second pad's ring and sender thread are
+  the same code, so the risk is contention on the link rather than logic.
+- **Format renegotiation is not implemented.** The driver proposes the device's first advertised
+  pair and expects the echo to match. The specification allows up to four attempts; a device that
+  counter-proposes something else is not handled, and would simply never reach streaming.
+- **v2 (ECDH) security is not implemented**, so a pad that wants it authenticates not at all and
+  therefore has no audio. It is detected and logged rather than failing silently. No v2 hardware
+  has been available to test against.
 - **No microphone.** There is no mic support anywhere in this client, so the capture direction is
   negotiated but never read.
 
 ## Still to measure
 
-Whether audio costs input latency, since both share the 2.4 GHz link — the one result that decides
-whether this is worth using. `HARDWARE_TESTING.md` §9 has the checks.
+Throughput and stream health are answered above. What is not:
+
+- **Whether audio costs input latency**, since both share the 2.4 GHz link. This is the one result
+  that decides whether the feature is worth using, and it is the reason the fork exists. Nothing
+  about a healthy 125 packets/s speaks to it — the sender keeping cadence says the audio is
+  arriving, not that input is unaffected by sharing the link with it.
+- **Whether it beats a Bluetooth headset by enough to matter**, which is the claim in "Latency"
+  above and still an estimate on both sides.
+- **Audible quality over a long session.** 179 late packets in 102 s did not produce anything
+  audible, but no one has listened for pops across, say, an hour. If they appear, rate adaptation
+  is the mechanism the protocol provides and is the first thing to implement.
+
+`HARDWARE_TESTING.md` §10 has the checks for all three.
