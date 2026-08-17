@@ -606,8 +606,26 @@ open** — the feature works but has not been shown to be worth using.
       with.
 - [ ] **A surround stream hides the menu entry** rather than offering something that would send
       6-channel audio to a stereo device.
-- [ ] **A pad on a USB cable is not offered pad audio at all**, rather than being offered it and
-      going silent. Wired audio needs isochronous transfers (interface 1 alt 1, 228 B at 1 ms) and
+- [x] **A cabled pad reaches the audio sub-device.** The full GIP stack runs over interface 0's
+      interrupt endpoints and the handshake completes, exactly as it does over the adapter.
+      *Xbox One pad cabled to the Shield TV, with the wired GIP driver enabled: metadata from
+      device 0 (198 bytes), handshake at the same sizes as the wireless exchange and the Windows
+      capture (90 / 825 / 74), then `Device 3 announced, vendor 045e product 02e4` with interface
+      GUID `bc25d1a3-c24e-4992-9dda-ef4f123ef5dc` (IHeadset) and audio formats `09 10 09 09`.*
+
+      Two things this settled that were open. The pad **answers a metadata request from the Active
+      state**, which 3.1.1 says SHOULD NOT happen - so no Set Device State: START is needed to
+      wake it. And **it never sends a Hello to us at all**, because Android's driver already took
+      it through Arrival; everything has to be started by hand.
+
+      **Do not reset the device to force a Hello.** Set Device State: RESET takes the pad off the
+      USB bus - the read fails with `LIBUSB_ERROR_NO_DEVICE`, Android re-attaches it, and the
+      permission prompt loops. Seven rounds were inflicted on a real device before this was
+      understood. xone's `usb_reset_device()` is the same trap by a different route.
+- [ ] **Audio actually reaches a cabled pad's headphones.** Not implemented: the samples go out
+      isochronously on interface 1 alt 1, which nothing here writes yet.
+- [ ] **A pad on a USB cable without the driver enabled is not offered pad audio at all**, rather
+      than being offered it and going silent. Wired audio needs isochronous transfers (interface 1 alt 1, 228 B at 1 ms) and
       Android's `UsbDeviceConnection` has no isochronous API, so the cabled path is unimplemented
       rather than merely untested. Confirm the menu entry stays absent for a cabled-only pad.
 
