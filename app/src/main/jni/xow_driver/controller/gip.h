@@ -44,8 +44,16 @@ class Bytes;
  * once the primary has initialised (2.2.11). A device that never answers the metadata request is
  * started anyway after a timeout - see Controller::waitForMetadata().
  *
- * The security exchange (command 6) is not implemented. MS-GIPUSB 5 says the host succeeds it by
- * default, and a device may opt out of it entirely, so nothing here depends on it.
+ * The security exchange (command 6) runs at the end of startDevice(), after the metadata response.
+ * It is not a security feature here - the certificate is never validated and the link is left
+ * unencrypted - but 2.2.1.4 makes it the gate on sub-device enumeration, so without it a pad never
+ * announces its audio device and headphone audio is unreachable. See sendAuthHostHello().
+ *
+ * This comment used to say the exchange was not implemented "because MS-GIPUSB 5 says the host
+ * succeeds it by default". That is a misreading serious enough to be worth recording: section 5
+ * describes the *host* accepting the exchange by default, not the exchange being skippable. It
+ * cost this driver a working audio path until a USB capture of a Windows host showed the
+ * handshake happening in full.
  */
 class GipDevice
 {
