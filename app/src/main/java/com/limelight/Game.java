@@ -2251,10 +2251,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     /** {@inheritDoc} Posts the decoder's stats text to the overlay on the UI thread. */
     @Override
     public void onPerfUpdate(final String text) {
+        // Appended here rather than in the decoder, which has no business knowing about audio, and
+        // on this thread rather than the UI one - the decoder already hopped off the frame path to
+        // format, and this is the same hop. Costs nothing when no pad is taking audio.
+        final String full = text + padAudioSink.getOverlayText();
+
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                performanceOverlayView.setText(text);
+                performanceOverlayView.setText(full);
             }
         });
     }

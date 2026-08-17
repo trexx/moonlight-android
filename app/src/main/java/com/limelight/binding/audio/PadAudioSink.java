@@ -57,6 +57,45 @@ public class PadAudioSink {
         return formatSupported;
     }
 
+    /**
+     * @return a line for the performance overlay, or an empty string when no pad is taking audio.
+     *
+     * <p>Called once a second, and only while the overlay is visible — the decoder does not build
+     * its text otherwise. The common case costs a single volatile read and returns immediately,
+     * so a session with no pad audio pays nothing at all; a session with one pays a JNI call a
+     * second, off both the frame path and the audio path.
+     *
+     * <p>Totals rather than rates. Packets should climb by about 125 a second, one per 8 ms, and
+     * dropped and late should not climb at all — a number that starts moving is the signal, which
+     * an averaged figure would smooth away.
+     */
+    public String getOverlayText() {
+        XboxWirelessController[] pads = targets;
+
+        if (pads.length == 0) {
+            return "";
+        }
+
+        StringBuilder text = new StringBuilder();
+
+        for (int i = 0; i < pads.length; i++) {
+            int[] stats = pads[i].getAudioStats();
+
+            if (stats == null || stats.length < 5) {
+                continue;
+            }
+
+            text.append("\nPad audio ").append(i + 1).append(": ")
+                    .append(stats[0]).append(" pkts, ")
+                    .append(stats[1]).append(" dropped, ")
+                    .append(stats[2]).append(" late, ")
+                    .append(stats[3]).append(" failed, flow ")
+                    .append(stats[4]);
+        }
+
+        return text.toString();
+    }
+
     /** @return the pads currently receiving audio; empty means audio belongs to the TV */
     public XboxWirelessController[] getTargets() {
         return targets;

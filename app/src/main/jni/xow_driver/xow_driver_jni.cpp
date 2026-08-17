@@ -103,6 +103,26 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_hasAudioSupportNa
 }
 
 extern "C"
+JNIEXPORT jintArray JNICALL
+Java_com_limelight_binding_input_driver_XboxWirelessController_audioStatsNative(JNIEnv *env,
+                                                                                jobject thiz,
+                                                                                jlong handle) {
+    auto *controller = (Controller *) handle;
+    uint32_t stats[5];
+
+    controller->audioStats(stats);
+
+    jintArray out = env->NewIntArray(5);
+    if (out == nullptr) {
+        return nullptr;
+    }
+
+    env->SetIntArrayRegion(out, 0, 5, reinterpret_cast<const jint *>(stats));
+
+    return out;
+}
+
+extern "C"
 JNIEXPORT void JNICALL
 Java_com_limelight_binding_input_driver_XboxWirelessController_queueAudioNative(JNIEnv *env,
                                                                                 jobject thiz,

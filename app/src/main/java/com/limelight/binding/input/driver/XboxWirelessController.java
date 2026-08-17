@@ -149,6 +149,15 @@ public class XboxWirelessController extends AbstractController{
     }
 
     /**
+     * @return audio session counters: packets sent, bytes dropped, packets late, send failures and
+     *         the pad's last requested flow rate. For the performance overlay; reads relaxed
+     *         atomics, so it neither locks nor disturbs the sending path.
+     */
+    public int[] getAudioStats() {
+        return audioStatsNative(handle);
+    }
+
+    /**
      * Queues interleaved 16-bit stereo PCM for this pad.
      *
      * <p>Called from Moonlight's audio decode thread. The native side copies into a bounded ring
@@ -163,6 +172,7 @@ public class XboxWirelessController extends AbstractController{
 
     native void registerNative(long handle);
     native boolean setAudioEnabledNative(long handle, boolean enable);
+    native int[] audioStatsNative(long handle);
     native boolean hasAudioSupportNative(long handle);
     native void queueAudioNative(long handle, short[] samples, int count);
     native void sendRumble(long handle, short lowFreqMotor, short highFreqMotor);
