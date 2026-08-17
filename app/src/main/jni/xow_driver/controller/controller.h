@@ -83,7 +83,10 @@ public:
      */
     bool setAudioVolume(uint8_t percent);
 
-    /* @return the level last requested, 0 - 100. */
+    /*
+     * @return the level actually in force, 0 - 100: the device's own reported setting until the
+     *         user picks one, and their choice after that.
+     */
     uint8_t audioVolume() const { return audioVolumePercent; }
 
     /*
@@ -220,8 +223,19 @@ private:
     AudioVolumeData audioVolumeReported = {};
     bool audioVolumeKnown = false;
 
-    // What the user asked for, 0 - 100. Remembered across a pad reconnecting or audio restarting.
+    /*
+     * The level in force, 0 - 100. Starts as a guess and is replaced by the device's own reported
+     * level the moment it arrives, so it is only ever the assumed 100 before a pad has said
+     * otherwise - a real pad here reports 80.
+     */
     uint8_t audioVolumePercent = 100;
+
+    /*
+     * Whether the user has picked a level this session. Until they have, the device's own setting
+     * is adopted rather than overridden: a pad that came up at 80% is left there, and the menu
+     * shows 80 rather than claiming a 100 that was never applied.
+     */
+    bool audioVolumeChosen = false;
 
     /*
      * Fallback gain for a device that reports its speaker volume read-only, as 8.8 fixed point:

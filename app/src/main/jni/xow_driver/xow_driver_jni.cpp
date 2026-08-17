@@ -114,6 +114,16 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_setAudioVolumeNat
 }
 
 extern "C"
+JNIEXPORT jint JNICALL
+Java_com_limelight_binding_input_driver_XboxWirelessController_audioVolumeNative(JNIEnv *env,
+                                                                                 jobject thiz,
+                                                                                 jlong handle) {
+    auto *controller = (Controller *) handle;
+
+    return (jint) controller->audioVolume();
+}
+
+extern "C"
 JNIEXPORT jintArray JNICALL
 Java_com_limelight_binding_input_driver_XboxWirelessController_audioStatsNative(JNIEnv *env,
                                                                                 jobject thiz,

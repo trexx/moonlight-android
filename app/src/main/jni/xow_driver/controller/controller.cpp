@@ -851,11 +851,22 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
             Log::info("Audio: device reported volume in %zu bytes, not the extended form", length);
         }
 
-        // Apply whatever the user had already chosen. Does nothing at the default of 100 on a
-        // writable device, and installs the software gain on one that is not.
-        if (audioVolumePercent != 100 || !audioVolumeKnown)
+        /*
+         * Adopt the device's own level unless the user has chosen one. A pad here comes up at 80%,
+         * so assuming 100 both misreported it in the menu and made "select 100%" audibly raise the
+         * volume from a value that claimed to already be 100.
+         *
+         * Re-applying the user's choice on every volume message is deliberate: 3.2.5.1.1 has the
+         * device re-send this whenever a field changes, so this is also what puts the level back
+         * if something else moved it.
+         */
+        if (audioVolumeChosen)
         {
             setAudioVolume(audioVolumePercent);
+        }
+        else if (audioVolumeKnown)
+        {
+            audioVolumePercent = audioVolumeReported.speaker & AUDIO_VOLUME_LEVEL;
         }
 
         if (audioState != AUDIO_AWAITING_VOLUME)
@@ -879,6 +890,7 @@ bool Controller::setAudioVolume(uint8_t percent)
     }
 
     audioVolumePercent = percent;
+    audioVolumeChosen = true;
 
     // The device does the attenuation itself where it will let us ask, which is both free and what
     // 3.2.5.1.1 intends. Only the speaker field is touched: chat balance and microphone are not

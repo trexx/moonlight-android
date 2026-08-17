@@ -45,7 +45,10 @@ public class PadAudioSink {
      */
     private volatile int volumePercent = DEFAULT_VOLUME;
 
-    /** Full scale. The device attenuates from here, so anything lower is throwing away signal. */
+    // Whether a level has been chosen this session. Until one has, the pads keep their own.
+    private volatile boolean volumeChosen;
+
+    /** Only a fallback for "no pad has said otherwise yet" — pads report their own level. */
     public static final int DEFAULT_VOLUME = 100;
 
     /**
@@ -69,9 +72,24 @@ public class PadAudioSink {
         return formatSupported;
     }
 
-    /** @return the headphone volume every pad is set to, 0 - 100 */
+    /**
+     * @return the headphone volume actually in force, 0 - 100.
+     *
+     * <p>Read back from the pad rather than assumed until a level has been chosen. A pad reports
+     * its own setting once audio starts — 80% on the one tested here — and reporting a nominal 100
+     * instead made the menu claim a level that had never been applied, so choosing "100%" audibly
+     * raised the volume from a figure already displayed as 100.
+     */
     public int getVolume() {
-        return volumePercent;
+        if (volumeChosen) {
+            return volumePercent;
+        }
+
+        XboxWirelessController[] pads = targets;
+
+        // Any pad will do: the level is a session-wide choice, so they are only ever apart before
+        // one has been made, which is exactly this branch.
+        return pads.length > 0 ? pads[0].getAudioVolume() : volumePercent;
     }
 
     /**
@@ -83,6 +101,7 @@ public class PadAudioSink {
      */
     public synchronized void setVolume(int percent) {
         volumePercent = Math.max(0, Math.min(100, percent));
+        volumeChosen = true;
 
         for (XboxWirelessController target : targets) {
             target.setAudioVolume(volumePercent);
@@ -193,9 +212,11 @@ public class PadAudioSink {
             return false;
         }
 
-        // Before publishing the pad, so it is never briefly streaming at a level the user did not
-        // choose. Harmless at the default of 100, which is what the device starts at anyway.
-        controller.setAudioVolume(volumePercent);
+        // Only if a level has been chosen. Otherwise the pad keeps whatever it came up at, which
+        // is what getVolume() then reports - overriding it uninvited is what made the menu lie.
+        if (volumeChosen) {
+            controller.setAudioVolume(volumePercent);
+        }
 
         XboxWirelessController[] updated = new XboxWirelessController[targets.length + 1];
         System.arraycopy(targets, 0, updated, 0, targets.length);

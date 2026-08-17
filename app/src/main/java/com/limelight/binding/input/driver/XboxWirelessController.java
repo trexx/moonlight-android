@@ -162,6 +162,15 @@ public class XboxWirelessController extends AbstractController{
     }
 
     /**
+     * @return the headphone volume actually in force, 0 - 100 — the pad's own setting until a
+     *         level is chosen, and the chosen level after that. Not an assumed default: a pad here
+     *         comes up at 80, so assuming 100 misreports it.
+     */
+    public int getAudioVolume() {
+        return audioVolumeNative(handle);
+    }
+
+    /**
      * @return audio session counters: packets sent, bytes dropped, packets late, send failures and
      *         the pad's last requested flow rate. For the performance overlay; reads relaxed
      *         atomics, so it neither locks nor disturbs the sending path.
@@ -187,6 +196,7 @@ public class XboxWirelessController extends AbstractController{
     native boolean setAudioEnabledNative(long handle, boolean enable);
     native int[] audioStatsNative(long handle);
     native boolean setAudioVolumeNative(long handle, int percent);
+    native int audioVolumeNative(long handle);
     native boolean hasAudioSupportNative(long handle);
     native void queueAudioNative(long handle, short[] samples, int count);
     native void sendRumble(long handle, short lowFreqMotor, short highFreqMotor);
