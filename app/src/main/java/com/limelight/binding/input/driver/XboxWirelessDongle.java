@@ -19,7 +19,7 @@ import java.util.TreeMap;
  * up to four pads, so it acts as a factory instead. The native driver owns the USB traffic and
  * the wireless protocol, and calls back into {@link #addNewController} and
  * {@link #removeController} as controllers pair and drop, each of which becomes an
- * {@link XboxWirelessController}.
+ * {@link GipController}.
  *
  * <p>Android has no driver for this adapter at all, so unlike the other families there is no
  * kernel support to weigh up — claiming it is the only way these controllers work.
@@ -144,7 +144,7 @@ public class XboxWirelessDongle {
      */
     public void addNewController(int id, long handle, short vid, short pid){
         // Namespaced by vendor ID so slot indices can't collide with other drivers' device IDs
-        var controller = new XboxWirelessController(id + 0x045e0000, listener, vid, pid, handle);
+        var controller = new GipController(id + 0x045e0000, listener, vid, pid, handle);
         controllers.put(id, controller);
         this.listener.deviceAdded(controller);
     }
@@ -153,10 +153,10 @@ public class XboxWirelessDongle {
      * @return the controllers currently paired to this adapter, ordered by slot so the first is
      *         the first that paired. Used by the in-game audio menu, which needs stable names.
      */
-    public List<XboxWirelessController> getControllers() {
-        var found = new ArrayList<XboxWirelessController>();
+    public List<GipController> getControllers() {
+        var found = new ArrayList<GipController>();
         for (var entry : new TreeMap<>(controllers).entrySet()) {
-            if (entry.getValue() instanceof XboxWirelessController wireless) {
+            if (entry.getValue() instanceof GipController wireless) {
                 found.add(wireless);
             }
         }

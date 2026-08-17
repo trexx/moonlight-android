@@ -8,7 +8,7 @@ import android.widget.ArrayAdapter;
 import com.limelight.binding.audio.PadAudioSink;
 import com.limelight.binding.input.GameInputDevice;
 import com.limelight.binding.input.KeyboardTranslator;
-import com.limelight.binding.input.driver.XboxWirelessController;
+import com.limelight.binding.input.driver.GipController;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.KeyboardPacket;
 
@@ -164,12 +164,12 @@ public class GameMenu {
      * than letting a selection quietly do nothing.
      */
     private void showPadAudioMenu() {
-        List<XboxWirelessController> controllers = game.getWirelessControllers();
+        List<GipController> controllers = game.getWirelessControllers();
         PadAudioSink sink = game.getPadAudioSink();
         List<MenuOption> options = new ArrayList<>();
 
         int number = 1;
-        for (XboxWirelessController controller : controllers) {
+        for (GipController controller : controllers) {
             boolean enabled = sink.isEnabled(controller);
             String state;
 

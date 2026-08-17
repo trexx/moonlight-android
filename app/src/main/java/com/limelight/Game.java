@@ -13,7 +13,7 @@ import com.limelight.binding.input.touch.AbsoluteTouchContext;
 import com.limelight.binding.input.touch.RelativeTouchContext;
 import com.limelight.binding.input.touch.TrackpadContext;
 import com.limelight.binding.input.driver.UsbDriverService;
-import com.limelight.binding.input.driver.XboxWirelessController;
+import com.limelight.binding.input.driver.GipController;
 import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
@@ -2326,7 +2326,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      * @return the pads paired through the adapter, in pairing order, or empty if the driver is not
      *         bound. The game menu lists these so the user can send audio to one.
      */
-    public List<XboxWirelessController> getWirelessControllers() {
+    public List<GipController> getWirelessControllers() {
         if (usbDriverBinder == null) {
             return Collections.emptyList();
         }
@@ -2343,7 +2343,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      * is either the two-pad bandwidth limit or a pad with no audio endpoint at all, and the toast
      * distinguishes them rather than leaving the user to wonder why the menu did nothing.
      */
-    public void togglePadAudio(XboxWirelessController controller) {
+    public void togglePadAudio(GipController controller) {
         final boolean enabling = !padAudioSink.isEnabled(controller);
 
         // Off the main thread, for the same reason setDonglePairingMode() is: both ends of this
@@ -2386,7 +2386,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     /** Disabling always succeeds; wrapped so the toggle above can treat both directions alike. */
-    private boolean disablePadAudio(XboxWirelessController controller) {
+    private boolean disablePadAudio(GipController controller) {
         padAudioSink.disable(controller);
         return true;
     }

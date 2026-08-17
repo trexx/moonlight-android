@@ -1,7 +1,7 @@
 package com.limelight.binding.audio;
 
 import com.limelight.LimeLog;
-import com.limelight.binding.input.driver.XboxWirelessController;
+import com.limelight.binding.input.driver.GipController;
 
 /**
  * Routes decoded audio to the headphone jacks of Xbox pads on the wireless adapter.
@@ -28,10 +28,10 @@ public class PadAudioSink {
     /** The adapter has bandwidth for two pads with stereo audio; see the class comment. */
     public static final int MAX_TARGETS = 2;
 
-    private static final XboxWirelessController[] NONE = new XboxWirelessController[0];
+    private static final GipController[] NONE = new GipController[0];
 
     // Replaced wholesale, never mutated in place. See the threading note above.
-    private volatile XboxWirelessController[] targets = NONE;
+    private volatile GipController[] targets = NONE;
 
     // Whether the negotiated stream format is one a pad can take at all; see setStreamFormat()
     private volatile boolean formatSupported;
@@ -85,7 +85,7 @@ public class PadAudioSink {
             return volumePercent;
         }
 
-        XboxWirelessController[] pads = targets;
+        GipController[] pads = targets;
 
         // Any pad will do: the level is a session-wide choice, so they are only ever apart before
         // one has been made, which is exactly this branch.
@@ -103,7 +103,7 @@ public class PadAudioSink {
         volumePercent = Math.max(0, Math.min(100, percent));
         volumeChosen = true;
 
-        for (XboxWirelessController target : targets) {
+        for (GipController target : targets) {
             target.setAudioVolume(volumePercent);
         }
     }
@@ -121,7 +121,7 @@ public class PadAudioSink {
      * an averaged figure would smooth away.
      */
     public String getOverlayText() {
-        XboxWirelessController[] pads = targets;
+        GipController[] pads = targets;
 
         if (pads.length == 0) {
             return "";
@@ -148,7 +148,7 @@ public class PadAudioSink {
     }
 
     /** @return the pads currently receiving audio; empty means audio belongs to the TV */
-    public XboxWirelessController[] getTargets() {
+    public GipController[] getTargets() {
         return targets;
     }
 
@@ -158,8 +158,8 @@ public class PadAudioSink {
     }
 
     /** @return true if this pad is currently receiving audio */
-    public synchronized boolean isEnabled(XboxWirelessController controller) {
-        for (XboxWirelessController target : targets) {
+    public synchronized boolean isEnabled(GipController controller) {
+        for (GipController target : targets) {
             if (target == controller) {
                 return true;
             }
@@ -172,7 +172,7 @@ public class PadAudioSink {
      *         that is about the bandwidth budget, this is about the hardware, and the two
      *         refusals need different explanations to be any use to the user.
      */
-    public boolean isSupportedBy(XboxWirelessController controller) {
+    public boolean isSupportedBy(GipController controller) {
         return formatSupported && controller.hasAudioSupport();
     }
 
@@ -186,7 +186,7 @@ public class PadAudioSink {
      *
      * @return false if the cap is reached or the pad refused, in which case nothing changed
      */
-    public synchronized boolean enable(XboxWirelessController controller) {
+    public synchronized boolean enable(GipController controller) {
         if (isEnabled(controller)) {
             return true;
         }
@@ -218,7 +218,7 @@ public class PadAudioSink {
             controller.setAudioVolume(volumePercent);
         }
 
-        XboxWirelessController[] updated = new XboxWirelessController[targets.length + 1];
+        GipController[] updated = new GipController[targets.length + 1];
         System.arraycopy(targets, 0, updated, 0, targets.length);
         updated[targets.length] = controller;
         targets = updated;
@@ -230,14 +230,14 @@ public class PadAudioSink {
      * Removes a pad and tells it to stop. Safe for a pad that was never enabled, which is what
      * makes this usable straight from the disconnect path.
      */
-    public synchronized void disable(XboxWirelessController controller) {
+    public synchronized void disable(GipController controller) {
         if (!isEnabled(controller)) {
             return;
         }
 
-        XboxWirelessController[] updated = new XboxWirelessController[targets.length - 1];
+        GipController[] updated = new GipController[targets.length - 1];
         int i = 0;
-        for (XboxWirelessController target : targets) {
+        for (GipController target : targets) {
             if (target != controller) {
                 updated[i++] = target;
             }
@@ -251,10 +251,10 @@ public class PadAudioSink {
 
     /** Stops every pad. Called when the stream ends. */
     public synchronized void disableAll() {
-        XboxWirelessController[] previous = targets;
+        GipController[] previous = targets;
         targets = NONE;
 
-        for (XboxWirelessController target : previous) {
+        for (GipController target : previous) {
             target.setAudioEnabled(false);
         }
     }

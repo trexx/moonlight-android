@@ -3,7 +3,7 @@ package com.limelight.binding.audio;
 import android.os.Build;
 
 import com.limelight.LimeLog;
-import com.limelight.binding.input.driver.XboxWirelessController;
+import com.limelight.binding.input.driver.GipController;
 import com.limelight.nvstream.av.audio.AudioRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
 
@@ -101,9 +101,9 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     public void playDecodedAudio(short[] audioData) {
         // Pads take the audio instead of the TV, not as well as it - the point is private
         // listening. A single volatile read, and the empty case is the overwhelmingly common one.
-        XboxWirelessController[] pads = padAudioSink.getTargets();
+        GipController[] pads = padAudioSink.getTargets();
         if (pads.length > 0) {
-            for (XboxWirelessController pad : pads) {
+            for (GipController pad : pads) {
                 pad.queueAudio(audioData, audioData.length);
             }
             return;

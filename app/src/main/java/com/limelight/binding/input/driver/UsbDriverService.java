@@ -109,7 +109,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         // place a removal is known - the audio renderer is not on the listener chain - so the
         // coupling to the audio package is deliberate and lives here rather than being invented
         // somewhere with less claim to know.
-        if (padAudioSink != null && controller instanceof XboxWirelessController wireless) {
+        if (padAudioSink != null && controller instanceof GipController wireless) {
             padAudioSink.disable(wireless);
         }
 
@@ -212,8 +212,8 @@ public class UsbDriverService extends Service implements UsbDriverListener {
          * @return every controller currently paired through an adapter, in pairing order, which
          *         is what the in-game menu lists so the user can pick which pads get audio
          */
-        public List<XboxWirelessController> getWirelessControllers() {
-            List<XboxWirelessController> found = new ArrayList<>();
+        public List<GipController> getWirelessControllers() {
+            List<GipController> found = new ArrayList<>();
             for (XboxWirelessDongle dongle : xboxWirelessDongles) {
                 found.addAll(dongle.getControllers());
             }

@@ -3,14 +3,19 @@ package com.limelight.binding.input.driver;
 import com.limelight.nvstream.jni.MoonBridge;
 
 /**
- * One controller paired to an {@link XboxWirelessDongle}.
+ * One GIP controller, whatever it is attached by.
  *
  * <p>Inverted from every other {@link AbstractController}: there is no reader thread and no USB
- * traffic here, because the native {@code xow-driver} owns the wireless link and pushes state in
- * through {@link #updateInput}. This class only translates that into the protocol's units and
- * routes rumble back down.
+ * traffic here, because the native driver owns the link and pushes state in through
+ * {@link #updateInput}. This class only translates that into the protocol's units and routes
+ * rumble, audio and volume back down.
+ *
+ * <p>Named for the protocol rather than the transport because it is genuinely transport-neutral:
+ * it holds a handle to a native {@code Controller}, and whether that sits on the wireless
+ * adapter's radio link or on a cable's interrupt endpoints is settled below it. A cabled pad
+ * produces one of these exactly as the adapter does.
  */
-public class XboxWirelessController extends AbstractController{
+public class GipController extends AbstractController{
     static {
         System.loadLibrary("xow-driver");
     }
@@ -19,7 +24,7 @@ public class XboxWirelessController extends AbstractController{
     private final long handle;
 
     /** @param handle native controller instance supplied by the dongle's driver */
-    public XboxWirelessController(int deviceId, UsbDriverListener listener, int vendorId, int productId, long handle) {
+    public GipController(int deviceId, UsbDriverListener listener, int vendorId, int productId, long handle) {
         super(deviceId, listener, vendorId, productId);
         this.handle = handle;
 
