@@ -19,9 +19,10 @@
 #include "gip.h"
 #include "../utils/log.h"
 #include "../utils/bytes.h"
+#include "../utils/crypto.h"
 
 #include <algorithm>
-#include <random>
+#include <cstring>
 
 enum FrameCommand
 {
@@ -62,6 +63,9 @@ enum FrameType
 // its data class MTU and the length encoding allow; this is a sanity bound so a corrupt length
 // cannot make us allocate wildly. xone uses the same value.
 #define CHUNK_BUFFER_MAX_LENGTH 0xffff
+
+// Command, flags and sequence, plus a four-byte length at most, plus a byte of even-length padding
+#define HEADER_MAX_LENGTH 8
 
 struct Frame
 {
@@ -115,6 +119,107 @@ static size_t decodeVarint(const uint8_t *data, size_t available, uint32_t &valu
 
     // Ran out of input, or the length claimed more continuation bytes than the encoding allows
     return 0;
+}
+
+/*
+ * The inverse of decodeVarint(). Returns the number of bytes written, at most four.
+ */
+static size_t encodeVarint(uint8_t *buf, uint32_t value)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof(value); i++)
+    {
+        buf[i] = value & 0x7f;
+        value >>= 7;
+
+        if (value == 0)
+        {
+            return i + 1;
+        }
+
+        buf[i] |= 0x80;
+    }
+
+    return i;
+}
+
+/*
+ * Builds a fragment header: command, flags, sequence, then the length and the offset, each a
+ * varint.
+ *
+ * On the first fragment the offset field carries the *total* message length rather than an offset -
+ * the specification calls it TLO for that reason - and later fragments put their own byte offset
+ * there.
+ *
+ * The header must come to an even number of bytes. Padding goes on the length varint, not after the
+ * offset, because the offset has to be last for the reader: set the continuation bit on the length's
+ * final byte and insert a zero, which reads back as the same value. A captured host does exactly
+ * this - a 58-byte length appears as "ba 00" when the offset needs only one byte.
+ *
+ * Returns the header length; the buffer needs room for HEADER_MAX_LENGTH.
+ */
+static size_t encodeChunkHeader(uint8_t *buf, uint8_t command, uint8_t deviceId, uint8_t type,
+                                uint8_t sequence, uint32_t length, uint32_t offset)
+{
+    uint8_t lengthBytes[5];
+    uint8_t offsetBytes[5];
+
+    size_t lengthUsed = encodeVarint(lengthBytes, length);
+    size_t offsetUsed = encodeVarint(offsetBytes, offset);
+
+    if ((3 + lengthUsed + offsetUsed) % 2)
+    {
+        lengthBytes[lengthUsed - 1] |= 0x80;
+        lengthBytes[lengthUsed++] = 0;
+    }
+
+    size_t used = 0;
+
+    buf[used++] = command;
+    buf[used++] = static_cast<uint8_t>((type << 4) | (deviceId & 0x0f));
+    buf[used++] = sequence;
+
+    std::copy(lengthBytes, lengthBytes + lengthUsed, buf + used);
+    used += lengthUsed;
+
+    std::copy(offsetBytes, offsetBytes + offsetUsed, buf + used);
+    used += offsetUsed;
+
+    return used;
+}
+
+/*
+ * Builds a downstream header, using the extended length encoding when the payload needs it.
+ *
+ * The single length byte in Frame tops out at 127, and a handshake message carrying a 256-byte
+ * encrypted secret is far past that - casting its length into a byte sends 274 as 18, which the
+ * device reads as a malformed message and answers by dropping the link.
+ *
+ * Downstream headers must also be an even number of bytes (MS-GIPUSB 3.1.5.2). An odd one is padded
+ * the way xone does it: set the continuation bit on the last length byte and append a zero, which
+ * reads back as the same value.
+ *
+ * Returns the header length; the buffer needs room for HEADER_MAX_LENGTH.
+ */
+static size_t encodeHeader(uint8_t *buf, uint8_t command, uint8_t deviceId, uint8_t type,
+                           uint8_t sequence, uint32_t length)
+{
+    size_t used = 0;
+
+    buf[used++] = command;
+    buf[used++] = static_cast<uint8_t>((type << 4) | (deviceId & 0x0f));
+    buf[used++] = sequence;
+
+    used += encodeVarint(buf + used, length);
+
+    if (used % 2)
+    {
+        buf[used - 1] |= 0x80;
+        buf[used++] = 0;
+    }
+
+    return used;
 }
 
 GipDevice::GipDevice(SendPacket sendPacket) : sendPacket(sendPacket) {}
@@ -255,7 +360,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
         frame->command == CMD_AUTHENTICATE &&
         data.size() >= payloadLength
     ) {
-        authReceived(data.raw(), payloadLength);
+        handleAuthPacket(data.raw(), payloadLength);
     }
 
     else if (
@@ -468,7 +573,7 @@ void GipDevice::dispatchChunked(uint8_t command, const uint8_t *data, size_t len
 
     if (command == CMD_AUTHENTICATE)
     {
-        authReceived(data, length);
+        handleAuthPacket(data, length);
 
         return;
     }
@@ -518,63 +623,165 @@ static void putBigEndian16(uint8_t *buf, uint16_t value)
     buf[1] = static_cast<uint8_t>(value);
 }
 
-bool GipDevice::sendAuthHostHello()
+/*
+ * Sends one handshake message and folds it into the transcript.
+ *
+ * Layout is the capture's: handshake header, data header, payload, trailer. Both lengths are
+ * big-endian and each counts the bytes after its own header, excluding the trailer.
+ *
+ * The transcript covers everything from the data header onward - not the handshake header, not the
+ * trailer - for our messages and the device's alike. Both sides hash it and compare in the finish
+ * messages, so what goes in and what stays out is exact rather than a matter of taste.
+ */
+/*
+ * Wraps a handshake message in its GIP header and sends it. Split out because both senders need
+ * the extended length encoding: a message carrying the encrypted secret is 274 bytes.
+ */
+bool GipDevice::sendAuthFrame(const uint8_t *payload, size_t length)
 {
-    // Handshake header, data header, 32 random bytes, two unknown 4-byte fields, trailer. The
-    // captured Windows exchange sends exactly this, 58 bytes, so the shape is not inferred.
-    const size_t dataLength = sizeof(AuthDataHeader) + AUTH_RANDOM_LENGTH + 4 + 4;
-    const size_t total = sizeof(AuthHandshakeHeader) + dataLength + AUTH_TRAILER_LENGTH;
-
-    Bytes payload(total);
-    uint8_t *raw = payload.raw();
-
-    std::fill(raw, raw + total, 0);
-
-    raw[0] = 0x00;                                          // context: handshake
-    raw[1] = AUTH_OPT_ACKNOWLEDGE | AUTH_OPT_FROM_HOST;
-    raw[2] = 0x00;                                          // no error
-    raw[3] = AUTH_HOST_HELLO;
-    putBigEndian16(raw + 4, static_cast<uint16_t>(dataLength));
-
-    raw[6] = AUTH_HOST_HELLO;
-    raw[7] = 0x01;                                          // security protocol major version
-    putBigEndian16(raw + 8, static_cast<uint16_t>(dataLength - sizeof(AuthDataHeader)));
-
-    // The client mixes this into the master secret. Only unpredictability matters, so the default
-    // engine seeded from the system source is enough - nothing here is verifying anyone.
-    std::random_device source;
-
-    for (size_t i = 0; i < AUTH_RANDOM_LENGTH; i++)
-    {
-        raw[sizeof(AuthHandshakeHeader) + sizeof(AuthDataHeader) + i] =
-                static_cast<uint8_t>(source());
-    }
-
-    Frame frame = {};
-
-    frame.command = CMD_AUTHENTICATE;
-    frame.type = TYPE_REQUEST | TYPE_ACK;
-    frame.sequence = securitySequence++;
-
-    if (securitySequence == 0x00)
+    if (++securitySequence == 0x00)
     {
         securitySequence = 0x01;
     }
 
-    frame.length = static_cast<uint8_t>(total);
+    uint8_t sequence = securitySequence;
+    uint8_t header[HEADER_MAX_LENGTH];
 
-    Bytes out;
+    // Small enough to go whole. The hello and every request are well inside this.
+    if (length <= AUTH_FRAGMENT_LENGTH)
+    {
+        size_t headerLength = encodeHeader(header, CMD_AUTHENTICATE, 0, TYPE_REQUEST | TYPE_ACK,
+                                           sequence, static_cast<uint32_t>(length));
 
-    out.append(frame);
-    out.append(payload);
+        Bytes out(headerLength + length);
+
+        std::copy(header, header + headerLength, out.raw());
+        std::copy(payload, payload + length, out.raw() + headerLength);
+
+        return sendPacket(out);
+    }
+
+    /*
+     * Anything larger is fragmented, which is how a captured host sends the 274-byte message that
+     * carries the encrypted secret - and the mirror of how the device's certificate arrives here.
+     * Sending it whole with an extended length instead put the pad into a connect loop: the link
+     * carries AUTH_FRAGMENT_LENGTH bytes per frame, and this is not a matter of how the length is
+     * written.
+     *
+     * Every fragment of one message shares its sequence number. Acknowledgement is asked for on the
+     * first and last only, matching the capture.
+     */
+    for (size_t offset = 0; offset < length; offset += AUTH_FRAGMENT_LENGTH)
+    {
+        size_t remaining = length - offset;
+        size_t chunk = remaining < AUTH_FRAGMENT_LENGTH ? remaining : AUTH_FRAGMENT_LENGTH;
+
+        bool first = offset == 0;
+        bool last = offset + chunk >= length;
+
+        uint8_t type = TYPE_REQUEST | TYPE_CHUNK;
+
+        if (first)
+        {
+            type |= TYPE_CHUNK_START;
+        }
+
+        if (first || last)
+        {
+            type |= TYPE_ACK;
+        }
+
+        // The first fragment carries the whole message's length where the others carry an offset
+        size_t headerLength = encodeChunkHeader(header, CMD_AUTHENTICATE, 0, type, sequence,
+                                                static_cast<uint32_t>(chunk),
+                                                static_cast<uint32_t>(first ? length : offset));
+
+        Bytes out(headerLength + chunk);
+
+        std::copy(header, header + headerLength, out.raw());
+        std::copy(payload + offset, payload + offset + chunk, out.raw() + headerLength);
+
+        if (!sendPacket(out))
+        {
+            return false;
+        }
+    }
+
+    // An empty fragment ends the transfer, carrying the total where an offset would go
+    size_t headerLength = encodeChunkHeader(header, CMD_AUTHENTICATE, 0,
+                                            TYPE_REQUEST | TYPE_CHUNK, sequence, 0,
+                                            static_cast<uint32_t>(length));
+
+    Bytes out(headerLength);
+
+    std::copy(header, header + headerLength, out.raw());
 
     return sendPacket(out);
 }
 
+bool GipDevice::sendAuthPacket(uint8_t command, const uint8_t *payload, size_t length)
+{
+    const size_t dataLength = sizeof(AuthDataHeader) + length;
+    const size_t total = sizeof(AuthHandshakeHeader) + dataLength + AUTH_TRAILER_LENGTH;
+
+    Bytes packet(total);
+    uint8_t *raw = packet.raw();
+
+    std::fill(raw, raw + total, 0);
+
+    raw[0] = 0x00;
+    raw[1] = AUTH_OPT_ACKNOWLEDGE | AUTH_OPT_FROM_HOST;
+    raw[2] = 0x00;
+    raw[3] = command;
+    putBigEndian16(raw + 4, static_cast<uint16_t>(dataLength));
+
+    raw[6] = command;
+    raw[7] = 0x01;                                      // security protocol major version
+    putBigEndian16(raw + 8, static_cast<uint16_t>(length));
+
+    if (length > 0)
+    {
+        std::copy(payload, payload + length, raw + sizeof(AuthHandshakeHeader) + sizeof(AuthDataHeader));
+    }
+
+    authTranscript.insert(authTranscript.end(),
+                          raw + sizeof(AuthHandshakeHeader),
+                          raw + sizeof(AuthHandshakeHeader) + dataLength);
+
+    authLastSent = command;
+
+    return sendAuthFrame(packet.raw(), total);
+}
+
+bool GipDevice::sendAuthHostHello()
+{
+    authTranscript.clear();
+    authMasterSecret.clear();
+    authPublicKey.clear();
+    authRandomClient.clear();
+
+    // 32 random bytes, then two unknown four-byte fields the capture leaves zero
+    authRandomHost = GipCrypto::randomBytes(AUTH_RANDOM_LENGTH);
+
+    if (authRandomHost.size() != AUTH_RANDOM_LENGTH)
+    {
+        Log::error("Security: no random source");
+
+        return false;
+    }
+
+    std::vector<uint8_t> payload(AUTH_RANDOM_LENGTH + 8, 0);
+
+    std::copy(authRandomHost.begin(), authRandomHost.end(), payload.begin());
+
+    return sendAuthPacket(AUTH_HOST_HELLO, payload.data(), payload.size());
+}
+
 bool GipDevice::requestAuthPacket(uint8_t command, uint16_t length)
 {
-    // A request carries the handshake header and the trailer, and no data header: the length field
-    // says how much the device should send back.
+    // A request carries the handshake header and the trailer, and no data header: the length says
+    // how much the device should send back. It is not part of the transcript - nothing of ours
+    // that the device does not hash can be.
     const size_t total = sizeof(AuthHandshakeHeader) + AUTH_TRAILER_LENGTH;
 
     Bytes payload(total);
@@ -588,25 +795,321 @@ bool GipDevice::requestAuthPacket(uint8_t command, uint16_t length)
     raw[3] = command;
     putBigEndian16(raw + 4, length);
 
-    Frame frame = {};
+    authLastSent = command;
 
-    frame.command = CMD_AUTHENTICATE;
-    frame.type = TYPE_REQUEST | TYPE_ACK;
-    frame.sequence = securitySequence++;
+    return sendAuthFrame(payload.raw(), total);
+}
 
-    if (securitySequence == 0x00)
+/*
+ * TLS-style P_hash over HMAC-SHA256: A(1) = HMAC(key, label || seed), then each output block is
+ * HMAC(key, A(i) || label || seed) with A(i+1) = HMAC(key, A(i)).
+ */
+std::vector<uint8_t> GipDevice::computePrf(const char *label,
+                                           const std::vector<uint8_t> &key,
+                                           const std::vector<uint8_t> &seed,
+                                           size_t length)
+{
+    std::vector<uint8_t> labelAndSeed(label, label + strlen(label));
+
+    labelAndSeed.insert(labelAndSeed.end(), seed.begin(), seed.end());
+
+    std::vector<uint8_t> a = GipCrypto::hmacSha256(key.data(), key.size(),
+                                                   labelAndSeed.data(), labelAndSeed.size());
+    std::vector<uint8_t> out;
+
+    while (out.size() < length && !a.empty())
     {
-        securitySequence = 0x01;
+        std::vector<uint8_t> block(a);
+
+        block.insert(block.end(), labelAndSeed.begin(), labelAndSeed.end());
+
+        std::vector<uint8_t> digest = GipCrypto::hmacSha256(key.data(), key.size(),
+                                                            block.data(), block.size());
+
+        if (digest.empty())
+        {
+            return {};
+        }
+
+        out.insert(out.end(), digest.begin(), digest.end());
+        a = GipCrypto::hmacSha256(key.data(), key.size(), a.data(), a.size());
     }
 
-    frame.length = static_cast<uint8_t>(total);
+    if (out.size() < length)
+    {
+        return {};
+    }
 
-    Bytes out;
+    out.resize(length);
 
-    out.append(frame);
-    out.append(payload);
+    return out;
+}
 
-    return sendPacket(out);
+
+/*
+ * Lifts the controller's RSA public key out of its certificate.
+ *
+ * Scanned for rather than parsed, because the certificate cannot be parsed: the ones Microsoft
+ * issues have an empty subject and no subjectAltName, which RFC 5280 section 4.2.1.6 forbids, and a
+ * conforming X.509 parser rejects them. Nothing is verified - there is no trust decision to make
+ * here, only a key to encrypt a secret with, and the device proves it holds the private half by
+ * producing a finish value we can predict.
+ *
+ * The pattern is the DER header of a 2048-bit RSAPublicKey.
+ */
+bool GipDevice::extractPublicKey(const uint8_t *data, size_t length)
+{
+    static const uint8_t marker[] = { 0x30, 0x82, 0x01, 0x0a };
+
+    for (size_t i = 0; i + sizeof(marker) <= length; i++)
+    {
+        if (memcmp(data + i, marker, sizeof(marker)) != 0)
+        {
+            continue;
+        }
+
+        if (i + AUTH_PUBKEY_LENGTH > length)
+        {
+            return false;
+        }
+
+        authPublicKey.assign(data + i, data + i + AUTH_PUBKEY_LENGTH);
+
+        return true;
+    }
+
+    return false;
+}
+
+/*
+ * Encrypts a fresh pre-master secret under the device's key and sends it.
+ *
+ * The master secret is derived on both sides from that secret and the two randoms, so from here on
+ * the device can be checked rather than trusted: only something holding the certificate's private
+ * half can recover the secret and produce the finish value we compute below.
+ */
+bool GipDevice::sendAuthHostSecret()
+{
+    std::vector<uint8_t> secret = GipCrypto::randomBytes(AUTH_SECRET_LENGTH);
+
+    if (secret.size() != AUTH_SECRET_LENGTH)
+    {
+        return false;
+    }
+
+    std::vector<uint8_t> randoms(authRandomHost);
+
+    randoms.insert(randoms.end(), authRandomClient.begin(), authRandomClient.end());
+
+    authMasterSecret = computePrf("Master Secret", secret, randoms, AUTH_SECRET_LENGTH);
+
+    if (authMasterSecret.empty())
+    {
+        Log::error("Security: failed to derive the master secret");
+
+        return false;
+    }
+
+    std::vector<uint8_t> encrypted = GipCrypto::rsaEncrypt(authPublicKey.data(),
+                                                            authPublicKey.size(),
+                                                            secret.data(), secret.size());
+
+    if (encrypted.empty())
+    {
+        Log::error("Security: failed to encrypt the pre-master secret");
+
+        return false;
+    }
+
+    return sendAuthPacket(AUTH_HOST_SECRET, encrypted.data(), encrypted.size());
+}
+
+/*
+ * Proves we derived the same master secret, by sending a value derived from it and from every
+ * handshake message so far. The device checks it and answers with its own.
+ */
+bool GipDevice::sendAuthFinish()
+{
+    std::vector<uint8_t> transcript = GipCrypto::sha256(authTranscript.data(),
+                                                         authTranscript.size());
+
+    if (transcript.empty())
+    {
+        return false;
+    }
+
+    std::vector<uint8_t> finish = computePrf("Host Finished", authMasterSecret, transcript,
+                                              transcript.size());
+
+    if (finish.empty())
+    {
+        return false;
+    }
+
+    return sendAuthPacket(AUTH_HOST_FINISH, finish.data(), finish.size());
+}
+
+/*
+ * The device acknowledged what we last sent, so ask for whatever it owes us next. The exchange is
+ * host-driven throughout: a reply is requested, never merely awaited. Sizes are the capture's.
+ */
+void GipDevice::handleAuthAcknowledge()
+{
+    switch (authLastSent)
+    {
+        case AUTH_HOST_HELLO:
+            requestAuthPacket(AUTH_CLIENT_HELLO, 0x0054);
+            break;
+
+        case AUTH_HOST_SECRET:
+            sendAuthFinish();
+            break;
+
+        case AUTH_HOST_FINISH:
+            requestAuthPacket(AUTH_CLIENT_FINISH, 0x0044);
+            break;
+
+        default:
+            break;
+    }
+}
+
+void GipDevice::handleAuthPacket(const uint8_t *data, size_t length)
+{
+    if (length < sizeof(AuthHandshakeHeader))
+    {
+        return;
+    }
+
+    uint8_t options = data[1];
+    uint8_t error = data[2];
+    uint8_t command = data[3];
+
+    Log::info("Security: command 0x%02x, error 0x%02x, %zu bytes: %02x %02x %02x %02x %02x %02x",
+              command, error, length,
+              data[0], data[1], data[2], data[3],
+              length > 4 ? data[4] : 0, length > 5 ? data[5] : 0);
+
+    if (error != 0)
+    {
+        Log::error("Security: device reported error 0x%02x", error);
+
+        return;
+    }
+
+    // An acknowledgement, not content: command 0x01 means the last message was accepted, anything
+    // else means it was rejected and the exchange is over.
+    if (options & AUTH_OPT_ACKNOWLEDGE)
+    {
+        if (command != 0x01)
+        {
+            Log::error("Security: handshake rejected, 0x%02x", command);
+
+            return;
+        }
+
+        handleAuthAcknowledge();
+
+        return;
+    }
+
+    if (length < sizeof(AuthHandshakeHeader) + sizeof(AuthDataHeader))
+    {
+        return;
+    }
+
+    /*
+     * The data header states the security protocol version outright, so take the device at its
+     * word rather than inferring. xone instead notices the two headers disagreeing, which is a
+     * consequence of the same thing - a v2 device answering a v1 hello - so both are checked and
+     * either is enough.
+     *
+     * Version 2 negotiates ECDH in place of an RSA-encrypted secret. Nothing here implements it,
+     * and there is no hardware on hand that asks for it, so say so plainly rather than carrying on
+     * and failing somewhere less obvious.
+     */
+    uint8_t version = data[7];
+
+    if (version != 0x01 || data[3] != data[6])
+    {
+        Log::error("Security: device wants protocol v%u, which is not implemented", version);
+
+        authLastSent = 0;
+
+        return;
+    }
+
+    const uint8_t *payload = data + sizeof(AuthHandshakeHeader) + sizeof(AuthDataHeader);
+    size_t payloadLength = length - sizeof(AuthHandshakeHeader) - sizeof(AuthDataHeader);
+
+    switch (command)
+    {
+        case AUTH_CLIENT_HELLO:
+            if (payloadLength >= AUTH_RANDOM_LENGTH)
+            {
+                authRandomClient.assign(payload, payload + AUTH_RANDOM_LENGTH);
+            }
+            break;
+
+        case AUTH_CLIENT_CERTIFICATE:
+            if (!extractPublicKey(payload, payloadLength))
+            {
+                Log::error("Security: no public key in the certificate");
+            }
+            break;
+
+        default:
+            break;
+    }
+
+    // Everything from the data header onward, for the device's messages as for ours
+    authTranscript.insert(authTranscript.end(),
+                          data + sizeof(AuthHandshakeHeader),
+                          data + length);
+
+    switch (command)
+    {
+        case AUTH_CLIENT_HELLO:
+            requestAuthPacket(AUTH_CLIENT_CERTIFICATE, 0x0404);
+            break;
+
+        case AUTH_CLIENT_CERTIFICATE:
+            if (!authPublicKey.empty())
+            {
+                sendAuthHostSecret();
+            }
+            break;
+
+        case AUTH_CLIENT_FINISH:
+        {
+            /*
+             * The exchange is closed by a two-byte message in the control context rather than the
+             * handshake one: context 0x01, control 0x00 for complete. A captured host sends it
+             * immediately after the device's finish, and without it the device is never told the
+             * handshake succeeded.
+             */
+            static const uint8_t complete[] = { 0x01, 0x00 };
+
+            sendAuthFrame(complete, sizeof(complete));
+
+            Log::info("Security: handshake complete");
+
+            // The session key is what the link encryption needs; a transport without any ignores it
+            std::vector<uint8_t> key = computePrf("Session Key", authMasterSecret,
+                                                   authRandomHost, 16);
+
+            if (!key.empty())
+            {
+                authCompleted(key.data(), key.size());
+            }
+
+            authLastSent = 0;
+            break;
+        }
+
+        default:
+            break;
+    }
 }
 
 bool GipDevice::requestIdentify()

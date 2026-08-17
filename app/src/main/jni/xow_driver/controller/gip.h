@@ -308,8 +308,25 @@ protected:
     static const size_t AUTH_PUBKEY_LENGTH = 270;
     static const size_t AUTH_SECRET_LENGTH = 48;
 
+    /*
+     * Payload bytes per fragment of a handshake message.
+     *
+     * MS-GIPUSB 2.2.10.4 gives the Command data class an MTU of 64 bytes, and a fragment header is
+     * six - command, flags, sequence, then the length and offset varints padded to an even total -
+     * so 58 is what is left. A captured Windows host splits its 274-byte secret into four of these
+     * and a 42-byte remainder, and xone's GIP_PKT_MAX_LENGTH is the same number.
+     */
+    static const size_t AUTH_FRAGMENT_LENGTH = 58;
+
     /* Opens the security exchange. */
     bool sendAuthHostHello();
+
+    /*
+     * Called once the handshake completes, with the 16-byte session key the exchange derives.
+     * Not pure virtual: a transport with no link encryption has nothing to do with it. The
+     * wireless adapter programs it into the radio; a cabled device does not.
+     */
+    virtual void authCompleted(const uint8_t *sessionKey, size_t length) {}
 
     /*
      * Asks the device for a handshake message it owes us. The exchange is host-driven: a reply is
@@ -317,11 +334,6 @@ protected:
      */
     bool requestAuthPacket(uint8_t command, uint16_t length);
 
-    /*
-     * A security message from the device, payload only. Not pure virtual - a device that never
-     * starts a handshake has no reason to implement it.
-     */
-    virtual void authReceived(const uint8_t *data, size_t length) {}
 
     bool performRumble(RumbleData rumble);
     bool setLedMode(LedModeData mode);
@@ -329,6 +341,39 @@ protected:
     bool requestIdentify();
 
 private:
+    /* Security exchange, driven entirely here - see the .cpp for the flow. */
+    void handleAuthPacket(const uint8_t *data, size_t length);
+    void handleAuthAcknowledge();
+    bool sendAuthFrame(const uint8_t *payload, size_t length);
+    bool sendAuthPacket(uint8_t command, const uint8_t *payload, size_t length);
+    bool sendAuthHostSecret();
+    bool sendAuthFinish();
+    bool extractPublicKey(const uint8_t *data, size_t length);
+
+    /*
+     * TLS-style P_hash over HMAC-SHA256, which is what the handshake derives everything with:
+     * the master secret from the pre-master secret, and each side's finish value from that.
+     */
+    std::vector<uint8_t> computePrf(const char *label,
+                                    const std::vector<uint8_t> &key,
+                                    const std::vector<uint8_t> &seed,
+                                    size_t length);
+
+    uint8_t authLastSent = 0;
+    std::vector<uint8_t> authRandomHost;
+    std::vector<uint8_t> authRandomClient;
+    std::vector<uint8_t> authPublicKey;
+    std::vector<uint8_t> authMasterSecret;
+
+    /*
+     * Every handshake message, ours and the device's, from the data header onward - the handshake
+     * header and the trailer are excluded. Both sides hash this and compare, so a single byte out
+     * of place fails the exchange. Kept as raw bytes rather than a running digest because the
+     * finish messages need a hash of a prefix of it, which is far simpler to take from a buffer
+     * than to snapshot out of a streaming hash.
+     */
+    std::vector<uint8_t> authTranscript;
+
     bool acknowledgePacket(Frame frame);
     bool acknowledgeChunk(const Frame &frame, uint32_t received, uint32_t remaining);
     bool handleChunk(const Frame &frame, uint32_t length, uint32_t offset, const Bytes &data);
