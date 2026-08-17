@@ -1,5 +1,7 @@
 package com.limelight.binding.input.driver;
 
+import com.limelight.nvstream.jni.MoonBridge;
+
 /**
  * One controller paired to an {@link XboxWirelessDongle}.
  *
@@ -20,6 +22,17 @@ public class XboxWirelessController extends AbstractController{
     public XboxWirelessController(int deviceId, UsbDriverListener listener, int vendorId, int productId, long handle) {
         super(deviceId, listener, vendorId, productId);
         this.handle = handle;
+
+        // This is an Xbox pad reached over the wireless adapter, so it declares what every other
+        // Xbox pad does. It extends AbstractController rather than AbstractXboxController - there is
+        // no USB endpoint to claim here - which is how it ended up announcing nothing at all: the
+        // host was told LI_CTYPE_UNKNOWN with no capabilities and no buttons, so it had no reason to
+        // send rumble of either kind.
+        this.type = MoonBridge.LI_CTYPE_XBOX;
+        this.capabilities = MoonBridge.LI_CCAP_ANALOG_TRIGGERS | MoonBridge.LI_CCAP_RUMBLE |
+                MoonBridge.LI_CCAP_TRIGGER_RUMBLE | MoonBridge.LI_CCAP_BATTERY_STATE;
+        this.supportedButtonFlags = AbstractXboxController.XBOX_BUTTON_FLAGS;
+
         registerNative(this.handle);
     }
 
@@ -68,6 +81,53 @@ public class XboxWirelessController extends AbstractController{
         rightStickY = stickRightY / -32767.0f;
 
         reportInput();
+    }
+
+    /**
+     * Called from the native driver when the controller's battery state changes, with the raw GIP
+     * values. The mapping lives here rather than in the driver because the constants it maps onto
+     * are Moonlight's.
+     *
+     * <p>The status byte packs four fields (MS-GIPUSB Table 30). Type says what kind of battery is
+     * fitted, <em>not</em> whether it is charging — that is a separate field, which xow's struct
+     * discards into {@code connectionInfo} and which the driver now decodes. Type 0 means no
+     * battery at all: the pad is running off the cable. xow's enum calls that value
+     * {@code BATT_TYPE_CHARGING}, which is a misnomer the spec settles.
+     *
+     * @param type   GIP battery type: 0 absent or bus powered, 1 standard, 2 rechargeable
+     * @param level  GIP battery level, 0 to 3, meaningless when {@code type} is 0
+     * @param charge GIP charge state: 0 not charging, 1 charging, 2 charge error
+     */
+    public void updateBattery(byte type, byte level, byte charge) {
+        // No battery fitted: the pad is running off the cable, and its level means nothing
+        if (type == 0) {
+            reportBattery(MoonBridge.LI_BATTERY_STATE_NOT_CHARGING,
+                    MoonBridge.LI_BATTERY_PERCENTAGE_UNKNOWN);
+            return;
+        }
+
+        byte state;
+        switch (charge) {
+            case 1:  state = MoonBridge.LI_BATTERY_STATE_CHARGING; break;
+            // Connected to power but not taking it, which is what NOT_CHARGING describes
+            case 2:  state = MoonBridge.LI_BATTERY_STATE_NOT_CHARGING; break;
+            default: state = MoonBridge.LI_BATTERY_STATE_DISCHARGING; break;
+        }
+
+        // The percentages are the spec's own, not invented midpoints: MS-GIPUSB Table 30 defines
+        // level 01 as "approximately 25% charge remaining", 10 as halfway through a 50% depletion
+        // estimate, and 11 as close to full. Level 00 is "less than 2 hours of charge remaining"
+        // with no percentage attached, so it takes a low value that reads as a warning.
+        byte percentage;
+        switch (level) {
+            case 0:  percentage = 10; break;   // critically low
+            case 1:  percentage = 25; break;   // low
+            case 2:  percentage = 50; break;   // medium
+            case 3:  percentage = 100; break;  // full
+            default: percentage = MoonBridge.LI_BATTERY_PERCENTAGE_UNKNOWN; break;
+        }
+
+        reportBattery(state, percentage);
     }
 
     native void registerNative(long handle);

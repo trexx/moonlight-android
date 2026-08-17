@@ -331,6 +331,63 @@ input, and repeated retries could exhaust all 16 slots.
 
 ---
 
+## 7. GIP driver defects found against the published spec
+
+Audited against [MS-GIPUSB] v20240916. The wire protocol was sound; these sit above it. **The
+first item gates the rumble work in §6** — until now the host was told these pads had no
+capabilities at all, so it had no reason to send rumble of either kind.
+
+### The wireless pad now announces itself
+
+`XboxWirelessController` never set `type` or `capabilities`, so the host received
+`LI_CTYPE_UNKNOWN` with a zero capability bitfield. Separately, no USB-driver controller ever
+set `supportedButtonFlags` — `AbstractXboxController` was assigning its button set to the
+live-state field instead — so every one of them also advertised zero buttons.
+
+- [ ] **Rumble arrives at a pad on the wireless adapter at all.** If it already did before this
+      change, then the capability was not gating it after all — worth knowing, and worth saying
+      so here. If it did not, this is what fixed it, and §6's rumble scaling gets its first real
+      exercise.
+- [ ] **Trigger rumble arrives** on a pad with impulse triggers. This has almost certainly never
+      worked over the adapter, since `LI_CCAP_TRIGGER_RUMBLE` was never advertised.
+- [ ] **Wired pads still rumble** — `AbstractXboxController` changed too, so this is the
+      regression check.
+- [ ] **The host shows the pad as an Xbox controller**, with Xbox glyphs rather than generic ones.
+- [ ] **No spurious button press at pairing.** The old code seeded live state with every button
+      set, so watch the first moment after a pad connects.
+
+### Battery reaches the host
+
+Battery was parsed natively and thrown away; there was also no callback on `UsbDriverListener`
+to carry it. Both are now in place and `LI_CCAP_BATTERY_STATE` is advertised.
+
+- [ ] **Battery level appears host-side** and tracks a real discharge over a session.
+- [ ] **Charging is reported while a play-and-charge kit is charging.** The charge state is bits
+      5:4 of the status byte (MS-GIPUSB Table 30), decoded now rather than discarded.
+- [ ] **A pad with no battery at all**, running off a plain USB cable, reports "not charging"
+      with an unknown percentage rather than a wrong number.
+- [ ] **The reported percentage tracks reality.** The four levels map to 10/25/50/100, which are
+      the spec's own figures rather than invented midpoints — level 01 is defined as
+      "approximately 25% charge remaining".
+- [ ] **Test on a Series X|S pad specifically.** Those are the ones expected to send the extended
+      status message that was previously dropped whole; if battery works there, that fix is
+      confirmed too.
+
+### JNI on the input path
+
+The read thread now attaches to the JVM once instead of per input report, and the callback class
+and methods are resolved once at registration.
+
+- [ ] **Sustained play on four pads at once** with no dropped, laggy or duplicated input.
+- [ ] **No `local reference table overflow` in logcat**, and no crash over a long session. This is
+      the specific failure mode if a local reference is left unreleased now that the per-call
+      detach no longer frees them. Clear `persist.log.tag` on the Homatics first, and restore `S`
+      after.
+- [ ] **Pair and unpair repeatedly**, then confirm controllers still arrive and are removed
+      cleanly — the attach/detach rework touched those paths too.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -344,3 +401,5 @@ input, and repeated retries could exhaust all 16 slots.
 | §6 rumble | Wired Xbox pad **and** a wireless pad + Xbox Wireless Adapter, to compare the two |
 | §6 duplicate pads | Xbox Wireless Adapter, ideally with four pads |
 | §6 refresh rate | Display running a fractional mode (59.94/29.97/23.976 Hz) |
+| §7 battery, extended status | Xbox Series X\|S pad, plus a play-and-charge kit or USB cable |
+| §7 JNI input path | Four pads on one adapter, for a sustained session |

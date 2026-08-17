@@ -56,6 +56,32 @@ clean copy. Differences from the baseline commit:
   `Mt76::associateClient()` allocates from a free-slot bitmask without comparing the requesting
   MAC, so a controller retransmitting its association request took a second WCID and appeared
   twice. Ported from xone `030f16c`, which fixes the same defect in `xone_dongle_add_client`.
+* **Added** `utils/jni.h`, and reworked how the port's JNI callbacks obtain a `JNIEnv`. The read
+  threads in `Dongle::readBulkPackets()` now attach once for their lifetime; the callbacks use
+  `getAttachedEnv()` instead of an `AttachCurrentThread`/`DetachCurrentThread` pair each. That pair
+  ran on every input report — up to ~125 Hz per pad, four pads per adapter — along with a
+  `GetObjectClass` and a string-keyed `GetMethodID`. `Controller` now caches its class as a global
+  reference and its method IDs in `registerJavaContext()`, which for that reason takes a `JNIEnv`.
+  **Nothing on a callback path may call `DetachCurrentThread`**, and local references must now be
+  released explicitly — the detach used to do it implicitly.
+* **Changed** `Controller::statusReceived()` to forward battery state to Java via a new
+  `updateBattery` callback, rather than only logging it. It previously returned early on
+  `BATT_TYPE_CHARGING`, which suppressed the very state most worth reporting.
+
+  The status byte packs four fields (MS-GIPUSB Table 30): battery level in bits 1:0, battery type
+  in 3:2, **charge state in 5:4** and power level in 7:6. Upstream's struct names only the low two
+  and lumps the top nibble into `connectionInfo`; `statusReceived()` now decodes the rest, so
+  charging is reported rather than assumed absent, and a pad announcing that it is powering off
+  says so in the log next to the disconnect it explains.
+
+  The enum in `gip.h` is misleading and is **deliberately left alone** so the file stays
+  byte-identical to upstream and directly refreshable. `BATT_TYPE_CHARGING` (0) does not mean
+  charging — Table 30 defines 0 as battery absent or bus powered — so xone's reading of the same
+  wire values as `NONE`/`STANDARD`/`KIT` is the correct one, and the one followed here.
+* **Fixed** the status message length test in `GipDevice::handlePacket()`. It required exactly
+  `sizeof(StatusData)`, but MS-GIPUSB Table 26 allows payloads of `0x04` *or* `0x23`–`0x37`, and
+  §3.1.5.5.2.2 requires the extended form on all new devices — whose status messages were therefore
+  dropped whole. Now `>=`, matching the `CMD_INPUT` branch that already handled larger packets.
 
 Files that are byte-identical to upstream (for example `controller/gip.h` and
 `utils/bytes.h`) can be refreshed directly; the rest need a manual three-way merge.

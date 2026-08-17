@@ -38,7 +38,13 @@ public:
     Controller(SendPacket sendPacket);
     ~Controller();
 
-    void registerJavaContext(JavaVM *vm, jobject thiz);
+    /*
+     * Takes a global reference to thiz and resolves the callback methods once. Called from the
+     * Java thread constructing XboxWirelessController, so env is that thread's - jmethodIDs are
+     * not references and stay valid on any thread, provided the class is kept alive, which the
+     * global reference below does.
+     */
+    void registerJavaContext(JavaVM *vm, JNIEnv *env, jobject thiz);
     void inputRumble(short lowFreqMotor, short highFreqMotor);
     void inputRumbleTrigger(short leftTrigger, short rightTrigger);
 
@@ -65,7 +71,14 @@ private:
     std::condition_variable rumbleCondition;
     Buffer<RumbleData> rumbleBuffer;
 
+    void notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge);
+
+    // Last reported status fields, so only changes are forwarded. 0xff is "nothing seen yet",
+    // which no GIP value collides with - each of these is two bits wide.
+    uint8_t batteryType = 0xff;
     uint8_t batteryLevel = 0xff;
+    uint8_t batteryCharge = 0xff;
+    uint8_t powerLevel = 0xff;
     uint16_t rumbleLeft, rumbleRight, rumbleTriggerLeft, rumbleTriggerRight;
 
     uint32_t buttonStatus = 0;
@@ -78,6 +91,12 @@ private:
 
     JavaVM *jvm;
     jobject jthis;
+    // Global reference, so the class stays loaded and the method IDs below stay valid. Resolved
+    // once in registerJavaContext() rather than per callback, which is what GetObjectClass() and
+    // GetMethodID() used to cost on every input report.
+    jclass jclazz = nullptr;
+    jmethodID updateInputMethod = nullptr;
+    jmethodID updateBatteryMethod = nullptr;
 };
 
 constexpr uint16_t A_FLAG = 0x1000;

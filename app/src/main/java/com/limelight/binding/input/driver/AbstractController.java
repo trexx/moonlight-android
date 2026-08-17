@@ -103,6 +103,15 @@ public abstract class AbstractController {
     }
 
     /**
+     * Reports battery state. Only for subclasses that set {@code LI_CCAP_BATTERY_STATE}; the host
+     * displays whatever arrives, so a subclass that cannot determine a real percentage should send
+     * {@link MoonBridge#LI_BATTERY_PERCENTAGE_UNKNOWN} rather than a plausible-looking guess.
+     */
+    protected void reportBattery(byte batteryState, byte batteryPercentage) {
+        listener.reportControllerBattery(deviceId, batteryState, batteryPercentage);
+    }
+
+    /**
      * Claims the USB interfaces and starts the reader thread.
      *
      * @return true if the device was claimed. On false the caller closes the connection, and
