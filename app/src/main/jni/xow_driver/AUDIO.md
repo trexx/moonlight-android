@@ -179,13 +179,31 @@ announces itself 500-1000 ms after the primary device initialises (2.2.11). So t
 in `handlePacket()` was never the obstacle - there has to *be* a sub-device before there is anything
 to route.
 
-**This pad states it has no audio, four independent ways.** Device 0's metadata carries an empty
-`SupportedAudioFormats` - and 2.2.2.4.3 is explicit that a device without audio omits the section
-entirely - no command `8` (Audio Control) or `96` (Audio Data) in either direction, and none of the
-interface GUIDs is `IHeadset` `{BC25D1A3-C24E-4992-9DDA-EF4F123EF5DC}` or `ICustomAudio`, which
-2.2.2.4.6 says every audio device MUST list. Its three GUIDs decode as `IController`, `IGamepad`
-and `INavigationController`: precisely the specification's own worked example of a plain gamepad.
-That the example matches byte for byte is also a useful check that the metadata parser is right.
+**Device 0 declares no audio, and that is expected rather than damning.** Its metadata carries an
+empty `SupportedAudioFormats`, no command `8` (Audio Control) or `96` (Audio Data) in either
+direction, and none of its interface GUIDs is `IHeadset` `{BC25D1A3-C24E-4992-9DDA-EF4F123EF5DC}`
+or `ICustomAudio`. Its three GUIDs decode as `IController`, `IGamepad` and `INavigationController`:
+precisely the specification's own worked example of a plain gamepad, which is a useful check that
+the metadata parser is right.
+
+**None of that says the pad lacks audio.** Audio is sub-device 1 with its own metadata, so a
+primary device looks like this whether or not a headset jack exists behind it. An earlier revision
+of this file read those signals as proof the pad had no audio at all; that was a conflation of the
+primary device with the pad, and it is wrong.
+
+**Windows settles it: the pad does have audio, over this adapter.** The same pad on the same
+`045e:02fe` adapter makes an audio device appear on Windows:
+
+```
+USB\VID_045E&PID_02E4&IGA_00\00&0300001C94C28DED7E&09&16
+USB\Class_01&Subclass_01&Prot_00
+```
+
+Class 01 / subclass 01 is USB Audio Class, AudioControl. The product ID is `02E4`, not the `02DD`
+the pad announces over GIP - a separate ID for a separate device, as Table 1 describes - and the
+instance string has the shape of a derived secondary DeviceID. So the sub-device is real, it is
+reachable through the wireless adapter, and the reason it never appears here is something this
+driver does or fails to do.
 
 **The security exchange is not a gate.** Section 5: *"The host succeeds the security exchange by
 default"*, and a controller may list an opt-out GUID (`7a34ce77-7de2-45c6-8ca4-0042c08bd94a`) to
@@ -224,11 +242,16 @@ that announces no audio client only repeats the result above.
    three conditions in the table above, nor after the handshake ordering was corrected. The
    reporting lives in the driver behind `_DEBUG`, so this is re-checkable on another pad without a
    further build, and a pad that *does* expose a headset would show up in the same lines.
-0. **Open: confirm on Windows what actually works, and over which transport.** The claim that this
-   pad plays headset audio is what keeps the question alive, and the transport is the crux — audio
-   over a USB cable or over Bluetooth says nothing about the wireless adapter, which is the only
-   path this driver uses. If it turns out the adapter does not carry audio for this pad either,
-   everything below is moot and the finding above is the answer.
+0. ~~Confirm on Windows what works and over which transport.~~ **Done: it works over this very
+   adapter**, appearing as a USB Audio Class device with its own product ID. So the sub-device is
+   real and the link carries it. The question is no longer whether it is possible but what the
+   Windows host sends that this driver does not.
+
+   **The next step that would actually answer that is a USB capture on Windows** - USBPcap or
+   equivalent on the adapter, while a pad with a headset connects. That yields the exact GIP
+   exchange that brings the audio device up, to diff against what this driver sends. Every
+   alternative is guesswork at one build cycle per guess, and three such guesses have now been
+   wrong.
 2. ~~Try the missing setup messages.~~ **Done — no effect.** `gip_set_audio_volume` was implemented
    (`CMD_AUDIO_CONFIG` subcommand `0x03`, `mute=0x04` unmuted, out/chat/in = 100/50/100, xone's own
    values) and sent between the format request and the first samples. It transmitted without error
