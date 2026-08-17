@@ -103,7 +103,7 @@
             android:defaultValue="false" />
         <CheckBoxPreference
             android:key="checkbox_wired_pad_audio"
-            android:dependency="checkbox_usb_driver"
+            android:dependency="checkbox_usb_bind_all"
             android:title="@string/title_checkbox_wired_pad_audio"
             android:summary="@string/summary_checkbox_wired_pad_audio"
             android:defaultValue="false" />
