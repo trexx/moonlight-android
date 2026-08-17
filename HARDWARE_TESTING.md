@@ -421,6 +421,15 @@ something other than the Xbox button.
 - [ ] **Record the `audio formats` line verbatim** for each pad tested, in the table below. Two
       bytes per entry. This is the specific thing the controller-audio question needs: if a pad
       reports a 48 kHz format, Moonlight's decoded audio would need no resampling to reach it.
+- [x] **A cabled pad's USB descriptors are logged**, so whether a given pad has the audio interface
+      of MS-GIPUSB 2.2.12 can be answered by plugging it in rather than inferred. Debug builds only,
+      logged for every enumerated device including ones the driver declines to claim, from both the
+      attach broadcast and the startup enumeration. Note `UsbDriverService` only runs while a stream
+      is bound, so plug the pad in and then start a stream, or plug it in while already streaming.
+      *Xbox One pad (PID `02dd`, model 1697) cabled to the Homatics Box R 4K Plus: five interfaces,
+      with `interface 1 alt 1` carrying isochronous endpoints `0x02`/`0x82` at 228 bytes and 1 ms -
+      the audio interface, exactly as specified. Its three interfaces are the three sub-devices of
+      Table 1: primary, 3.5 mm audio, other.*
 - [ ] **Sanity-check the element parse before trusting anything in that table.** The same Shield
       run reported `Metadata commands: 2 item(s): 17 00`, and a `firmware versions` dump whose
       bytes visibly ran on into the elements printed after it — so the offsets or item widths in

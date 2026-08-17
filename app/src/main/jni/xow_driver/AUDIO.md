@@ -233,6 +233,63 @@ work even against a pad that had an audio device:
 Anyone implementing this against hardware that does advertise audio should start from that table
 rather than from what shipped.
 
+## The pad's own USB descriptors, which settle feasibility
+
+Cabling the pad to a Homatics Box R 4K Plus and enumerating it from Android - which can read
+descriptors even though it cannot perform isochronous transfers - gives `045e:02dd` as five
+interfaces:
+
+```
+interface 0 alt 0  class ff sub 47 proto d0 | ep 01 intr 64 @4ms | ep 81 intr 64 @4ms
+interface 1 alt 0  class ff sub 47 proto d0                              (no endpoints)
+interface 1 alt 1  class ff sub 47 proto d0 | ep 02 ISOC 228 @1ms | ep 82 ISOC 228 @1ms
+interface 2 alt 0  class ff sub 47 proto d0
+interface 2 alt 1  class ff sub 47 proto d0 | ep 03 bulk 64      | ep 83 bulk 64
+```
+
+**Interface 1 alternate 1 is the audio interface of 2.2.12**: vendor class `0xff`, GIP subclass
+`0x47`, protocol `0xd0`, isochronous out on `0x02` and in on `0x82` at 1 ms. The specification
+gives 228 bytes out and 64 in; this pad offers 228 both ways. Alternate 0 carries no endpoints and
+is the idle setting to switch away from.
+
+The three interfaces are the three sub-devices of Table 1 - primary, 3.5 mm audio, other - so the
+sub-device model is not an abstraction here, it is visible in the hardware. **This pad has audio,
+and it is laid out as documented.** Any remaining doubt about whether controller audio is possible
+at all is settled; what is unresolved is only how to reach it.
+
+Two things the same scan corrected:
+
+- **Interface 0's endpoints are interrupt, not bulk** (type 3, 64 bytes, 4 ms). `AbstractXboxController`
+  drives them with `bulkTransfer()`, which Android permits on an interrupt endpoint, but comments
+  in that file describing them as bulk endpoints are wrong.
+- The adapter on this box, `045e:02e6`, is one interface with eight 512-byte bulk endpoints, and
+  differs from the `045e:02fe` adapter on the Shield. The driver treats them identically.
+
+## Audio over a cable, as a separate route
+
+Cabled audio is a different problem from the wireless one, and unlike it, entirely specified.
+
+**Android cannot drive it.** `UsbDeviceConnection` offers control, bulk and interrupt only;
+isochronous is not exposed by the framework at all. `XboxOneController` is therefore the wrong API
+for this, not merely missing a feature.
+
+**libusb can, and the pattern already exists here.** `XboxWirelessDongle` hands
+`connection.getFileDescriptor()` to native code, which wraps it with `libusb_wrap_sys_device()`
+(`dongle/usb.cpp`). libusb does isochronous, and it is already vendored and built.
+
+The work, roughly in order:
+
+1. A native USB transport - a single-device sibling of `Dongle` - wrapping the fd and pumping
+   interface 0's interrupt endpoints.
+2. Moving cabled pads onto `GipDevice`. `XboxOneController` is a minimal GIP implementation: canned
+   init packets and two message types (`0x20` input, `0x07` guide). It has no metadata, status,
+   chunk reassembly or device-state machine. `GipDevice` is already transport agnostic - it takes a
+   `SendPacket` callback - so this inherits all of that, audio included.
+3. `libusb_set_interface_alt_setting()` on interface 1, then a pool of isochronous transfers at
+   228 bytes per millisecond. Note this is a different cadence from the wireless path's 1536 bytes
+   per 8 ms, so the ring and sender thread would need to pace differently.
+4. The 2.2.11 sequence, unimplemented on either route.
+
 ## Next step
 
 The order below is deliberately diagnosis-first. Building more of the protocol against a device
