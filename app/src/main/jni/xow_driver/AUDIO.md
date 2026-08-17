@@ -290,6 +290,67 @@ The work, roughly in order:
    per 8 ms, so the ring and sender thread would need to pace differently.
 4. The 2.2.11 sequence, unimplemented on either route.
 
+## A USB capture of the Windows host, which answers it
+
+A USBPcap capture of the *same* pad (`7e:ed:8d:c2:94:1b`) through the *same* adapter
+(`62:45:b5:05:12:c1`) on Windows, with the headset plugged in partway through. GIP unwrapped from
+the MT76 and 802.11 framing, host-to-device marked `-->`:
+
+```
+31.207 <-- ANNOUNCE   dev=0   7e ed 8d c2 94 1b 00 00 5e 04 dd 02
+31.224 --> METADATA   dev=0   (request)
+31.247 --> ACK        dev=0   (chunked metadata)
+31.317 --> SET_STATE  dev=0   00                       START
+31.327 --> LED        dev=0   00 01 14
+31.379 --> SECURITY   dev=0   00 41 00 01 00 2c 01 01 00 28 d3 dd ...
+31.424 <-- SECURITY   dev=0   00 c1 00 01 00 00
+31.456 --> SECURITY   dev=0   00 42 00 02 00 54 ...
+31.504 <-- SECURITY   dev=0   00 c2 00 02 ...
+31.582 --> SECURITY   dev=0   00 42 00 03 04 04 ...
+31.689 <-- SECURITY   dev=0   30 82 03 2b 30 82 ...    an X.509 certificate
+31.907 --> SECURITY   dev=0   00 41 00 05 01 04 ...    260 bytes
+              ...
+36.351 <-- ANNOUNCE   dev=3   7e ed 8d c2 94 1c 00 00 5e 04 e4 02
+36.379 --> METADATA   dev=3
+36.472 --> SET_STATE  dev=3   01                       STOP
+37.481 --> AUDIO_CTRL dev=3   02 09 10                 format: in 0x09, out 0x10
+37.507 <-- AUDIO_CTRL dev=3   02 09 10                 device echoes it
+38.507 --> SET_STATE  dev=3   00                       START
+38.533 <-- AUDIO_CTRL dev=3   03 84 b2 b2 e4 80 00 00  volume, device to host
+38.539 <-- AUDIO_DATA dev=3   ...                      capture flowing
+38.564 --> (1608-byte render packets begin)
+```
+
+**The security exchange happens, and this file previously said it does not.** Section 5's
+*"The host succeeds the security exchange by default"* was read here as "the host skips it". It
+means the host does not fail a device over the result. Ninety security messages say otherwise, and
+a planned port of xone's `auth/` module was cancelled on that misreading.
+
+Decoded against xone's structures the exchange matches message for message: `context=00`,
+`options=41` (ACME | from host), `error=00`, `command=01` HOST_HELLO, big-endian length `0x2c`,
+then a data header of `command=01, version=01, length 0x28`. Then `0x02` CLIENT_HELLO requested,
+`0x03` CLIENT_CERTIFICATE with length `0x0404`, the certificate itself, and `0x05` HOST_SECRET at
+260 bytes - a 256-byte RSA-encrypted pre-master secret. **This is xone's v1 RSA path exactly.**
+
+**The audio sub-device is device id 3**, announcing VID `045e` PID `02e4` with MAC
+`7e:ed:8d:c2:94:1c` - the pad's address plus one, the derived secondary ID of 1.3 - and matching
+the `PID_02E4` Windows Device Manager shows. It appears about five seconds after the handshake,
+when the headset is plugged in.
+
+**Two things this validates in the current driver.** Windows does metadata request, metadata,
+Set Device State: START, LED - which is the order this driver was corrected to, so we now match the
+real host. Its LED brightness is `0x14`, the same value xow uses.
+
+**Two things it corrects in what shipped.** The format pair is `in=0x09, out=0x10`, not the
+`0x10/0x10` hardcoded here; the host takes the device's first advertised pair. And Audio Control:
+Volume travels device to host - it was sent the wrong way in an earlier experiment.
+
+Causation is still not proven: the capture shows Windows authenticating and the sub-device
+appearing, not that the first causes the second. But this driver does everything else Windows does
+- metadata, START, LED - and never sees a sub-device, while Windows additionally authenticates and
+does. The pad lists command `6` in both capability arrays. That is as strong as circumstantial
+evidence gets, and it makes the security handshake the lead worth spending on.
+
 ## Next step
 
 The order below is deliberately diagnosis-first. Building more of the protocol against a device
@@ -317,17 +378,24 @@ that announces no audio client only repeats the result above.
    volume only to an accessory client and never to device 0, which makes sending it to the pad
    itself speculative and it is now also known to be useless. `gip_init_extra_data`'s undocumented
    `0x4d`/`07 00` remains untried, but has no more reason behind it than "xone sends it".
-3. **The security handshake is now the only lead left**, and it is a large piece of work: xone's
-   `auth/` module is crypto plus certificate handling, and porting it is its own project rather
-   than a step in this one. Note the dongle transport *does* implement `set_encryption_key`,
-   programming a per-client key into the MT76 (`xone_mt76_set_client_key(&dongle->mt,
-   client->wcid, key, len)`) from a session key that module derives. xow does none of it and runs
-   the link unencrypted, which is evidently enough for input and rumble.
+3. **Port the security handshake.** The capture above shows Windows performing it in full and the
+   audio sub-device appearing afterwards, so this is no longer the speculative last resort it was
+   when it was cancelled - and it was cancelled on a misreading of section 5.
 
-   The hypothesis is that a pad withholds its audio client until the session is authenticated.
-   Nothing here proves that — it is what remains after the cheap explanations were measured and
-   ruled out. Scope the auth port and decide whether the payoff justifies it before starting,
-   rather than working from this file's earlier optimism.
+   It is still a large piece of work: xone's `auth/` module is roughly 900 lines of crypto and
+   certificate handling. What has changed is that it no longer has to be built blind. The capture
+   is ground truth for every message, so each stage can be diffed against a known-good exchange
+   rather than guessed at, and a wrong turn shows up immediately instead of after a build cycle.
+
+   Two practical notes. The capture uses the v1 RSA path, so ECDH is not needed to reproduce it.
+   And the certificate never needs validating - xone scavenges the public key out of the DER by
+   pattern, because Microsoft's certificates do not parse as RFC 5280 - so no root of trust is
+   involved.
+
+   The dongle transport also implements `set_encryption_key` in xone, programming a per-client key
+   into the MT76 (`xone_mt76_set_client_key(&dongle->mt, client->wcid, key, len)`) from the session
+   key the handshake derives. xow does none of it and runs the link unencrypted, which is evidently
+   enough for input and rumble but may well be why nothing else appears.
 4. Only then port the rest of the protocol half described above, behind a setting that is **off by
    default**, degrading to the existing path rather than replacing it.
 5. Measure. The claim worth testing is the one this is for: that it beats a Bluetooth headset by
