@@ -82,15 +82,21 @@
 #define AUDIO_FLOW_RATE_TOLERANCE (8 * 2 * 2)
 
 /*
- * Half again the cadence, derived rather than fixed: at the wireless adapter's 1536-byte packet
- * that is the 12 ms this was originally written as, and a transport with a shorter packet gets a
- * proportionally shorter one. Past this the sender has missed its slot and the audio has a hole in
- * it, where anything shorter is the jitter of two threads meeting.
+ * One cadence plus a whole audio frame. Past this the host has failed to supply, which is what a
+ * gap sounds like; short of it the sender is simply waiting, which is how it paces itself.
  *
- * Floored at 2 ms so a very short packet does not make the counter fire on ordinary scheduling.
+ * The allowance is a frame rather than a fraction of the cadence because that is what actually
+ * bounds the wait. The host delivers whole Opus frames - 5 ms, or 10 ms for a slow decoder or a
+ * low bitrate - and their size does not divide our packet size, so the sender routinely waits for
+ * the next frame to complete one packet. Scaling the threshold off the cadence instead left the
+ * margin dependent on the transport: 2 ms on the adapter's 8 ms packet, which read a useful 1.4%,
+ * but 1 ms on a cabled pad's 4 ms packet, which read 31% through audio that was perfect.
+ *
+ * That is the second time this counter has been recalibrated for alarming on healthy behaviour,
+ * and the lesson is the same both times: it is a fault detector, not a jitter meter.
  */
 #define AUDIO_STARVE_TIMEOUT std::chrono::microseconds( \
-    std::max<int64_t>(2000, (audioPacketBytes * 1500000LL) / AUDIO_BYTES_PER_SECOND))
+    (audioPacketBytes * 1000000LL) / AUDIO_BYTES_PER_SECOND + 10000)
 
 // Scales a 16-bit magnitude, which is what moonlight-common-c and the Android input APIs both
 // deal in, onto the protocol's 0 - 100 range.
@@ -872,6 +878,11 @@ bool Controller::setAudioEnabled(bool enable)
      * Expect packets at 125 a second - one per 8 ms - so the count against the time audio was on
      * says whether the stream kept up. Dropped bytes mean the host outran the link and audio would
      * have drifted; starved counts mean the reverse, a ring emptied and a gap heard.
+     */
+    /*
+     * Flow rate reads zero on a transport that carries audio itself: it arrives on Audio Capture
+     * messages, which a cabled pad sends on the isochronous IN endpoint that nothing here reads.
+     * Logged anyway rather than hidden, so a zero is visibly "not reported" rather than absent.
      */
     Log::info("Audio session: %u packets sent, %u bytes dropped, %u late, %u send failures, "
               "%u underruns, last flow rate %u",

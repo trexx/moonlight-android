@@ -622,8 +622,24 @@ open** — the feature works but has not been shown to be worth using.
       USB bus - the read fails with `LIBUSB_ERROR_NO_DEVICE`, Android re-attaches it, and the
       permission prompt loops. Seven rounds were inflicted on a real device before this was
       understood. xone's `usb_reset_device()` is the same trap by a different route.
-- [ ] **Audio actually reaches a cabled pad's headphones.** Not implemented: the samples go out
-      isochronously on interface 1 alt 1, which nothing here writes yet.
+- [x] **Audio reaches a cabled pad's headphones**, over isochronous transfers on interface 1 alt 1.
+      *Xbox One pad cabled to the Shield TV: 21900 packets over 87 s - 251.7/s against an expected
+      250.0 - with 0 dropped, 0 send failures and **0 underruns**. Volume works too, through the
+      same code as the adapter: the pad reports `speaker 80% (writable) ... flags 0x84`, which is
+      writable plus headset-detected.*
+
+      **16 ms of queued audio is enough** - four isochronous transfers of four packets, against
+      xone's 96 ms. Zero underruns across the session says the tight depth is real rather than
+      hopeful. Isochronous reports a status per packet, so raise it only against a measured count,
+      never on suspicion.
+
+      Flow rate reads 0 on a cable and that is expected: it arrives on Audio Capture messages,
+      which come in on the isochronous IN endpoint that nothing here reads.
+- [ ] **A cabled pad survives an app restart without being replugged.** Two faults made this fail
+      and both are fixed but unconfirmed: the metadata-timeout thread was never attached to the
+      JVM, so the handshake died with `no random source` whenever a pad did not answer promptly;
+      and teardown sent Set Device State: OFF to a pad that Android takes straight back, leaving it
+      unresponsive to the next connect. Restart the app twice over with the cable untouched.
 - [ ] **A pad on a USB cable without the driver enabled is not offered pad audio at all**, rather
       than being offered it and going silent. Wired audio needs isochronous transfers (interface 1 alt 1, 228 B at 1 ms) and
       Android's `UsbDeviceConnection` has no isochronous API, so the cabled path is unimplemented
