@@ -200,6 +200,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // frame, and mutated from the game menu. Empty until the user asks for it, so the audio path
     // is unchanged for anyone who never opens that menu.
     private final PadAudioSink padAudioSink = new PadAudioSink();
+
+    // Whether any pad took audio during this stream, for labelling the end-of-stream summary. Set
+    // rather than cleared, because the question is what the stream contained, not how it ended.
+    private volatile boolean padAudioUsedThisStream;
     private ServiceConnection usbDriverServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
@@ -941,10 +945,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
             displayedFailureDialog = true;
 
-            // Before stopConnection(), which tears the renderer down. Labelled with whether a pad
-            // was taking audio, so two runs can be compared directly.
-            decoderRenderer.logStreamSummary(padAudioSink.hasTargets() ? "pad audio on"
-                                                                       : "pad audio off");
+            /*
+             * Before stopConnection(), which tears the renderer down.
+             *
+             * Labelled from whether a pad took audio at any point, not from whether one is taking
+             * it now: disconnecting removes the pad from the sink before this runs, so asking the
+             * sink labelled every run "off" - including a run with ninety seconds of pad audio in
+             * it.
+             */
+            decoderRenderer.logStreamSummary(padAudioUsedThisStream ? "pad audio on"
+                                                                    : "pad audio off");
 
             stopConnection();
 
@@ -2364,6 +2374,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             final int message;
 
             if (succeeded) {
+                if (enabling) {
+                    padAudioUsedThisStream = true;
+                }
+
                 message = enabling ? R.string.toast_pad_audio_enabled
                                    : R.string.toast_pad_audio_disabled;
             }
