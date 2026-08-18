@@ -403,14 +403,15 @@ public class UsbDriverService extends Service implements UsbDriverListener {
              * opt-in until it has been run against real pads.
              */
             /*
-             * Before anything is claimed: if the last run left this pad streaming audio it has to be
-             * re-enumerated first, and the connection just opened dies with it. Android sends a
-             * fresh attach when it comes back, and that one claims it normally.
+             * Re-enumeration is deliberately not attempted here. Resetting the pad to clear the
+             * state a killed run leaves behind was tried and withdrawn: on this hardware it left
+             * the pad unclaimed and input dead, with the USB stack visibly cycling once a second.
+             * Recovering audio is not worth risking input, which is the product.
+             *
+             * XboxWiredGipController.resetIfPreviousSessionUnclean() is kept, unused, because it
+             * is the mechanism xone uses and the finding is worth more than the code - see
+             * HARDWARE_TESTING.md.
              */
-            if (prefConfig.wiredPadAudio && XboxWiredGipController.canClaimDevice(device)
-                    && XboxWiredGipController.resetIfPreviousSessionUnclean(this, connection)) {
-                return;
-            }
 
             if (prefConfig.wiredPadAudio && XboxWiredGipController.canClaimDevice(device)) {
                 controller = XboxWiredGipController.create(this, device, connection,

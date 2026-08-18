@@ -2358,13 +2358,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             final int message;
 
             if (succeeded) {
-                // Remembered across a process that may not get to shut down. A cabled pad left
-                // streaming by a killed run has to be re-enumerated before it will play properly
-                // again, and this is how the next run knows to.
-                if (controller instanceof XboxWiredGipController) {
-                    XboxWiredGipController.setAudioActive(Game.this, enabling);
-                }
-
                 message = enabling ? R.string.toast_pad_audio_enabled
                                    : R.string.toast_pad_audio_disabled;
             }
