@@ -150,6 +150,16 @@ private:
     std::condition_variable audioCondition;
 
     std::atomic<bool> audioRunning{false};
+
+    /*
+     * Transfers submitted but not yet completed or cancelled.
+     *
+     * A cancel is a request, not an event: the transfer is only finished when its callback has
+     * fired. Freeing one before that leaves libusb holding a pointer to memory we have given back,
+     * which does not fail loudly - it makes the next session behave strangely, which is exactly
+     * how this presented. Teardown waits for this to reach zero before freeing anything.
+     */
+    std::atomic<int> audioOutstanding{0};
     std::atomic<uint32_t> audioUnderruns{0};
 
     /*

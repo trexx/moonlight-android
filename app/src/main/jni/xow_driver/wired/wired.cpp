@@ -154,6 +154,8 @@ void LIBUSB_CALL WiredController::audioCallback(libusb_transfer *transfer)
 
 void WiredController::audioTransferComplete(libusb_transfer *transfer)
 {
+    audioOutstanding.fetch_sub(1, std::memory_order_relaxed);
+
     /*
      * Isochronous reports a status per packet, not just per transfer, and that is the only place a
      * dropped millisecond is visible - the transfer as a whole still reports COMPLETED. Counting
@@ -193,6 +195,7 @@ bool WiredController::enableAudio()
 
     audioUnderruns.store(0, std::memory_order_relaxed);
     audioIdle.store(0, std::memory_order_relaxed);
+    audioOutstanding.store(0, std::memory_order_relaxed);
     audioPrimed.store(false, std::memory_order_relaxed);
     audioTransfers.clear();
     audioBuffers.clear();
@@ -337,12 +340,26 @@ void WiredController::handleAudioEvents()
         libusb_handle_events_timeout(device->context(), &timeout);
     }
 
-    // Drain the cancellations issued during teardown, so no callback fires after the pool is freed
-    for (int i = 0; i < 50; i++)
+    /*
+     * Keeps pumping until every submitted transfer has come back. Teardown cancels them, but a
+     * cancel only asks - the transfer is finished when its callback fires, and until then libusb
+     * still owns the buffer. Leaving before that means they are freed underneath it.
+     *
+     * Bounded so a transfer that never completes cannot hold teardown open; a second is far longer
+     * than a cancellation takes and still shorter than a user notices.
+     */
+    for (int i = 0; i < 500 && audioOutstanding.load(std::memory_order_relaxed) > 0; i++)
     {
         timeval timeout = { 0, 2000 };
 
         libusb_handle_events_timeout(device->context(), &timeout);
+    }
+
+    int stranded = audioOutstanding.load(std::memory_order_relaxed);
+
+    if (stranded > 0)
+    {
+        Log::error("Wired: %d audio transfers never completed", stranded);
     }
 }
 
@@ -442,10 +459,14 @@ bool WiredController::submitAudioTransfer(libusb_transfer *transfer)
     // Every packet in a transfer carries the same size, since the rate is read once per transfer
     libusb_set_iso_packet_lengths(transfer, static_cast<unsigned int>(packetBytes));
 
+    audioOutstanding.fetch_add(1, std::memory_order_relaxed);
+
     int error = libusb_submit_transfer(transfer);
 
     if (error)
     {
+        audioOutstanding.fetch_sub(1, std::memory_order_relaxed);
+
         Log::error("Wired: audio submit failed: %s", libusb_error_name(error));
 
         return false;
@@ -461,6 +482,8 @@ void LIBUSB_CALL WiredController::captureCallback(libusb_transfer *transfer)
 
 void WiredController::captureTransferComplete(libusb_transfer *transfer)
 {
+    audioOutstanding.fetch_sub(1, std::memory_order_relaxed);
+
     if (transfer->status == LIBUSB_TRANSFER_CANCELLED || !audioRunning.load())
     {
         return;
@@ -522,10 +545,14 @@ bool WiredController::submitCaptureTransfer(libusb_transfer *transfer)
 
     libusb_set_iso_packet_lengths(transfer, packetSize);
 
+    audioOutstanding.fetch_add(1, std::memory_order_relaxed);
+
     int error = libusb_submit_transfer(transfer);
 
     if (error)
     {
+        audioOutstanding.fetch_sub(1, std::memory_order_relaxed);
+
         Log::error("Wired: capture submit failed: %s", libusb_error_name(error));
 
         return false;
