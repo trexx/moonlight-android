@@ -123,6 +123,24 @@ public:
     void setAudioTransport(GipAudioTransport *transport);
 
     /*
+     * The device's requested render size, reported by a transport that reads its capture endpoint
+     * itself rather than through handlePacket().
+     *
+     * handlePacket() is not reentrant - it owns chunk reassembly state and sequence counters - and
+     * a transport with its own receive path runs on its own thread, so it must not go through it.
+     */
+    void audioFlowRateReported(uint16_t flowRate);
+
+    /*
+     * Lets a transport supply the JavaVM before any Java object exists.
+     *
+     * registerJavaContext() is called from the GipController constructor, which cannot run until
+     * the transport has produced a native handle - but initialisation starts before that, and the
+     * metadata timeout path needs a JVM to reach the handshake's crypto.
+     */
+    void setJavaVM(JavaVM *vm);
+
+    /*
      * Whether to power the device down when this object goes away. True for a pad on the adapter,
      * which nothing else drives; false for a cabled one, which Android takes straight back.
      */
@@ -318,7 +336,7 @@ private:
     // Bytes awaiting transmission, drained one 8 ms packet at a time. Guarded by audioMutex.
     std::vector<uint8_t> audioBuffer;
     // Last flow rate the pad reported, tracked only to notice it drifting from the packet size
-    uint16_t audioFlowRate = 0;
+    std::atomic<uint16_t> audioFlowRate{0};
 
     /*
      * One 8 ms GIP message of 48 kHz 16-bit stereo, which is what the wireless adapter carries and

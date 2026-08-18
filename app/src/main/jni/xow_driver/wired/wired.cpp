@@ -14,6 +14,9 @@
 #include <functional>
 #include <utility>
 #include <algorithm>
+
+// GIP audio data messages, which is what the capture endpoint carries
+#define GIP_AUDIO_SAMPLES 0x60
 #include <vector>
 
 WiredController::WiredController(int fd, JavaVM *jvm) : jvm(jvm)
@@ -51,6 +54,14 @@ bool WiredController::start()
      * itself by waiting for one packet's worth of samples - this makes it wait 4 ms rather than 8.
      */
     gipController->setAudioTransport(this);
+
+    /*
+     * Before begin(), because initialisation can reach the handshake's crypto - which is Java - on
+     * the metadata timeout path, and the GipController that would normally supply this cannot be
+     * constructed until start() has returned a handle. Without it that path failed with "no random
+     * source" and the device never authenticated, so no audio sub-device appeared.
+     */
+    gipController->setJavaVM(jvm);
 
     // Android takes this pad back the moment we release it, so switching it off on the way out
     // would leave it dead for whoever picks it up next - us included, on the following connect.
@@ -503,22 +514,49 @@ void WiredController::captureTransferComplete(libusb_transfer *transfer)
     }
 
     /*
-     * Each isochronous packet holds one GIP message, so they go through the ordinary parser rather
-     * than being decoded here - that is what reaches audioSamplesReceived() and updates the flow
-     * rate. The samples themselves are discarded there; this client has no microphone.
+     * Decoded here rather than through handlePacket(), which must not be called from this thread.
+     *
+     * That parser owns the chunk reassembly buffer and the sequence counters and is only ever
+     * entered from the interrupt read thread; calling it from the libusb event thread as well put
+     * two threads inside it at once and corrupted its state, which crashed the process in a
+     * completely unrelated function.
+     *
+     * Only the flow rate is wanted anyway - this client has no microphone and discards every
+     * captured sample - and that is four bytes into a message whose header is fixed width for the
+     * lengths a capture packet uses.
      */
     for (int i = 0; i < transfer->num_iso_packets; i++)
     {
         const libusb_iso_packet_descriptor &packet = transfer->iso_packet_desc[i];
 
-        if (packet.status != LIBUSB_TRANSFER_COMPLETED || packet.actual_length == 0)
+        if (packet.status != LIBUSB_TRANSFER_COMPLETED || packet.actual_length < 6)
         {
             continue;
         }
 
         const uint8_t *data = libusb_get_iso_packet_buffer_simple(transfer, i);
 
-        gipController->handlePacket(Bytes(data, data + packet.actual_length));
+        // Command, then flags carrying the device id in their low nibble
+        if (data[0] != GIP_AUDIO_SAMPLES || (data[1] & 0x0f) == 0)
+        {
+            continue;
+        }
+
+        /*
+         * Header is command, flags and sequence, then a length varint - one byte below 128, two
+         * above. A capture message is short, so its length fits in one, but the second is checked
+         * rather than assumed.
+         */
+        size_t header = (data[3] & 0x80) ? 5 : 4;
+
+        if (packet.actual_length < header + sizeof(uint16_t))
+        {
+            continue;
+        }
+
+        uint16_t flowRate = static_cast<uint16_t>(data[header] | (data[header + 1] << 8));
+
+        gipController->audioFlowRateReported(flowRate);
     }
 
     submitCaptureTransfer(transfer);

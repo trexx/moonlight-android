@@ -777,12 +777,12 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
     // because its audio is one 8 ms message rather than eight 1 ms ones, so there it is still only
     // a health signal. Small movement is expected and says nothing; only a request well outside
     // the band the spec describes is worth reporting.
-    if (samples->flowRate == audioFlowRate)
+    if (samples->flowRate == audioFlowRate.load(std::memory_order_relaxed))
     {
         return;
     }
 
-    audioFlowRate = samples->flowRate;
+    audioFlowRate.store(samples->flowRate, std::memory_order_relaxed);
 
     /*
      * Compared against what a message actually carries on this transport, which is not the same
@@ -793,12 +793,13 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
     size_t expected = audioTransport != nullptr ? AUDIO_BYTES_PER_SECOND / 1000
                                                 : audioPacketBytes;
 
-    int delta = static_cast<int>(audioFlowRate) - static_cast<int>(expected);
+    int delta = static_cast<int>(audioFlowRate.load(std::memory_order_relaxed))
+              - static_cast<int>(expected);
 
     if (delta > AUDIO_FLOW_RATE_TOLERANCE || delta < -AUDIO_FLOW_RATE_TOLERANCE)
     {
         Log::debug("Audio flow rate %u is outside the expected band around %u",
-                   audioFlowRate, (unsigned)expected);
+                   audioFlowRate.load(std::memory_order_relaxed), (unsigned)expected);
     }
 }
 
@@ -815,7 +816,7 @@ void Controller::audioStats(uint32_t out[6]) const
     out[1] = audioBytesDropped.load(std::memory_order_relaxed);
     out[2] = audioStarved.load(std::memory_order_relaxed);
     out[3] = audioSendFailures.load(std::memory_order_relaxed);
-    out[4] = audioFlowRate;
+    out[4] = audioFlowRate.load(std::memory_order_relaxed);
     // Only a transport can see these: an isochronous packet reports its own status, where a GIP
     // message on the main link simply succeeds or fails as a whole.
     out[5] = audioTransport != nullptr ? audioTransport->underruns() : 0;
@@ -1008,7 +1009,7 @@ bool Controller::setAudioEnabled(bool enable)
                   audioStarved.load(std::memory_order_relaxed),
                   audioSendFailures.load(std::memory_order_relaxed),
                   audioTransport->underruns(),
-                  (unsigned)audioFlowRate);
+                  (unsigned)audioFlowRate.load(std::memory_order_relaxed));
 
         Log::info("Audio paused; the stream stays up carrying silence");
 
@@ -1211,7 +1212,7 @@ size_t Controller::audioRenderBytes() const
     // is level and what it modulates either side of.
     const size_t nominal = AUDIO_BYTES_PER_SECOND / 1000;
 
-    uint16_t requested = audioFlowRate;
+    uint16_t requested = audioFlowRate.load(std::memory_order_relaxed);
 
     if (requested == 0)
     {
@@ -1278,6 +1279,24 @@ size_t Controller::drainAudio(uint8_t *out, size_t length)
     audioPacketsSent.fetch_add(1, std::memory_order_relaxed);
 
     return taken;
+}
+
+void Controller::audioFlowRateReported(uint16_t flowRate)
+{
+    if (flowRate == audioFlowRate.load(std::memory_order_relaxed))
+    {
+        return;
+    }
+
+    audioFlowRate.store(flowRate, std::memory_order_relaxed);
+}
+
+void Controller::setJavaVM(JavaVM *vm)
+{
+    if (jvm == nullptr)
+    {
+        jvm = vm;
+    }
 }
 
 void Controller::setAudioTransport(GipAudioTransport *transport)
