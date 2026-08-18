@@ -813,6 +813,48 @@ bool Controller::setAudioEnabled(bool enable)
         }
 
         /*
+         * Zeroed per session rather than per Controller, so a second enable reports its own
+         * numbers instead of the sum of every one before it.
+         */
+        audioPacketsSent.store(0, std::memory_order_relaxed);
+        audioBytesQueued.store(0, std::memory_order_relaxed);
+        audioBytesDropped.store(0, std::memory_order_relaxed);
+        audioStarved.store(0, std::memory_order_relaxed);
+        audioSendFailures.store(0, std::memory_order_relaxed);
+
+        /*
+         * Tear the audio sub-device down before setting it up, where the transport gives us no
+         * other way to be sure of its state.
+         *
+         * 2.2.11: "once started, audio data flows continually ... until the device is powered off,
+         * disconnected, or until the host requests a new audio configuration first through
+         * transmission of a Set Device State: STOP". A process that is killed sends no STOP, so the
+         * pad stays started, waiting on a stream that has gone - and the next session's STOP is
+         * issued to a device mid-stream rather than idle. On a cable that state survives, because
+         * nothing re-enumerates the device between sessions; the audio came back stretched and
+         * gapped on every session after the first, and only unplugging the pad cleared it.
+         *
+         * RESET is aimed at the audio sub-device alone. Sent to the primary it takes the whole pad
+         * off the USB bus - that was tried, and it looped the permission prompt - but a sub-device
+         * is a logical device of its own, and this is the teardown the specification defines for
+         * one.
+         *
+         * Wireless pads do not need it: a pad that disconnects has already lost this state, and
+         * this is not a path worth exercising on a link that works.
+         */
+        if (audioTransport != nullptr)
+        {
+            if (!setDeviceState(audioDeviceId, STATE_RESET))
+            {
+                Log::error("Failed to reset the audio device");
+            }
+
+            // Long enough for the device to act on it; 2.2.11 gives a device 500 ms to assume a
+            // state message was lost, so this is well inside what it expects to be waited.
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+
+        /*
          * 2.2.11's sequence, and the order is the point: stop the device, propose a format, and
          * wait. The host does not choose a format - it takes the first pair the device advertised,
          * capture then render. Sending a format and streaming immediately, which is what this did
@@ -893,9 +935,10 @@ bool Controller::setAudioEnabled(bool enable)
      * messages, which a cabled pad sends on the isochronous IN endpoint that nothing here reads.
      * Logged anyway rather than hidden, so a zero is visibly "not reported" rather than absent.
      */
-    Log::info("Audio session: %u packets sent, %u bytes dropped, %u late, %u send failures, "
-              "%u underruns, last flow rate %u",
+    Log::info("Audio session: %u packets sent, %u bytes queued, %u bytes dropped, %u late, "
+              "%u send failures, %u underruns, last flow rate %u",
               audioPacketsSent.load(std::memory_order_relaxed),
+              audioBytesQueued.load(std::memory_order_relaxed),
               audioBytesDropped.load(std::memory_order_relaxed),
               audioStarved.load(std::memory_order_relaxed),
               audioSendFailures.load(std::memory_order_relaxed),
@@ -1191,6 +1234,8 @@ void Controller::queueAudio(const int16_t *samples, size_t count)
 
     const uint8_t *bytes = reinterpret_cast<const uint8_t *>(samples);
     size_t length = count * sizeof(int16_t);
+
+    audioBytesQueued.fetch_add(static_cast<uint32_t>(length), std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> lock(audioMutex);

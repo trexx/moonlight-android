@@ -355,6 +355,16 @@ private:
     std::atomic<uint32_t> audioStarved{0};
 
     /*
+     * Bytes handed to us by the renderer, against which everything else can be judged.
+     *
+     * Without it the sending side is measured and the supplying side is not, so a ring that is
+     * empty half the time cannot be told apart from a transport consuming too fast - and those
+     * need opposite fixes. 48 kHz stereo is 192000 bytes a second; anything much under that is the
+     * host falling short rather than us over-draining.
+     */
+    std::atomic<uint32_t> audioBytesQueued{0};
+
+    /*
      * Carries audio when the link itself cannot; null on the adapter, where it can. Not owned -
      * the transport outlives this object, since it is what constructed it.
      */
