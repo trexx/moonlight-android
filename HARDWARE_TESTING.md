@@ -662,6 +662,23 @@ open** — the feature works but has not been shown to be worth using.
       does and what the reference implementation does at every probe, and through a wrapped
       descriptor on Android it is not equivalent - it cost input, which is the product.
       `XboxWiredGipController.resetIfPreviousSessionUnclean()` is kept unused as the record.
+- [x] **Streaming is unaffected by cabled pad audio.** Measured from the end-of-stream video
+      totals rather than the overlay, which forces GPU composition on this hardware.
+      *Two runs on the Shield with a cabled pad taking audio throughout: 2138 frames received /
+      2137 rendered, and 4182 / 4182, both with **zero frames lost in zero loss events**, 1 ms
+      end-to-end and 0 ms decoder latency. Zero loss is the floor, so an audio-off baseline cannot
+      be better - the question is answered without one.*
+
+      The cost that exists is USB and CPU, not frame timing: while a cabled pad has audio
+      configured, 1000 isochronous packets a second go out and 1000 come in, with ~500 transfer
+      completions and up to 500 event-thread wakeups a second. It runs for the life of the
+      connection once audio has been enabled once, because the stream deliberately stays up
+      carrying silence. None of it exists with the preference off.
+- [!] **Two controllers reported audio sessions from one cabled pad**, and one of them discarded
+      65% of what it was given: 3874176 bytes dropped of 5925120 queued, with 24 underruns, while
+      the other ran clean at 192.3 bytes per packet. Only one wired transport started, so two
+      controllers were consuming at the cabled rate when only one pad was attached. Not diagnosed;
+      look here before trusting a two-pad configuration.
 - [ ] **Rate adaptation's effect is unmeasured.** The pad asks for 188, 192 or 196 bytes per
       millisecond in the flow field of its Audio Capture messages, and now gets what it asks for -
       3.2.5.1.5 calls honouring it "the mechanism GIP devices use to eliminate pops and clicks".
