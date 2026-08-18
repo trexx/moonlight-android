@@ -192,6 +192,7 @@ bool WiredController::enableAudio()
 
     audioUnderruns.store(0, std::memory_order_relaxed);
     audioIdle.store(0, std::memory_order_relaxed);
+    audioPrimed.store(false, std::memory_order_relaxed);
     audioTransfers.clear();
     audioBuffers.clear();
     audioFree.clear();
@@ -342,9 +343,26 @@ bool WiredController::submitAudioTransfer(libusb_transfer *transfer)
      * endpoint expects - the device reads each isochronous packet as a whole message, so the header
      * cannot be written once for the buffer.
      */
+    /*
+     * Held off until there is a cushion. Consuming from an empty ring produces silence and keeps
+     * the ring empty, so without this the stream never recovers from its own start.
+     */
+    if (!audioPrimed.load(std::memory_order_relaxed)
+        && gipController->audioBuffered() >= AUDIO_PREFILL_BYTES)
+    {
+        audioPrimed.store(true, std::memory_order_relaxed);
+
+        Log::info("Wired: audio buffer primed, streaming");
+    }
+
     for (int i = 0; i < AUDIO_PACKETS_PER_TRANSFER; i++)
     {
-        if (gipController->drainAudio(fragment, sizeof(fragment)) == 0)
+        if (!audioPrimed.load(std::memory_order_relaxed))
+        {
+            // Deliberate silence while filling, not a shortfall, so it is not counted as one
+            std::fill(fragment, fragment + sizeof(fragment), 0);
+        }
+        else if (gipController->drainAudio(fragment, sizeof(fragment)) == 0)
         {
             audioIdle.fetch_add(1, std::memory_order_relaxed);
         }

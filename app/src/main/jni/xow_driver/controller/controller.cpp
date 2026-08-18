@@ -1038,6 +1038,13 @@ void Controller::begin()
     initInput();
 }
 
+size_t Controller::audioBuffered()
+{
+    std::lock_guard<std::mutex> lock(audioMutex);
+
+    return audioBuffer.size();
+}
+
 size_t Controller::drainAudio(uint8_t *out, size_t length)
 {
     size_t taken = 0;

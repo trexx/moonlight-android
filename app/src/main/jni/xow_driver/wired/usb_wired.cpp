@@ -155,6 +155,17 @@ bool UsbWiredDevice::enableAudioInterface()
     }
 
     /*
+     * Down to the idle setting first, so a session starts from a known state rather than whatever
+     * the last one left. A clean toggle-off does this on the way out, but a killed process does
+     * not - and then the pad is still on the streaming setting with its audio device started, and
+     * the next session builds on top of that. Re-selecting resets the endpoint, which is otherwise
+     * only fixed by unplugging the pad.
+     *
+     * Failure here is ignored: it means the interface was already idle, which is the state wanted.
+     */
+    libusb_set_interface_alt_setting(handle, AUDIO_INTERFACE, 0);
+
+    /*
      * The endpoints only exist on alt setting 1; alt 0 is the idle setting and declares none. Until
      * this succeeds there is nothing to submit to, so a failure here is the end of audio rather
      * than something to carry on past.

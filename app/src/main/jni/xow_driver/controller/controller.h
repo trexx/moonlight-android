@@ -156,6 +156,12 @@ public:
     size_t drainAudio(uint8_t *out, size_t length);
 
     /*
+     * @return bytes of audio waiting to be sent, for a transport deciding whether it has built up
+     *         enough of a cushion to start consuming.
+     */
+    size_t audioBuffered();
+
+    /*
      * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
      * dropped, packets late by more than the cadence, send failures, the pad's last requested flow
      * rate, and transport underruns. Reads relaxed atomics, so it costs nothing on the sending

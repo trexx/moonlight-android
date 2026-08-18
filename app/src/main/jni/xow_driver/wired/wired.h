@@ -132,6 +132,24 @@ private:
      * exactly what made the first queue depth look adequate when it was not.
      */
     std::atomic<uint32_t> audioIdle{0};
+
+    /*
+     * Whether enough audio has accumulated to start consuming it.
+     *
+     * A fixed-rate sink fed by a jittery source needs a cushion between them, and pulling without
+     * one is worse than pushing was: the ring is drained to empty on every completion, so the next
+     * millisecond the host is even slightly late becomes silence, and the buffer can never build
+     * back up. Real audio interleaved with silence does not sound like a dropout - it sounds
+     * stretched and stuttering, which is exactly what it did.
+     *
+     * So silence is sent deliberately until there is a cushion, and only then does the ring start
+     * being consumed. The pad hears a few milliseconds of nothing at the start of a session, which
+     * is the same thing every audio device does when it opens.
+     */
+    std::atomic<bool> audioPrimed{false};
+
+    // Half the sample ring, so there is as much room to absorb a burst as to ride out a gap
+    static const size_t AUDIO_PREFILL_BYTES = 3072;
     std::thread audioEventThread;
 
     JavaVM *jvm;
