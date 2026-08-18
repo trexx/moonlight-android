@@ -630,6 +630,41 @@ void Controller::identifyReceived(uint8_t id, const IdentifyData *identify,
         {
             Log::error("Failed to silence the audio device on discovery");
         }
+
+        /*
+         * Then propose a configuration we do not want, so that the one we do want is a change.
+         *
+         * 2.2.11 has a started device stream "until the host requests a new audio configuration",
+         * and a previous run may have left it configured exactly as we are about to configure it -
+         * in which case re-sending the same format asks for nothing new and the device may keep the
+         * pipeline it already has. That pipeline is the one that plays stretched and gapped, and
+         * neither STOP nor RESET has shifted it; only unplugging the pad has.
+         *
+         * The device's own second advertised pair is used rather than an invented one, so this is
+         * always a format it declared support for. If it has only one pair there is nothing to
+         * alternate with and this does nothing.
+         *
+         * A hypothesis, and a cheap one: two control messages at startup, against a fault that
+         * otherwise needs the cable pulled.
+         */
+        if (audioDeviceFormats.size() >= METADATA_AUDIO_FORMAT_LENGTH * 2)
+        {
+            auto otherIn = static_cast<AudioFormat>(audioDeviceFormats[2]);
+            auto otherOut = static_cast<AudioFormat>(audioDeviceFormats[3]);
+
+            if (!setAudioFormat(audioDeviceId, otherIn, otherOut))
+            {
+                Log::error("Failed to propose the alternate format on discovery");
+            }
+
+            Log::info("Audio: proposed %02x/%02x on discovery, so the real format is a change",
+                      audioDeviceFormats[2], audioDeviceFormats[3]);
+
+            if (!setDeviceState(audioDeviceId, STATE_STOP))
+            {
+                Log::error("Failed to re-silence the audio device on discovery");
+            }
+        }
     }
 
     // The metadata exchange is done, so the device is in Idle and can be started. Wakes the
