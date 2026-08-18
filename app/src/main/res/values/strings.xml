@@ -129,7 +129,7 @@
     <string name="game_menu_pad_audio_on">On</string>
     <string name="game_menu_pad_audio_off">Off</string>
     <string name="game_menu_pad_audio_unavailable">Off (two controllers already)</string>
-    <string name="game_menu_pad_audio_unsupported">Unavailable (no headphone audio)</string>
+    <string name="game_menu_pad_audio_unsupported">Unavailable (no headset detected)</string>
     <string name="game_menu_pad_audio_volume">Headphone volume: %1$d%%</string>
     <string name="game_menu_pad_audio_volume_title">Headphone volume</string>
     <string name="game_menu_pad_audio_volume_entry">%1$d%%</string>
@@ -269,7 +269,7 @@
     <string name="toast_pad_audio_enabled">Audio moved to the controller\'s headphone jack.</string>
     <string name="toast_pad_audio_disabled">Audio moved back to this device.</string>
     <string name="toast_pad_audio_failed">Couldn\'t send audio to that controller. Two controllers is the limit.</string>
-    <string name="toast_pad_audio_unsupported">That controller doesn\'t offer headphone audio.</string>
+    <string name="toast_pad_audio_unsupported">No headset detected on that controller. Plug headphones into its 3.5&#160;mm jack and try again.</string>
     <string name="toast_dongle_pairing_failed">Could not put the Xbox Wireless Adapter into pairing mode</string>
 
     <!-- Array strings -->

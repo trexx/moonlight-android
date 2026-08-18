@@ -507,6 +507,35 @@ static void logCommandDescriptors(const uint8_t *payload, size_t length, uint16_
     Log::info("Metadata commands: %u item(s): %s", count, list.c_str());
 }
 
+void Controller::authCompleted(const uint8_t *sessionKey, size_t length)
+{
+    // The handshake is what gates sub-device enumeration (2.2.1.4), so this is the first moment
+    // asking could succeed. The session key is for link encryption, which this driver does not do.
+    probeSubDevices();
+}
+
+void Controller::probeSubDevices()
+{
+    /*
+     * The expansion index is three bits (2.2.10), so 1 to 7 is every sub-device a primary can
+     * have; zero is the primary itself. Seven small requests once per connect is nothing next to
+     * being unable to find the audio device at all.
+     *
+     * The observed audio sub-device answers on 3 rather than the 1 that Table 1's example uses,
+     * which is why this asks all of them rather than the one the specification happens to
+     * illustrate.
+     */
+    for (uint8_t id = 1; id <= 7; id++)
+    {
+        if (!requestIdentify(id))
+        {
+            Log::error("Failed to ask device %u for metadata", id);
+
+            return;
+        }
+    }
+}
+
 void Controller::identifyReceived(uint8_t id, const IdentifyData *identify,
                                   const uint8_t *payload, size_t length)
 {

@@ -176,6 +176,21 @@ private:
     void inputReceived(const InputData *input) override;
     void identifyReceived(uint8_t id, const IdentifyData *identify,
                           const uint8_t *payload, size_t length) override;
+    void authCompleted(const uint8_t *sessionKey, size_t length) override;
+
+    /*
+     * Asks each possible sub-device for its metadata, rather than waiting to be told they exist.
+     *
+     * MS-GIPUSB 2.2.1.4 enumerates sub-devices after the handshake and 2.2.11 has the audio one
+     * announce itself 500-1000 ms after "the primary device initializes" - but that is a moment,
+     * not a state, and it has already passed for any device we attach to rather than start. A
+     * cabled pad is always in that position: Android initialised it long before we claimed it.
+     *
+     * A metadata request is how the host learns about a device in the first place, so asking is
+     * simply doing without an announce what the announce would have prompted. Sub-devices that do
+     * not exist stay silent.
+     */
+    void probeSubDevices();
 
     void updateButtonStatus(const InputData *input);
 

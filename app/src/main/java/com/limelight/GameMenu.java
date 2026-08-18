@@ -177,8 +177,16 @@ public class GameMenu {
                 state = getString(R.string.game_menu_pad_audio_on);
             }
             else if (!sink.isSupportedBy(controller)) {
-                // The pad's own metadata says it has no audio endpoint. Distinct from the
-                // two-pad cap below, and worth saying so rather than blaming the limit.
+                /*
+                 * No audio sub-device has announced. That is almost always an empty headphone
+                 * jack rather than a pad without one: [MS-GIPUSB] 1.2 makes sub-devices hot
+                 * swappable, so the 3.5 mm audio device appears when a headset is plugged in and
+                 * not before. The two cases are indistinguishable from here - both are simply an
+                 * absent sub-device - so the wording names the one the user can act on.
+                 *
+                 * Distinct from the two-pad cap below, and worth saying so rather than blaming
+                 * the limit.
+                 */
                 state = getString(R.string.game_menu_pad_audio_unsupported);
             }
             else if (sink.canEnableMore()) {
