@@ -129,7 +129,16 @@ Controller::~Controller()
     // below, since the thread touches nothing Java but does use this object's sendPacket.
     setAudioEnabled(false);
 
-    if (!setDeviceState(DEVICE_ID_CONTROLLER, STATE_OFF))
+    /*
+     * Only where the device is ours to switch off. A pad on the adapter is: when this driver stops,
+     * nothing else is driving it, and leaving it powered would drain a battery.
+     *
+     * A cabled pad is not. Android's own driver takes it back the moment we let go, and telling it
+     * to power off leaves it unresponsive to whoever picks it up next - including us on the next
+     * connect, which showed up as a pad that would not answer a metadata request until it had been
+     * physically unplugged and replugged.
+     */
+    if (powerOffOnTeardown && !setDeviceState(DEVICE_ID_CONTROLLER, STATE_OFF))
     {
         Log::error("Failed to turn off controller");
     }
@@ -635,6 +644,23 @@ void Controller::startDevice()
 
 void Controller::waitForMetadata()
 {
+    /*
+     * Attached because startDevice() ends by opening the security exchange, and that reaches
+     * GipCrypto - which is Java. Every other caller of startDevice() is the read thread, which
+     * attaches itself, so this path was the one that could not: an unattached thread gets no
+     * JNIEnv, every crypto call returns empty, and the handshake fails with "no random source".
+     *
+     * Latent until a pad failed to answer the metadata request, because nothing else reaches
+     * startDevice() from here.
+     */
+    JNIEnv *env = nullptr;
+    bool attached = jvm != nullptr && jvm->AttachCurrentThread(&env, nullptr) == JNI_OK;
+
+    if (!attached)
+    {
+        Log::error("Failed to attach the start thread to the JVM");
+    }
+
     std::unique_lock<std::mutex> lock(startMutex);
 
     // The same 500 ms the spec gives a device for assuming a lost state message (MS-GIPUSB 3.1.1).
@@ -645,6 +671,11 @@ void Controller::waitForMetadata()
 
     if (stopStartThread)
     {
+        if (attached)
+        {
+            jvm->DetachCurrentThread();
+        }
+
         return;
     }
 
@@ -654,6 +685,11 @@ void Controller::waitForMetadata()
     }
 
     startDevice();
+
+    if (attached)
+    {
+        jvm->DetachCurrentThread();
+    }
 }
 
 void Controller::audioSamplesReceived(const AudioSamplesData *samples)

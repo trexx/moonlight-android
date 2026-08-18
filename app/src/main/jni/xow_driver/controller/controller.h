@@ -123,6 +123,12 @@ public:
     void setAudioTransport(GipAudioTransport *transport);
 
     /*
+     * Whether to power the device down when this object goes away. True for a pad on the adapter,
+     * which nothing else drives; false for a cabled one, which Android takes straight back.
+     */
+    void setPowerOffOnTeardown(bool powerOff) { powerOffOnTeardown = powerOff; }
+
+    /*
      * Writes one audio message for the audio sub-device into a caller-supplied buffer.
      *
      * For a transport that packetises audio itself and so needs several small messages rather than
@@ -318,6 +324,8 @@ private:
      * the transport outlives this object, since it is what constructed it.
      */
     GipAudioTransport *audioTransport = nullptr;
+
+    bool powerOffOnTeardown = true;
 
     /*
      * The device's own volume state, as it last reported it (MS-GIPUSB 3.2.5.1.1). Kept because a

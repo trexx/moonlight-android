@@ -52,6 +52,10 @@ bool WiredController::start()
     gipController->setAudioPacketBytes(AUDIO_PACKETS_PER_TRANSFER * AUDIO_FRAGMENT_BYTES);
     gipController->setAudioTransport(this);
 
+    // Android takes this pad back the moment we release it, so switching it off on the way out
+    // would leave it dead for whoever picks it up next - us included, on the following connect.
+    gipController->setPowerOffOnTeardown(false);
+
     stopThread = false;
     readThread = std::thread(&WiredController::readPackets, this);
 
