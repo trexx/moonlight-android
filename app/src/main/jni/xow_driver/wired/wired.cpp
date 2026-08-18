@@ -188,7 +188,20 @@ bool WiredController::enableAudio()
         return true;
     }
 
-    if (!device->enableAudioInterface())
+    /*
+     * Claimed and selected once per connection, not once per session.
+     *
+     * Every enable used to release the interface and re-select the alternate setting, and the pad
+     * degraded a little more each time - first session clean, second worse, third worse again,
+     * cleared only by unplugging. Our own side is measurably innocent: supply matches consumption
+     * at 192 bytes per packet with no underruns in the degraded sessions as much as the clean one,
+     * so whatever accumulates is in the device, and cycling its streaming interface is the only
+     * thing we were doing repeatedly to it.
+     *
+     * So the interface stays up between sessions and only the sub-device is stopped and started,
+     * which is what 2.2.11 actually asks for.
+     */
+    if (!device->hasAudioInterface() && !device->enableAudioInterface())
     {
         return false;
     }
@@ -280,7 +293,6 @@ void WiredController::disableAudio()
         audioFree.clear();
         captureTransfers.clear();
         captureBuffers.clear();
-        device->disableAudioInterface();
 
         return;
     }
@@ -319,7 +331,8 @@ void WiredController::disableAudio()
     captureTransfers.clear();
     captureBuffers.clear();
 
-    device->disableAudioInterface();
+    // The interface deliberately stays claimed and on its streaming setting; see enableAudio().
+    // It is released when the device goes, in ~UsbWiredDevice.
 
     Log::info("Wired: audio stopped");
 }
