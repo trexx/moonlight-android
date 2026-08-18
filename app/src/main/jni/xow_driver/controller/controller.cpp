@@ -870,6 +870,22 @@ bool Controller::setAudioEnabled(bool enable)
         }
 
         /*
+         * Says which controller this is and how it will send.
+         *
+         * A controller with no transport falls back to sending GIP audio messages down the main
+         * link, which on a cable is interface 0's interrupt endpoint: 16 KB/s against the 192 KB/s
+         * audio needs. Two controllers once reported sessions for one cabled pad, and the one
+         * without a transport discarded 65% of what it was given while writing into the same GIP
+         * link the isochronous stream was using - two writers, one device, corrupted audio.
+         *
+         * So identity and send path are logged before anything starts, because from the outside a
+         * duplicate looks exactly like a second pad.
+         */
+        Log::info("Audio enabling on controller %p, sub-device %u, transport %s",
+                  static_cast<const void *>(this), (unsigned)audioDeviceId,
+                  audioTransport != nullptr ? "isochronous" : "GIP link");
+
+        /*
          * Before the format is proposed, because on a transport that carries audio itself the
          * endpoints have to exist before the device is told to start streaming into them. Refusing
          * here is the same trade as above: better no audio with a reason than the stream's audio
