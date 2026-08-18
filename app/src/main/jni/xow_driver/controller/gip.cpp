@@ -1213,12 +1213,12 @@ bool GipDevice::setAudioVolume(uint8_t id, const AudioVolumeData &volume)
     return sendPacket(packet);
 }
 
-bool GipDevice::sendAudioSamples(uint8_t id, const uint8_t *samples, size_t length)
+size_t GipDevice::encodeAudioMessage(uint8_t id, const uint8_t *samples, size_t length,
+                                     uint8_t *out)
 {
     // Audio needs the extended length encoding - 1536 bytes will not fit the single byte the
     // Frame struct has - so the header is built by hand rather than through Frame.
-    uint8_t header[HEADER_MAX_LENGTH];
-
+    //
     // Zero is reserved, so skip it on wrap
     if (++audioSequence == 0)
     {
@@ -1226,17 +1226,26 @@ bool GipDevice::sendAudioSamples(uint8_t id, const uint8_t *samples, size_t leng
     }
 
     // Addressed to the audio sub-device, which is where the audio lives - not to the pad
-    size_t headerLength = encodeHeader(header, CMD_AUDIO_SAMPLES, id, TYPE_REQUEST,
+    size_t headerLength = encodeHeader(out, CMD_AUDIO_SAMPLES, id, TYPE_REQUEST,
                                        audioSequence, static_cast<uint32_t>(length));
 
+    std::copy(samples, samples + length, out + headerLength);
+
+    return headerLength + length;
+}
+
+bool GipDevice::sendAudioSamples(uint8_t id, const uint8_t *samples, size_t length)
+{
     // Sized once and filled directly. Bytes::append()'s template overload takes the address of
     // whatever it is handed, which for a pointer would copy the pointer rather than the samples.
-    Bytes packet(headerLength + length);
+    Bytes packet(HEADER_MAX_LENGTH + length);
 
-    std::copy(header, header + headerLength, packet.raw());
-    std::copy(samples, samples + length, packet.raw() + headerLength);
+    size_t used = encodeAudioMessage(id, samples, length, packet.raw());
 
-    return sendPacket(packet);
+    // Trimmed to what the header actually needed, which is usually shorter than the maximum
+    Bytes trimmed(packet, 0, packet.size() - used);
+
+    return sendPacket(trimmed);
 }
 
 bool GipDevice::requestIdentify(uint8_t id)

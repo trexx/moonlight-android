@@ -130,16 +130,16 @@ Java_com_limelight_binding_input_driver_GipController_audioStatsNative(JNIEnv *e
                                                                                 jobject thiz,
                                                                                 jlong handle) {
     auto *controller = (Controller *) handle;
-    uint32_t stats[5];
+    uint32_t stats[6];
 
     controller->audioStats(stats);
 
-    jintArray out = env->NewIntArray(5);
+    jintArray out = env->NewIntArray(6);
     if (out == nullptr) {
         return nullptr;
     }
 
-    env->SetIntArrayRegion(out, 0, 5, reinterpret_cast<const jint *>(stats));
+    env->SetIntArrayRegion(out, 0, 6, reinterpret_cast<const jint *>(stats));
 
     return out;
 }

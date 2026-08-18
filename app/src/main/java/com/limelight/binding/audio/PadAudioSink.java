@@ -132,7 +132,7 @@ public class PadAudioSink {
         for (int i = 0; i < pads.length; i++) {
             int[] stats = pads[i].getAudioStats();
 
-            if (stats == null || stats.length < 5) {
+            if (stats == null || stats.length < 6) {
                 continue;
             }
 
@@ -142,6 +142,12 @@ public class PadAudioSink {
                     .append(stats[2]).append(" late, ")
                     .append(stats[3]).append(" failed, flow ")
                     .append(stats[4]);
+
+            // Only a transport that carries audio itself can see these, so a wireless pad always
+            // reads zero and the line is not worth the width.
+            if (stats[5] > 0) {
+                text.append(", ").append(stats[5]).append(" underruns");
+            }
         }
 
         return text.toString();

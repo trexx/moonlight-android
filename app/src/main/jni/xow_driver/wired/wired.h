@@ -14,8 +14,11 @@
 
 #include <jni.h>
 #include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <thread>
+#include <vector>
 
 /*
  * A single cabled GIP controller.
@@ -32,7 +35,7 @@
  * those - it sends canned init packets and parses two message types - so it could never reach
  * headphone audio however much isochronous plumbing were added beneath it.
  */
-class WiredController
+class WiredController : public GipAudioTransport
 {
 public:
     /*
@@ -51,24 +54,25 @@ public:
     /* @return the GIP device, for the Java layer to drive rumble and audio through */
     Controller *controller() { return gipController.get(); }
 
-private:
-#ifdef _DEBUG
     /*
-     * Disposable: finds out whether Android will carry an isochronous transfer at all.
-     *
-     * No part of this app has ever submitted one - every other USB transfer here is bulk or
-     * interrupt - and the whole cabled audio design rests on it working. usbfs supports it and the
-     * wrapped-descriptor handoff is proven, but "should work" has already been wrong twice on this
-     * transport, so this answers it in a few lines rather than after the full audio path is
-     * written.
-     *
-     * Sends silence to an endpoint the device is not yet configured to play, so nothing should be
-     * audible; the result is entirely in the logged per-packet status.
+     * GipAudioTransport. A cabled pad's audio is isochronous on its own interface, so it cannot go
+     * through the GIP link the way the adapter's does - see the interface's own comment.
      */
-    void spikeIsochronous();
-#endif
+    bool enableAudio() override;
+    void disableAudio() override;
+    bool sendAudio(const uint8_t *samples, size_t length) override;
+    uint32_t underruns() const override { return audioUnderruns.load(std::memory_order_relaxed); }
 
+private:
     void readPackets();
+
+    /* Reaps completed isochronous transfers; libusb has no callbacks without someone pumping it. */
+    void handleAudioEvents();
+
+    /* Called on the event thread when a transfer finishes, to count it and free it for reuse. */
+    void audioTransferComplete(libusb_transfer *transfer);
+
+    static void LIBUSB_CALL audioCallback(libusb_transfer *transfer);
 
     /* Sends a GIP message out interface 0, which is what GipDevice::sendPacket resolves to here. */
     bool sendPacket(const Bytes &data);
@@ -78,6 +82,35 @@ private:
 
     std::atomic<bool> stopThread{false};
     std::thread readThread;
+
+    /*
+     * The isochronous ring.
+     *
+     * Each transfer carries AUDIO_PACKETS_PER_TRANSFER packets of one millisecond each, because the
+     * bus consumes exactly one packet per USB frame. Their product is queued audio and therefore
+     * latency: four transfers of four packets is 16 ms, against xone's 12 x 8 = 96 ms. The floor is
+     * two transfers - with one in flight nothing is queued behind the one draining, so any delay in
+     * the callback is a gap - and above that the queue only has to cover our own refill, because
+     * the 32 ms sample ring already absorbs the host's jitter.
+     */
+    static const int AUDIO_TRANSFERS = 4;
+    static const int AUDIO_PACKETS_PER_TRANSFER = 4;
+
+    // One millisecond of 48 kHz 16-bit stereo, and the GIP message that carries it
+    static const size_t AUDIO_FRAGMENT_BYTES = 192;
+    static const size_t AUDIO_PACKET_BYTES = 198;
+
+    std::vector<libusb_transfer *> audioTransfers;
+    std::vector<std::vector<uint8_t>> audioBuffers;
+
+    // Which transfers are free to fill. Guarded by audioMutex.
+    std::vector<int> audioFree;
+    std::mutex audioMutex;
+    std::condition_variable audioCondition;
+
+    std::atomic<bool> audioRunning{false};
+    std::atomic<uint32_t> audioUnderruns{0};
+    std::thread audioEventThread;
 
     JavaVM *jvm;
 };

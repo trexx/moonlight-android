@@ -44,6 +44,14 @@ bool WiredController::start()
         std::bind(&WiredController::sendPacket, this, std::placeholders::_1)
     );
 
+    /*
+     * The ring drains one transfer's worth at a time, so its packet size is the transfer's payload
+     * rather than the adapter's 8 ms buffer. Since the size is also the cadence - the sender paces
+     * itself by waiting for one packet's worth of samples - this makes it wait 4 ms rather than 8.
+     */
+    gipController->setAudioPacketBytes(AUDIO_PACKETS_PER_TRANSFER * AUDIO_FRAGMENT_BYTES);
+    gipController->setAudioTransport(this);
+
     stopThread = false;
     readThread = std::thread(&WiredController::readPackets, this);
 
@@ -59,12 +67,6 @@ bool WiredController::start()
     gipController->begin();
 
     Log::info("Wired: controller started");
-
-#ifdef _DEBUG
-    // Debug builds only, and disposable - see spikeIsochronous(). Runs here rather than on audio
-    // enable because it answers a question about the transport, not about a session.
-    spikeIsochronous();
-#endif
 
     return true;
 }
@@ -140,145 +142,248 @@ void WiredController::readPackets()
     jvm->DetachCurrentThread();
 }
 
-#ifdef _DEBUG
 
-namespace
+void LIBUSB_CALL WiredController::audioCallback(libusb_transfer *transfer)
 {
-    /*
-     * Results of the spike, filled from the libusb event thread and read once it has drained.
-     * Isochronous reports a status per packet rather than per transfer, which is the whole reason
-     * this is worth measuring rather than assuming - an underrun shows up here and nowhere else.
-     */
-    struct SpikeResult
-    {
-        std::atomic<int> transfersDone{0};
-        std::atomic<int> packetsCompleted{0};
-        std::atomic<int> packetsFailed{0};
-        std::atomic<int> lastTransferStatus{-1};
-        std::atomic<int> lastPacketStatus{-1};
-    };
-
-    void LIBUSB_CALL spikeCallback(libusb_transfer *transfer)
-    {
-        auto *result = static_cast<SpikeResult *>(transfer->user_data);
-
-        result->lastTransferStatus.store(transfer->status, std::memory_order_relaxed);
-
-        for (int i = 0; i < transfer->num_iso_packets; i++)
-        {
-            const libusb_iso_packet_descriptor &packet = transfer->iso_packet_desc[i];
-
-            if (packet.status == LIBUSB_TRANSFER_COMPLETED)
-            {
-                result->packetsCompleted.fetch_add(1, std::memory_order_relaxed);
-            }
-            else
-            {
-                result->packetsFailed.fetch_add(1, std::memory_order_relaxed);
-                result->lastPacketStatus.store(packet.status, std::memory_order_relaxed);
-            }
-        }
-
-        result->transfersDone.fetch_add(1, std::memory_order_relaxed);
-    }
+    static_cast<WiredController *>(transfer->user_data)->audioTransferComplete(transfer);
 }
 
-void WiredController::spikeIsochronous()
+void WiredController::audioTransferComplete(libusb_transfer *transfer)
 {
-    // The real path's shape: 4 packets of one millisecond each, 192 bytes of audio plus a 6-byte
-    // GIP header, inside the endpoint's 228.
-    const int packetsPerTransfer = 4;
-    const int packetSize = 198;
-    const int transferCount = 4;
-
-    if (!device->enableAudioInterface())
+    /*
+     * Isochronous reports a status per packet, not just per transfer, and that is the only place a
+     * dropped millisecond is visible - the transfer as a whole still reports COMPLETED. Counting
+     * them here is what makes the queue depth above a measured choice rather than a guess.
+     */
+    for (int i = 0; i < transfer->num_iso_packets; i++)
     {
-        Log::error("Spike: no audio interface, isochronous is unreachable");
+        if (transfer->iso_packet_desc[i].status != LIBUSB_TRANSFER_COMPLETED)
+        {
+            audioUnderruns.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
 
+    // Cancelled transfers are teardown, not failures, and must not go back in the free list
+    if (transfer->status == LIBUSB_TRANSFER_CANCELLED || !audioRunning.load())
+    {
         return;
     }
 
-    SpikeResult result;
-    std::vector<uint8_t> buffer(packetsPerTransfer * packetSize, 0);
-    std::vector<libusb_transfer *> transfers;
+    // A transfer's identity is its position in the pool; the pool is four entries, so a scan is
+    // cheaper than carrying an index through user_data alongside the object pointer.
+    int index = -1;
 
-    for (int i = 0; i < transferCount; i++)
+    for (size_t i = 0; i < audioTransfers.size(); i++)
     {
-        libusb_transfer *transfer = libusb_alloc_transfer(packetsPerTransfer);
+        if (audioTransfers[i] == transfer)
+        {
+            index = static_cast<int>(i);
+
+            break;
+        }
+    }
+
+    if (index < 0)
+    {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(audioMutex);
+
+        audioFree.push_back(index);
+    }
+
+    audioCondition.notify_one();
+}
+
+bool WiredController::enableAudio()
+{
+    if (audioRunning.load())
+    {
+        return true;
+    }
+
+    if (!device->enableAudioInterface())
+    {
+        return false;
+    }
+
+    audioUnderruns.store(0, std::memory_order_relaxed);
+    audioTransfers.clear();
+    audioBuffers.clear();
+    audioFree.clear();
+
+    for (int i = 0; i < AUDIO_TRANSFERS; i++)
+    {
+        libusb_transfer *transfer = libusb_alloc_transfer(AUDIO_PACKETS_PER_TRANSFER);
 
         if (transfer == nullptr)
         {
-            Log::error("Spike: could not allocate a transfer");
+            Log::error("Wired: could not allocate an audio transfer");
 
-            break;
+            disableAudio();
+
+            return false;
         }
 
-        libusb_fill_iso_transfer(transfer, device->deviceHandle(),
-                                 UsbWiredDevice::AUDIO_ENDPOINT_OUT,
-                                 buffer.data(), static_cast<int>(buffer.size()),
-                                 packetsPerTransfer, spikeCallback, &result, 1000);
-
-        libusb_set_iso_packet_lengths(transfer, packetSize);
-
-        int error = libusb_submit_transfer(transfer);
-
-        if (error)
-        {
-            Log::error("Spike: submit failed: %s", libusb_error_name(error));
-
-            libusb_free_transfer(transfer);
-
-            break;
-        }
-
-        transfers.push_back(transfer);
+        audioTransfers.push_back(transfer);
+        audioBuffers.emplace_back(AUDIO_PACKETS_PER_TRANSFER * AUDIO_PACKET_BYTES, 0);
+        audioFree.push_back(i);
     }
 
-    if (transfers.empty())
-    {
-        Log::error("Spike: nothing was submitted");
+    audioRunning.store(true);
+    audioEventThread = std::thread(&WiredController::handleAudioEvents, this);
 
+    Log::info("Wired: audio ready, %d transfers of %d packets (%d ms queued)",
+              AUDIO_TRANSFERS, AUDIO_PACKETS_PER_TRANSFER,
+              AUDIO_TRANSFERS * AUDIO_PACKETS_PER_TRANSFER);
+
+    return true;
+}
+
+void WiredController::disableAudio()
+{
+    if (!audioRunning.exchange(false))
+    {
+        // Still tear down a half-built pool from a failed enableAudio()
+        for (libusb_transfer *transfer : audioTransfers)
+        {
+            libusb_free_transfer(transfer);
+        }
+
+        audioTransfers.clear();
+        audioBuffers.clear();
+        audioFree.clear();
         device->disableAudioInterface();
 
         return;
     }
 
-    /*
-     * Pumped here rather than on a thread: the spike is short and synchronous, and the real path
-     * gets a proper event thread. A transfer that never completes leaves the loop on the timeout
-     * rather than hanging the caller.
-     */
-    for (int i = 0; i < 200 && result.transfersDone.load() < (int)transfers.size(); i++)
-    {
-        timeval timeout = { 0, 5000 };
+    // Wake anything waiting for a free transfer that will now never come
+    audioCondition.notify_all();
 
-        libusb_handle_events_timeout(device->context(), &timeout);
-    }
-
-    Log::info("Spike: %d/%zu transfers done, %d packets ok, %d failed, transfer status %d, packet status %d",
-              result.transfersDone.load(), transfers.size(),
-              result.packetsCompleted.load(), result.packetsFailed.load(),
-              result.lastTransferStatus.load(), result.lastPacketStatus.load());
-
-    // Cancel anything still outstanding, then drain its callbacks before the buffer goes away
-    for (libusb_transfer *transfer : transfers)
+    for (libusb_transfer *transfer : audioTransfers)
     {
         libusb_cancel_transfer(transfer);
     }
 
-    for (int i = 0; i < 200 && result.transfersDone.load() < (int)transfers.size(); i++)
+    if (audioEventThread.joinable())
     {
-        timeval timeout = { 0, 5000 };
-
-        libusb_handle_events_timeout(device->context(), &timeout);
+        audioEventThread.join();
     }
 
-    for (libusb_transfer *transfer : transfers)
+    for (libusb_transfer *transfer : audioTransfers)
     {
         libusb_free_transfer(transfer);
     }
 
+    audioTransfers.clear();
+    audioBuffers.clear();
+    audioFree.clear();
+
     device->disableAudioInterface();
+
+    Log::info("Wired: audio stopped");
 }
 
-#endif
+void WiredController::handleAudioEvents()
+{
+    /*
+     * libusb delivers completions only while someone is pumping it, and nothing else in this
+     * driver does - the read loop is a synchronous transfer. The timeout is what lets this notice
+     * teardown rather than blocking in the library.
+     */
+    while (audioRunning.load())
+    {
+        timeval timeout = { 0, 10000 };
+
+        libusb_handle_events_timeout(device->context(), &timeout);
+    }
+
+    // Drain the cancellations issued during teardown, so no callback fires after the pool is freed
+    for (int i = 0; i < 50; i++)
+    {
+        timeval timeout = { 0, 2000 };
+
+        libusb_handle_events_timeout(device->context(), &timeout);
+    }
+}
+
+bool WiredController::sendAudio(const uint8_t *samples, size_t length)
+{
+    if (!audioRunning.load())
+    {
+        return false;
+    }
+
+    if (length != AUDIO_PACKETS_PER_TRANSFER * AUDIO_FRAGMENT_BYTES)
+    {
+        Log::error("Wired: audio buffer is %zu bytes, expected %zu", length,
+                   AUDIO_PACKETS_PER_TRANSFER * AUDIO_FRAGMENT_BYTES);
+
+        return false;
+    }
+
+    int index = -1;
+
+    {
+        std::unique_lock<std::mutex> lock(audioMutex);
+
+        // Waiting here is the back pressure that paces the sender when the bus is the slower end
+        audioCondition.wait_for(lock, std::chrono::milliseconds(20),
+                                [this] { return !audioFree.empty() || !audioRunning.load(); });
+
+        if (audioFree.empty())
+        {
+            return false;
+        }
+
+        index = audioFree.back();
+        audioFree.pop_back();
+    }
+
+    if (index < 0)
+    {
+        return false;
+    }
+
+    /*
+     * One GIP message per millisecond, each with its own sequence number, laid out at the packet
+     * stride the endpoint expects. The device reads each isochronous packet as a whole message,
+     * so the header cannot be written once for the buffer.
+     */
+    uint8_t *buffer = audioBuffers[index].data();
+
+    for (int i = 0; i < AUDIO_PACKETS_PER_TRANSFER; i++)
+    {
+        gipController->encodeAudioFragment(samples + i * AUDIO_FRAGMENT_BYTES,
+                                           AUDIO_FRAGMENT_BYTES,
+                                           buffer + i * AUDIO_PACKET_BYTES);
+    }
+
+    libusb_transfer *transfer = audioTransfers[index];
+
+    libusb_fill_iso_transfer(transfer, device->deviceHandle(),
+                             UsbWiredDevice::AUDIO_ENDPOINT_OUT,
+                             buffer,
+                             static_cast<int>(AUDIO_PACKETS_PER_TRANSFER * AUDIO_PACKET_BYTES),
+                             AUDIO_PACKETS_PER_TRANSFER, audioCallback, this, 1000);
+
+    libusb_set_iso_packet_lengths(transfer, AUDIO_PACKET_BYTES);
+
+    int error = libusb_submit_transfer(transfer);
+
+    if (error)
+    {
+        Log::error("Wired: audio submit failed: %s", libusb_error_name(error));
+
+        std::lock_guard<std::mutex> lock(audioMutex);
+
+        audioFree.push_back(index);
+
+        return false;
+    }
+
+    return true;
+}

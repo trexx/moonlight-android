@@ -660,13 +660,16 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
  * it hands data[0] and data[1] straight to its format request. A pad that declared none has no
  * audio endpoint on this device id, and asking it to take audio is answered with silence.
  */
-void Controller::audioStats(uint32_t out[5]) const
+void Controller::audioStats(uint32_t out[6]) const
 {
     out[0] = audioPacketsSent.load(std::memory_order_relaxed);
     out[1] = audioBytesDropped.load(std::memory_order_relaxed);
     out[2] = audioStarved.load(std::memory_order_relaxed);
     out[3] = audioSendFailures.load(std::memory_order_relaxed);
     out[4] = audioFlowRate;
+    // Only a transport can see these: an isochronous packet reports its own status, where a GIP
+    // message on the main link simply succeeds or fails as a whole.
+    out[5] = audioTransport != nullptr ? audioTransport->underruns() : 0;
 }
 
 bool Controller::supportsAudioOut() const
@@ -712,6 +715,19 @@ bool Controller::setAudioEnabled(bool enable)
         if (audioDeviceId == 0 || audioDeviceFormats.size() < METADATA_AUDIO_FORMAT_LENGTH)
         {
             Log::info("No audio sub-device has announced; refusing audio");
+
+            return false;
+        }
+
+        /*
+         * Before the format is proposed, because on a transport that carries audio itself the
+         * endpoints have to exist before the device is told to start streaming into them. Refusing
+         * here is the same trade as above: better no audio with a reason than the stream's audio
+         * moved off the TV into silence.
+         */
+        if (audioTransport != nullptr && !audioTransport->enableAudio())
+        {
+            Log::error("Audio transport would not start; refusing audio");
 
             return false;
         }
@@ -792,13 +808,19 @@ bool Controller::setAudioEnabled(bool enable)
      * says whether the stream kept up. Dropped bytes mean the host outran the link and audio would
      * have drifted; starved counts mean the reverse, a ring emptied and a gap heard.
      */
-    Log::info("Audio session: %u packets sent, %u bytes dropped, %u late by >12ms, %u send failures, "
-              "last flow rate %u",
+    Log::info("Audio session: %u packets sent, %u bytes dropped, %u late, %u send failures, "
+              "%u underruns, last flow rate %u",
               audioPacketsSent.load(std::memory_order_relaxed),
               audioBytesDropped.load(std::memory_order_relaxed),
               audioStarved.load(std::memory_order_relaxed),
               audioSendFailures.load(std::memory_order_relaxed),
+              audioTransport != nullptr ? audioTransport->underruns() : 0,
               (unsigned)audioFlowRate);
+
+    if (audioTransport != nullptr)
+    {
+        audioTransport->disableAudio();
+    }
 
     Log::info("Audio disabled for controller");
 
@@ -929,6 +951,16 @@ void Controller::begin()
     }
 
     initInput();
+}
+
+void Controller::setAudioTransport(GipAudioTransport *transport)
+{
+    audioTransport = transport;
+}
+
+size_t Controller::encodeAudioFragment(const uint8_t *samples, size_t length, uint8_t *out)
+{
+    return encodeAudioMessage(audioDeviceId, samples, length, out);
 }
 
 void Controller::setAudioPacketBytes(size_t bytes)
@@ -1080,9 +1112,16 @@ void Controller::processAudio()
             }
         }
 
-        // Outside the lock: this is a blocking USB transfer, and the decode thread must never
-        // wait behind it.
-        if (!sendAudioSamples(audioDeviceId, packet.data(), packet.size()))
+        /*
+         * Outside the lock either way: the adapter's send is a blocking USB transfer and the
+         * decode thread must never wait behind it, and a transport's submit can block on a free
+         * buffer for the same reason.
+         */
+        bool sent = audioTransport != nullptr
+                        ? audioTransport->sendAudio(packet.data(), packet.size())
+                        : sendAudioSamples(audioDeviceId, packet.data(), packet.size());
+
+        if (!sent)
         {
             audioSendFailures.fetch_add(1, std::memory_order_relaxed);
 

@@ -176,8 +176,8 @@ public class GipController extends AbstractController{
     }
 
     /**
-     * @return audio session counters: packets sent, bytes dropped, packets late, send failures and
-     *         the pad's last requested flow rate. For the performance overlay; reads relaxed
+     * @return audio session counters: packets sent, bytes dropped, packets late, send failures,
+     *         the pad's last requested flow rate, and transport underruns. For the performance overlay; reads relaxed
      *         atomics, so it neither locks nor disturbs the sending path.
      */
     public int[] getAudioStats() {

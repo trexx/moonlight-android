@@ -454,6 +454,21 @@ protected:
      */
     bool sendAudioSamples(uint8_t id, const uint8_t *samples, size_t length);
 
+    /*
+     * Writes one audio message - GIP header then samples - into a caller-supplied buffer, and
+     * takes the next audio sequence number.
+     *
+     * Exists because the two transports packetise differently. The adapter sends one message per
+     * 8 ms buffer; a cabled pad sends one per millisecond into an isochronous packet, so it needs
+     * to build several small messages itself rather than hand a whole buffer to sendPacket. Both
+     * go through this so the header encoding and the sequence counter have one home.
+     *
+     * The buffer needs room for HEADER_MAX_LENGTH + length.
+     *
+     * @return bytes written
+     */
+    size_t encodeAudioMessage(uint8_t id, const uint8_t *samples, size_t length, uint8_t *out);
+
 private:
     /* Security exchange, driven entirely here - see the .cpp for the flow. */
     void handleAuthPacket(const uint8_t *data, size_t length);

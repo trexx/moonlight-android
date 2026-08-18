@@ -30,6 +30,31 @@
 #include <vector>
 
 /*
+ * A transport that carries audio itself rather than through GIP messages on the main link.
+ *
+ * The adapter needs none of this: its audio is ordinary GIP messages down the same radio link as
+ * everything else, so Controller sends them and this stays null. A cabled pad cannot - MS-GIPUSB
+ * 2.2.12 puts its audio on isochronous endpoints on a separate interface, and interface 0's 64
+ * bytes every 4 ms is 16 KB/s against the 192 KB/s that 48 kHz stereo needs. It is not a
+ * preference, it is the only path with the bandwidth.
+ */
+class GipAudioTransport
+{
+public:
+    virtual ~GipAudioTransport() = default;
+
+    /* Brings up whatever the transport needs before samples can flow. */
+    virtual bool enableAudio() = 0;
+    virtual void disableAudio() = 0;
+
+    /* @return whether the buffer was accepted for sending */
+    virtual bool sendAudio(const uint8_t *samples, size_t length) = 0;
+
+    /* Packets the transport could not place, which is a gap in the audio. */
+    virtual uint32_t underruns() const = 0;
+};
+
+/*
  * Forwards gamepad events to virtual input device
  * Passes force feedback effects to gamepad
  */
@@ -90,11 +115,30 @@ public:
     void setAudioPacketBytes(size_t bytes);
 
     /*
-     * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
-     * dropped, packets late by more than the cadence, send failures, and the pad's last requested
-     * flow rate. Reads relaxed atomics, so it costs nothing on the sending path and needs no lock.
+     * Routes audio through a transport that carries it outside the GIP link.
+     *
+     * Null - the wireless case - keeps the existing behaviour exactly: one GIP audio message per
+     * buffer, down the same link as everything else. Set before audio is enabled.
      */
-    void audioStats(uint32_t out[5]) const;
+    void setAudioTransport(GipAudioTransport *transport);
+
+    /*
+     * Writes one audio message for the audio sub-device into a caller-supplied buffer.
+     *
+     * For a transport that packetises audio itself and so needs several small messages rather than
+     * one large one. The buffer needs room for the samples plus a header.
+     *
+     * @return bytes written
+     */
+    size_t encodeAudioFragment(const uint8_t *samples, size_t length, uint8_t *out);
+
+    /*
+     * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
+     * dropped, packets late by more than the cadence, send failures, the pad's last requested flow
+     * rate, and transport underruns. Reads relaxed atomics, so it costs nothing on the sending
+     * path and needs no lock.
+     */
+    void audioStats(uint32_t out[6]) const;
 
     /*
      * Sets the headphone volume, 0 - 100.
@@ -253,6 +297,12 @@ private:
      * 20% through audio that was audibly perfect.
      */
     std::atomic<uint32_t> audioStarved{0};
+
+    /*
+     * Carries audio when the link itself cannot; null on the adapter, where it can. Not owned -
+     * the transport outlives this object, since it is what constructed it.
+     */
+    GipAudioTransport *audioTransport = nullptr;
 
     /*
      * The device's own volume state, as it last reported it (MS-GIPUSB 3.2.5.1.1). Kept because a
