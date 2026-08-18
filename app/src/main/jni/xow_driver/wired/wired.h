@@ -52,6 +52,22 @@ public:
     Controller *controller() { return gipController.get(); }
 
 private:
+#ifdef _DEBUG
+    /*
+     * Disposable: finds out whether Android will carry an isochronous transfer at all.
+     *
+     * No part of this app has ever submitted one - every other USB transfer here is bulk or
+     * interrupt - and the whole cabled audio design rests on it working. usbfs supports it and the
+     * wrapped-descriptor handoff is proven, but "should work" has already been wrong twice on this
+     * transport, so this answers it in a few lines rather than after the full audio path is
+     * written.
+     *
+     * Sends silence to an endpoint the device is not yet configured to play, so nothing should be
+     * audible; the result is entirely in the logged per-packet status.
+     */
+    void spikeIsochronous();
+#endif
+
     void readPackets();
 
     /* Sends a GIP message out interface 0, which is what GipDevice::sendPacket resolves to here. */

@@ -13,6 +13,7 @@
 
 #include <functional>
 #include <utility>
+#include <vector>
 
 WiredController::WiredController(int fd, JavaVM *jvm) : jvm(jvm)
 {
@@ -58,6 +59,12 @@ bool WiredController::start()
     gipController->begin();
 
     Log::info("Wired: controller started");
+
+#ifdef _DEBUG
+    // Debug builds only, and disposable - see spikeIsochronous(). Runs here rather than on audio
+    // enable because it answers a question about the transport, not about a session.
+    spikeIsochronous();
+#endif
 
     return true;
 }
@@ -132,3 +139,146 @@ void WiredController::readPackets()
 
     jvm->DetachCurrentThread();
 }
+
+#ifdef _DEBUG
+
+namespace
+{
+    /*
+     * Results of the spike, filled from the libusb event thread and read once it has drained.
+     * Isochronous reports a status per packet rather than per transfer, which is the whole reason
+     * this is worth measuring rather than assuming - an underrun shows up here and nowhere else.
+     */
+    struct SpikeResult
+    {
+        std::atomic<int> transfersDone{0};
+        std::atomic<int> packetsCompleted{0};
+        std::atomic<int> packetsFailed{0};
+        std::atomic<int> lastTransferStatus{-1};
+        std::atomic<int> lastPacketStatus{-1};
+    };
+
+    void LIBUSB_CALL spikeCallback(libusb_transfer *transfer)
+    {
+        auto *result = static_cast<SpikeResult *>(transfer->user_data);
+
+        result->lastTransferStatus.store(transfer->status, std::memory_order_relaxed);
+
+        for (int i = 0; i < transfer->num_iso_packets; i++)
+        {
+            const libusb_iso_packet_descriptor &packet = transfer->iso_packet_desc[i];
+
+            if (packet.status == LIBUSB_TRANSFER_COMPLETED)
+            {
+                result->packetsCompleted.fetch_add(1, std::memory_order_relaxed);
+            }
+            else
+            {
+                result->packetsFailed.fetch_add(1, std::memory_order_relaxed);
+                result->lastPacketStatus.store(packet.status, std::memory_order_relaxed);
+            }
+        }
+
+        result->transfersDone.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void WiredController::spikeIsochronous()
+{
+    // The real path's shape: 4 packets of one millisecond each, 192 bytes of audio plus a 6-byte
+    // GIP header, inside the endpoint's 228.
+    const int packetsPerTransfer = 4;
+    const int packetSize = 198;
+    const int transferCount = 4;
+
+    if (!device->enableAudioInterface())
+    {
+        Log::error("Spike: no audio interface, isochronous is unreachable");
+
+        return;
+    }
+
+    SpikeResult result;
+    std::vector<uint8_t> buffer(packetsPerTransfer * packetSize, 0);
+    std::vector<libusb_transfer *> transfers;
+
+    for (int i = 0; i < transferCount; i++)
+    {
+        libusb_transfer *transfer = libusb_alloc_transfer(packetsPerTransfer);
+
+        if (transfer == nullptr)
+        {
+            Log::error("Spike: could not allocate a transfer");
+
+            break;
+        }
+
+        libusb_fill_iso_transfer(transfer, device->deviceHandle(),
+                                 UsbWiredDevice::AUDIO_ENDPOINT_OUT,
+                                 buffer.data(), static_cast<int>(buffer.size()),
+                                 packetsPerTransfer, spikeCallback, &result, 1000);
+
+        libusb_set_iso_packet_lengths(transfer, packetSize);
+
+        int error = libusb_submit_transfer(transfer);
+
+        if (error)
+        {
+            Log::error("Spike: submit failed: %s", libusb_error_name(error));
+
+            libusb_free_transfer(transfer);
+
+            break;
+        }
+
+        transfers.push_back(transfer);
+    }
+
+    if (transfers.empty())
+    {
+        Log::error("Spike: nothing was submitted");
+
+        device->disableAudioInterface();
+
+        return;
+    }
+
+    /*
+     * Pumped here rather than on a thread: the spike is short and synchronous, and the real path
+     * gets a proper event thread. A transfer that never completes leaves the loop on the timeout
+     * rather than hanging the caller.
+     */
+    for (int i = 0; i < 200 && result.transfersDone.load() < (int)transfers.size(); i++)
+    {
+        timeval timeout = { 0, 5000 };
+
+        libusb_handle_events_timeout(device->context(), &timeout);
+    }
+
+    Log::info("Spike: %d/%zu transfers done, %d packets ok, %d failed, transfer status %d, packet status %d",
+              result.transfersDone.load(), transfers.size(),
+              result.packetsCompleted.load(), result.packetsFailed.load(),
+              result.lastTransferStatus.load(), result.lastPacketStatus.load());
+
+    // Cancel anything still outstanding, then drain its callbacks before the buffer goes away
+    for (libusb_transfer *transfer : transfers)
+    {
+        libusb_cancel_transfer(transfer);
+    }
+
+    for (int i = 0; i < 200 && result.transfersDone.load() < (int)transfers.size(); i++)
+    {
+        timeval timeout = { 0, 5000 };
+
+        libusb_handle_events_timeout(device->context(), &timeout);
+    }
+
+    for (libusb_transfer *transfer : transfers)
+    {
+        libusb_free_transfer(transfer);
+    }
+
+    device->disableAudioInterface();
+}
+
+#endif

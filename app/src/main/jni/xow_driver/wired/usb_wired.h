@@ -68,7 +68,36 @@ public:
 
     bool interruptWrite(const uint8_t *data, size_t length);
 
+    /*
+     * Audio lives on its own interface, and only on its second alternate setting: alt 0 has no
+     * endpoints at all, so the isochronous pair does not exist until this is called (MS-GIPUSB
+     * 2.2.12, confirmed by a descriptor scan). This is exactly what xone's
+     * xone_wired_enable_audio() does.
+     *
+     * Claimed here rather than from Java, unlike interface 0. Nothing else holds this one - Android
+     * has no driver for a GIP audio interface - so there is no kernel driver to lose to, and doing
+     * it through libusb keeps the alt setting with the library that will be submitting to it.
+     *
+     * @return whether the interface was claimed and the alternate setting selected
+     */
+    bool enableAudioInterface();
+    void disableAudioInterface();
+
+    /* @return whether the audio interface is currently claimed and on its streaming alt setting */
+    bool hasAudioInterface() const { return audioClaimed; }
+
+    libusb_device_handle *deviceHandle() const { return handle; }
+    libusb_context *context() const { return ctx; }
+
+    // Interface 1 alt 1, isochronous, 228 bytes every 1 ms in each direction
+    static const int AUDIO_INTERFACE = 1;
+    static const int AUDIO_ALT_SETTING = 1;
+    static const uint8_t AUDIO_ENDPOINT_OUT = 0x02;
+    static const uint8_t AUDIO_ENDPOINT_IN = 0x82;
+    static const size_t AUDIO_MAX_PACKET_SIZE = 228;
+
 private:
     libusb_context *ctx = nullptr;
     libusb_device_handle *handle = nullptr;
+    bool audioClaimed = false;
 };

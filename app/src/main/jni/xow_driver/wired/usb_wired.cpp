@@ -78,7 +78,10 @@ UsbWiredDevice::~UsbWiredDevice()
         return;
     }
 
-    // Releasing is the Java layer's job too, for the same reason claiming is
+    // Interface 0 is the Java layer's to release, for the same reason it is Java's to claim.
+    // Interface 1 is ours.
+    disableAudioInterface();
+
     libusb_close(handle);
 
     if (ctx != nullptr)
@@ -128,4 +131,73 @@ bool UsbWiredDevice::interruptWrite(const uint8_t *data, size_t length)
     }
 
     return transferred == static_cast<int>(length);
+}
+
+bool UsbWiredDevice::enableAudioInterface()
+{
+    if (handle == nullptr)
+    {
+        return false;
+    }
+
+    if (audioClaimed)
+    {
+        return true;
+    }
+
+    int error = libusb_claim_interface(handle, AUDIO_INTERFACE);
+
+    if (error)
+    {
+        Log::error("Wired: could not claim the audio interface: %s", libusb_error_name(error));
+
+        return false;
+    }
+
+    /*
+     * The endpoints only exist on alt setting 1; alt 0 is the idle setting and declares none. Until
+     * this succeeds there is nothing to submit to, so a failure here is the end of audio rather
+     * than something to carry on past.
+     */
+    error = libusb_set_interface_alt_setting(handle, AUDIO_INTERFACE, AUDIO_ALT_SETTING);
+
+    if (error)
+    {
+        Log::error("Wired: could not select the audio alt setting: %s", libusb_error_name(error));
+
+        libusb_release_interface(handle, AUDIO_INTERFACE);
+
+        return false;
+    }
+
+    audioClaimed = true;
+
+    Log::info("Wired: audio interface claimed, alt setting %d selected", AUDIO_ALT_SETTING);
+
+    return true;
+}
+
+void UsbWiredDevice::disableAudioInterface()
+{
+    if (handle == nullptr || !audioClaimed)
+    {
+        return;
+    }
+
+    audioClaimed = false;
+
+    // Back to the setting with no endpoints, so the device stops expecting a stream
+    int error = libusb_set_interface_alt_setting(handle, AUDIO_INTERFACE, 0);
+
+    if (error)
+    {
+        Log::error("Wired: could not release the audio alt setting: %s", libusb_error_name(error));
+    }
+
+    error = libusb_release_interface(handle, AUDIO_INTERFACE);
+
+    if (error)
+    {
+        Log::error("Wired: could not release the audio interface: %s", libusb_error_name(error));
+    }
 }
