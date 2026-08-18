@@ -403,18 +403,14 @@ public class UsbDriverService extends Service implements UsbDriverListener {
              * opt-in until it has been run against real pads.
              */
             /*
-             * Re-enumeration is deliberately not attempted here. Resetting the pad to clear the
-             * state a killed run leaves behind was tried and withdrawn: on this hardware it left
-             * the pad unclaimed and input dead, with the USB stack visibly cycling once a second.
-             * Recovering audio is not worth risking input, which is the product.
-             *
-             * XboxWiredGipController.resetIfPreviousSessionUnclean() is kept, unused, because it
-             * is the mechanism xone uses and the finding is worth more than the code - see
-             * HARDWARE_TESTING.md.
+             * A pad left streaming by a killed process plays degraded until the cable is pulled,
+             * and nothing here recovers it. Re-enumerating - what unplugging does, and what xone
+             * does at every probe - was tried and withdrawn: it left the pad unclaimed and input
+             * dead. Read HARDWARE_TESTING.md before reaching for it again.
              */
 
             if (prefConfig.wiredPadAudio && XboxWiredGipController.canClaimDevice(device)) {
-                controller = XboxWiredGipController.create(this, device, connection,
+                controller = XboxWiredGipController.create(device, connection,
                                                            nextDeviceId++, this);
 
                 // create() releases the interface but leaves the connection open on failure, which

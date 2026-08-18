@@ -1,7 +1,5 @@
 package com.limelight.binding.input.driver;
 
-import android.content.Context;
-import android.content.SharedPreferences;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbInterface;
@@ -56,70 +54,7 @@ public class XboxWiredGipController extends GipController {
      * @return the controller, or null if the device could not be claimed — in which case nothing
      *         has been left running and the caller still owns {@code connection}
      */
-    /**
-     * Records whether audio is streaming to a cabled pad, so the next run can tell whether this one
-     * ended cleanly.
-     *
-     * <p>A pad left configured by a run that died mid-stream plays stretched and gapped until it is
-     * physically unplugged — nothing over GIP shifts it. This is how {@link #create} knows to
-     * re-enumerate it rather than doing so on every connect, which put the device into an attach
-     * loop with a permission prompt each time round.
-     *
-     * <p>Written synchronously: the point of it is to survive a process that is about to be killed
-     * without warning, and a queued write would not.
-     */
-    /**
-     * Re-enumerates the pad if the previous run died while audio was streaming.
-     *
-     * <p>Separate from {@link #create} because the outcomes differ: failing to create means fall
-     * back to the standard driver, while a reset means claim nothing at all yet and wait for the
-     * device to come back. Conflating them made the caller fall through to
-     * {@link XboxOneController} holding a connection this had already closed.
-     *
-     * @return true if the device was reset, in which case the connection is closed, nothing should
-     *         be claimed now, and Android will send a fresh attach when it re-enumerates
-     */
-    public static boolean resetIfPreviousSessionUnclean(Context context,
-                                                        UsbDeviceConnection connection) {
-        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-
-        if (!prefs.getBoolean(PREF_AUDIO_ACTIVE, false)) {
-            return false;
-        }
-
-        /*
-         * A pad left configured by a run that died mid-stream plays stretched and gapped however it
-         * is set up afterwards, and nothing sent over GIP shifts it. Re-enumerating is what
-         * unplugging the cable does, and that is the only recovery ever found by hand. xone resets
-         * on every probe; this resets only when it is needed, because on Android it costs a
-         * reconnect where on Linux it costs nothing.
-         *
-         * Cleared first, so a reset that fixes nothing cannot make every future connect reset too.
-         */
-        prefs.edit().putBoolean(PREF_AUDIO_ACTIVE, false).commit();
-
-        LimeLog.warning("Wired GIP: previous session left audio running, re-enumerating the pad");
-
-        resetWiredDevice(connection.getFileDescriptor());
-
-        // Dead either way now: a successful reset re-enumerates the device out from under it
-        connection.close();
-
-        return true;
-    }
-
-    public static void setAudioActive(Context context, boolean active) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putBoolean(PREF_AUDIO_ACTIVE, active)
-                .commit();
-    }
-
-    private static final String PREFS = "wired_gip";
-    private static final String PREF_AUDIO_ACTIVE = "audio_active";
-
-    public static XboxWiredGipController create(Context context, UsbDevice device,
-                                                UsbDeviceConnection connection,
+    public static XboxWiredGipController create(UsbDevice device, UsbDeviceConnection connection,
                                                 int deviceId, UsbDriverListener listener) {
 
         /*
@@ -214,7 +149,6 @@ public class XboxWiredGipController extends GipController {
         return XboxOneController.canClaimDevice(device);
     }
 
-    private static native boolean resetWiredDevice(int fd);
     private static native long createWiredDriver(int fd);
     private static native boolean startWiredDriver(long handle);
     private static native long wiredControllerHandle(long handle);
