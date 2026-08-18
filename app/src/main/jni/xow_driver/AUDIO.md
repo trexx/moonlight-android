@@ -541,11 +541,9 @@ That discipline is what eventually pointed at the handshake instead of at the se
   so a device that ever disagrees will be visible rather than silently mismatched.
 - **Stereo 48 kHz only.** Samples are forwarded verbatim with no downmix, so a surround stream
   disables the feature rather than sending something wrong.
-- **Wireless adapter only.** A pad on a USB cable still cannot carry audio. `XboxOneController`
-  drives cabled pads through `UsbDeviceConnection`, and **Android exposes no isochronous API at
-  all** — the wired audio endpoints are isochronous (interface 1 alt 1, 228 B at 1 ms, per §2.2.12
-  and confirmed by a descriptor scan). It is the wrong API rather than a missing feature; libusb
-  does isochronous and is already vendored. See "Audio over a cable" above.
+- **A pad left streaming by a killed process plays degraded until the cable is pulled.** See
+  "Audio over a cable" below; it is understood rather than mysterious, and exiting cleanly avoids
+  it.
 
   A pad whose sub-device declares no usable format is still refused with a message saying so,
   rather than moving the stream's audio off the TV into silence.
@@ -560,6 +558,77 @@ That discipline is what eventually pointed at the handshake instead of at the se
   has been available to test against.
 - **No microphone.** There is no mic support anywhere in this client, so the capture direction is
   negotiated but never read.
+
+## Audio over a cable, as it was actually built
+
+Working on hardware: an Xbox One pad on a USB cable plays the stream's audio through its headphone
+jack, over the same GIP stack, handshake and volume control as the adapter.
+
+**Interface 0 cannot carry it.** 64 bytes every 4 ms is 16 KB/s against the 192 KB/s that 48 kHz
+stereo needs, so §2.2.12's isochronous endpoints are the only path with the bandwidth — settled by
+arithmetic, not experiment. But interface 0 must still be ours, because the audio sub-device only
+exists after the security handshake and the handshake runs there. Leaving input to Android and
+claiming only interface 1 is therefore not an option.
+
+**Each isochronous packet is one GIP message carrying one millisecond**: 192 bytes of samples behind
+a 6-byte header, 198 inside the endpoint's 228. The bus consumes exactly one packet per frame, so
+that is fixed rather than chosen.
+
+Four things were got wrong and are worth not repeating:
+
+- **Packets are packed contiguously by their declared length**, not at a fixed stride. Writing each
+  message at the maximum stride while declaring a shorter length makes every packet after the first
+  read from the wrong offset. It is heard as noise, and then as the device leaving the bus.
+- **The bus pulls; the host does not push.** Submitting only when samples happen to be ready leaves
+  the endpoint unfed whenever the host's clock is the slower of the two, and a packet never
+  submitted is not a packet that failed — the per-packet status reports nothing. Transfers now stay
+  in flight and are refilled from the ring on completion.
+- **A pull needs a cushion.** Draining the ring to empty on every completion means any millisecond
+  the host is late becomes silence, and the ring never recovers. Real audio interleaved with silence
+  does not sound like a dropout; it sounds slowed down. Silence is sent deliberately until a
+  cushion accumulates.
+- **`handlePacket()` is not reentrant.** It owns the chunk reassembly buffer and the sequence
+  counters and is only ever entered from the interrupt read thread. Reading the capture endpoint
+  through it puts the libusb event thread inside it as well, a thousand times a second, and
+  corrupts its state — the crash lands somewhere unrelated. The capture path decodes the flow rate
+  itself.
+
+**Rate adaptation is implemented, and is what §3.2.5.1.5 calls "the mechanism GIP devices use to
+eliminate pops and clicks".** The device asks for 188, 192 or 196 bytes per millisecond in the flow
+field of its Audio Capture messages, which arrive on the isochronous IN endpoint. Nothing read that
+endpoint at first, so the flow rate logged as zero and a fixed 192 went out regardless. The samples
+themselves are discarded; this client has no microphone.
+
+**The device is configured once and never renegotiated.** This is the rule to keep. §2.2.11 has
+audio "flow continually even if the data represents only silence", and xone configures at
+`gip_headset_probe()` and never again for the life of the client — neither ever asks a device to be
+reconfigured. Doing it per session degraded the pad a step each time, first session clean and each
+one after it worse, while our own side measured perfect throughout: 192.2 bytes supplied per packet
+sent, 999 packets a second, zero underruns. Enabling and disabling now only decides whether the ring
+is fed.
+
+### The one limitation, and why it stays
+
+A pad left streaming by a process that was *killed* plays degraded until the cable is pulled.
+
+§2.2.11 keeps a started audio device streaming until it is powered off, disconnected, or told to
+stop — and Android closes the USB connection before any teardown of ours runs, so the stop fails
+with `NO_DEVICE`. A new process cannot undo it either. All of these were tried on hardware and none
+worked:
+
+| Attempt | Result |
+|---|---|
+| Set Device State: STOP on discovery and on teardown | No effect |
+| Set Device State: RESET to the audio sub-device | No effect |
+| Proposing the device's other format first, so the real one is a change | Confirmed to run, no effect |
+| Set Device State: RESET to the primary device | Takes the pad off the USB bus; permission prompt loop |
+| `libusb_reset_device()` to re-enumerate, as xone does at probe | Pad left unclaimed, **input dead**, USB stack cycling |
+
+The last is the important one. Re-enumeration is what pulling the cable does and what xone does on
+every probe, but through a wrapped descriptor on Android it is not equivalent, and it cost input.
+`XboxWiredGipController.resetIfPreviousSessionUnclean()` is kept unused as the record of that.
+
+Exiting cleanly — disabling audio, or disconnecting from the menu — avoids the whole thing.
 
 ## Still to measure
 
