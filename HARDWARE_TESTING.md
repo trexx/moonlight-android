@@ -674,11 +674,27 @@ open** — the feature works but has not been shown to be worth using.
       completions and up to 500 event-thread wakeups a second. It runs for the life of the
       connection once audio has been enabled once, because the stream deliberately stays up
       carrying silence. None of it exists with the preference off.
-- [!] **Two controllers reported audio sessions from one cabled pad**, and one of them discarded
-      65% of what it was given: 3874176 bytes dropped of 5925120 queued, with 24 underruns, while
-      the other ran clean at 192.3 bytes per packet. Only one wired transport started, so two
-      controllers were consuming at the cabled rate when only one pad was attached. Not diagnosed;
-      look here before trusting a two-pad configuration.
+- [!] **Seen once, not reproducible: two controllers reporting audio sessions from one cabled pad,
+      with corrupted audio.** One ran clean at 192.3 bytes per packet over isochronous; the other
+      discarded 65% of what it was given - 3874176 bytes of 5925120 - with 24 underruns.
+
+      The mechanism is clear even though the cause is not. A controller with no transport sends GIP
+      audio down the main link, which on a cable is interface 0's interrupt endpoint: 16 KB/s
+      against the 192 KB/s audio needs. So it dropped what it could not send and wrote the rest
+      into the same GIP link the isochronous stream was using - two writers, one device.
+
+      Most likely a leftover of the withdrawn re-enumeration path, which built a controller and
+      then reset the device out from under it, and of the duplicate-claim guard landing later than
+      it should have. Both are now in place and it has not recurred.
+
+      Enabling audio logs the controller's identity and its send path, so a recurrence names itself
+      rather than looking like a second pad:
+      `Audio enabling on controller 0x…, sub-device 3, transport isochronous|GIP link`.
+      Two lines with different pointers is two controllers for one pad; the `GIP link` one is the
+      fault.
+
+      *Streaming was unaffected throughout - both measured runs show zero frame loss - so this is
+      an audio-path fault only.*
 - [ ] **Rate adaptation's effect is unmeasured.** The pad asks for 188, 192 or 196 bytes per
       millisecond in the flow field of its Audio Capture messages, and now gets what it asks for -
       3.2.5.1.5 calls honouring it "the mechanism GIP devices use to eliminate pops and clicks".
