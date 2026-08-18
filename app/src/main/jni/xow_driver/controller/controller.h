@@ -162,6 +162,18 @@ public:
     size_t audioBuffered();
 
     /*
+     * @return bytes of audio the device wants in each 1 ms render message.
+     *
+     * MS-GIPUSB 3.2.5.1.5: the device modulates this by one sample per channel per millisecond
+     * according to its own buffering, and calls it "the mechanism GIP devices use to eliminate
+     * pops and clicks in audio". For 48 kHz stereo it sits at 188, 192 or 196.
+     *
+     * Falls back to the nominal rate until the device has asked for something, so a transport that
+     * cannot hear the request still sends a sensible size.
+     */
+    size_t audioRenderBytes() const;
+
+    /*
      * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
      * dropped, packets late by more than the cadence, send failures, the pad's last requested flow
      * rate, and transport underruns. Reads relaxed atomics, so it costs nothing on the sending

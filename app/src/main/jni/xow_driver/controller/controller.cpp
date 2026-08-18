@@ -704,10 +704,10 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
     // this up and down to absorb the difference between its clock and ours, and per 3.2.5.1.5 that
     // is "the mechanism GIP devices use to eliminate pops and clicks in audio".
     //
-    // We send a fixed audioPacketBytes regardless, as xone does, so we are declining that
-    // mechanism rather than implementing it - see AUDIO.md. Small movement is therefore expected
-    // and says nothing; only a request that sits well outside the band the spec describes is worth
-    // reporting, and it would mean the pad is asking for a rate we never give it.
+    // A transport that can hear these honours it through audioRenderBytes(); the adapter cannot,
+    // because its audio is one 8 ms message rather than eight 1 ms ones, so there it is still only
+    // a health signal. Small movement is expected and says nothing; only a request well outside
+    // the band the spec describes is worth reporting.
     if (samples->flowRate == audioFlowRate)
     {
         return;
@@ -1036,6 +1036,34 @@ void Controller::begin()
     }
 
     initInput();
+}
+
+size_t Controller::audioRenderBytes() const
+{
+    // One millisecond of 48 kHz 16-bit stereo, which is what the device asks for when its buffer
+    // is level and what it modulates either side of.
+    const size_t nominal = AUDIO_BYTES_PER_SECOND / 1000;
+
+    uint16_t requested = audioFlowRate;
+
+    if (requested == 0)
+    {
+        return nominal;
+    }
+
+    /*
+     * Clamped to the band 3.2.5.1.5 describes. A value outside it is not rate adaptation - it is a
+     * misparse or a device asking for a configuration we never negotiated - and following it would
+     * turn a small drift into a large one.
+     */
+    const size_t margin = 2 * 2 * 2;
+
+    if (requested < nominal - margin || requested > nominal + margin)
+    {
+        return nominal;
+    }
+
+    return requested;
 }
 
 size_t Controller::audioBuffered()

@@ -82,6 +82,28 @@ private:
     /* Fills a transfer from the ring and puts it back on the wire. */
     bool submitAudioTransfer(libusb_transfer *transfer);
 
+    /*
+     * Listens to the capture endpoint, which is where the device says how much render data it
+     * wants.
+     *
+     * Not for the audio: this client has no microphone and discards every sample. MS-GIPUSB
+     * 3.2.5.1.5 puts the flow rate in the Audio Capture message and calls honouring it "the
+     * mechanism GIP devices use to eliminate pops and clicks", and notes a render-only device
+     * still sends these "with no payload other than the flow rate to implement rate adaptation".
+     * Without submitting here we never hear it, and the device's buffer drifts with nothing able
+     * to correct it.
+     */
+    bool submitCaptureTransfer(libusb_transfer *transfer);
+
+    void captureTransferComplete(libusb_transfer *transfer);
+
+    static void LIBUSB_CALL captureCallback(libusb_transfer *transfer);
+
+    static const int CAPTURE_TRANSFERS = 2;
+
+    std::vector<libusb_transfer *> captureTransfers;
+    std::vector<std::vector<uint8_t>> captureBuffers;
+
     /* Sends a GIP message out interface 0, which is what GipDevice::sendPacket resolves to here. */
     bool sendPacket(const Bytes &data);
 
@@ -99,18 +121,25 @@ private:
      * choice again rather than a safety one - audio sits here for the whole queue before it is
      * heard, and nothing is gained by holding more of it.
      *
-     * It was briefly 12 x 8, matching xone, on the theory that the queue had to absorb the
-     * difference between two clocks - the bus at exactly one packet per frame, the samples arriving
-     * over a network. That is a real problem but a queue is the wrong answer to it: a sustained
-     * deficit drains any depth eventually. Pulling fixes it properly, by asking for samples only
-     * when the bus is about to send them and inserting silence for whatever is missing.
+     * The depth covers the round trip from a completion callback to the resubmission it triggers,
+     * and nothing more. It was briefly raised to xone's 12 x 8 while chasing degradation that
+     * turned out to be rate adaptation - depth cannot explain a first session that sounds right
+     * and a second that does not, since it never changes.
      */
-    static const int AUDIO_TRANSFERS = 4;
+    static const int AUDIO_TRANSFERS = 6;
     static const int AUDIO_PACKETS_PER_TRANSFER = 4;
 
     // One millisecond of 48 kHz 16-bit stereo, and the GIP message that carries it
-    static const size_t AUDIO_FRAGMENT_BYTES = 192;
-    static const size_t AUDIO_PACKET_BYTES = 198;
+    static constexpr size_t AUDIO_FRAGMENT_BYTES = 192;
+    static constexpr size_t AUDIO_HEADER_BYTES = 6;
+
+    /*
+     * Room for the largest the device may ask for, not the nominal size. It modulates up as well as
+     * down - 196 for 48 kHz stereo - and a buffer sized at 192 would clamp the request, leaving
+     * adaptation able to slow the stream but never to catch it up.
+     */
+    static constexpr size_t AUDIO_MAX_FRAGMENT_BYTES = 200;
+    static constexpr size_t AUDIO_PACKET_BYTES = AUDIO_MAX_FRAGMENT_BYTES + AUDIO_HEADER_BYTES;
 
     std::vector<libusb_transfer *> audioTransfers;
     std::vector<std::vector<uint8_t>> audioBuffers;
@@ -149,7 +178,7 @@ private:
     std::atomic<bool> audioPrimed{false};
 
     // Half the sample ring, so there is as much room to absorb a burst as to ride out a gap
-    static const size_t AUDIO_PREFILL_BYTES = 3072;
+    static constexpr size_t AUDIO_PREFILL_BYTES = 3072;
     std::thread audioEventThread;
 
     JavaVM *jvm;

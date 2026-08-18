@@ -13,6 +13,7 @@
 
 #include <functional>
 #include <utility>
+#include <algorithm>
 #include <vector>
 
 WiredController::WiredController(int fd, JavaVM *jvm) : jvm(jvm)
@@ -215,8 +216,32 @@ bool WiredController::enableAudio()
         audioFree.push_back(i);
     }
 
+    for (int i = 0; i < CAPTURE_TRANSFERS; i++)
+    {
+        libusb_transfer *transfer = libusb_alloc_transfer(AUDIO_PACKETS_PER_TRANSFER);
+
+        if (transfer == nullptr)
+        {
+            Log::error("Wired: could not allocate a capture transfer");
+
+            disableAudio();
+
+            return false;
+        }
+
+        captureTransfers.push_back(transfer);
+        captureBuffers.emplace_back(
+            UsbWiredDevice::AUDIO_MAX_PACKET_SIZE * AUDIO_PACKETS_PER_TRANSFER, 0);
+    }
+
     audioRunning.store(true);
     audioEventThread = std::thread(&WiredController::handleAudioEvents, this);
+
+    // Listening before sending, so the first flow rate is in hand as early as possible
+    for (libusb_transfer *transfer : captureTransfers)
+    {
+        submitCaptureTransfer(transfer);
+    }
 
     // Primed with silence and all submitted, so the endpoint is fed from the first frame and every
     // completion has a transfer to hand straight back.
@@ -242,9 +267,16 @@ void WiredController::disableAudio()
             libusb_free_transfer(transfer);
         }
 
+        for (libusb_transfer *transfer : captureTransfers)
+        {
+            libusb_free_transfer(transfer);
+        }
+
         audioTransfers.clear();
         audioBuffers.clear();
         audioFree.clear();
+        captureTransfers.clear();
+        captureBuffers.clear();
         device->disableAudioInterface();
 
         return;
@@ -254,6 +286,11 @@ void WiredController::disableAudio()
     audioCondition.notify_all();
 
     for (libusb_transfer *transfer : audioTransfers)
+    {
+        libusb_cancel_transfer(transfer);
+    }
+
+    for (libusb_transfer *transfer : captureTransfers)
     {
         libusb_cancel_transfer(transfer);
     }
@@ -268,9 +305,16 @@ void WiredController::disableAudio()
         libusb_free_transfer(transfer);
     }
 
+    for (libusb_transfer *transfer : captureTransfers)
+    {
+        libusb_free_transfer(transfer);
+    }
+
     audioTransfers.clear();
     audioBuffers.clear();
     audioFree.clear();
+    captureTransfers.clear();
+    captureBuffers.clear();
 
     device->disableAudioInterface();
 
@@ -286,7 +330,9 @@ void WiredController::handleAudioEvents()
      */
     while (audioRunning.load())
     {
-        timeval timeout = { 0, 10000 };
+        // Short, because every completion here is a millisecond the endpoint is waiting on. The
+        // thread does nothing else, so the cost is a wakeup rather than work.
+        timeval timeout = { 0, 2000 };
 
         libusb_handle_events_timeout(device->context(), &timeout);
     }
@@ -336,7 +382,17 @@ bool WiredController::submitAudioTransfer(libusb_transfer *transfer)
     }
 
     uint8_t *buffer = audioBuffers[index].data();
-    uint8_t fragment[AUDIO_FRAGMENT_BYTES];
+    uint8_t fragment[AUDIO_MAX_FRAGMENT_BYTES];
+
+    /*
+     * What the device asked for, not what we assume. 3.2.5.1.5 has it nudge this by a sample per
+     * channel per millisecond according to its own buffering, and honouring it is how the two
+     * clocks are reconciled - sending a fixed size instead lets its buffer drift until the audio
+     * stretches, which is what it did.
+     */
+    const size_t fragmentBytes = std::min(gipController->audioRenderBytes(),
+                                          AUDIO_MAX_FRAGMENT_BYTES);
+    const size_t packetBytes = AUDIO_HEADER_BYTES + fragmentBytes;
 
     /*
      * One GIP message per millisecond, each with its own sequence number, at the packet stride the
@@ -362,12 +418,12 @@ bool WiredController::submitAudioTransfer(libusb_transfer *transfer)
             // Deliberate silence while filling, not a shortfall, so it is not counted as one
             std::fill(fragment, fragment + sizeof(fragment), 0);
         }
-        else if (gipController->drainAudio(fragment, sizeof(fragment)) == 0)
+        else if (gipController->drainAudio(fragment, fragmentBytes) == 0)
         {
             audioIdle.fetch_add(1, std::memory_order_relaxed);
         }
 
-        gipController->encodeAudioFragment(fragment, sizeof(fragment),
+        gipController->encodeAudioFragment(fragment, fragmentBytes,
                                            buffer + i * AUDIO_PACKET_BYTES);
     }
 
@@ -377,13 +433,101 @@ bool WiredController::submitAudioTransfer(libusb_transfer *transfer)
                              static_cast<int>(AUDIO_PACKETS_PER_TRANSFER * AUDIO_PACKET_BYTES),
                              AUDIO_PACKETS_PER_TRANSFER, audioCallback, this, 1000);
 
-    libusb_set_iso_packet_lengths(transfer, AUDIO_PACKET_BYTES);
+    /*
+     * Stride stays at the maximum so each message keeps its own slot in the buffer, but the packet
+     * lengths are what we actually filled - the device reads one message per packet, and a packet
+     * longer than its message would feed it whatever the last one left behind.
+     */
+    for (int i = 0; i < AUDIO_PACKETS_PER_TRANSFER; i++)
+    {
+        transfer->iso_packet_desc[i].length = static_cast<unsigned int>(packetBytes);
+    }
 
     int error = libusb_submit_transfer(transfer);
 
     if (error)
     {
         Log::error("Wired: audio submit failed: %s", libusb_error_name(error));
+
+        return false;
+    }
+
+    return true;
+}
+
+void LIBUSB_CALL WiredController::captureCallback(libusb_transfer *transfer)
+{
+    static_cast<WiredController *>(transfer->user_data)->captureTransferComplete(transfer);
+}
+
+void WiredController::captureTransferComplete(libusb_transfer *transfer)
+{
+    if (transfer->status == LIBUSB_TRANSFER_CANCELLED || !audioRunning.load())
+    {
+        return;
+    }
+
+    /*
+     * Each isochronous packet holds one GIP message, so they go through the ordinary parser rather
+     * than being decoded here - that is what reaches audioSamplesReceived() and updates the flow
+     * rate. The samples themselves are discarded there; this client has no microphone.
+     */
+    for (int i = 0; i < transfer->num_iso_packets; i++)
+    {
+        const libusb_iso_packet_descriptor &packet = transfer->iso_packet_desc[i];
+
+        if (packet.status != LIBUSB_TRANSFER_COMPLETED || packet.actual_length == 0)
+        {
+            continue;
+        }
+
+        const uint8_t *data = libusb_get_iso_packet_buffer_simple(transfer, i);
+
+        gipController->handlePacket(Bytes(data, data + packet.actual_length));
+    }
+
+    submitCaptureTransfer(transfer);
+}
+
+bool WiredController::submitCaptureTransfer(libusb_transfer *transfer)
+{
+    if (!audioRunning.load())
+    {
+        return false;
+    }
+
+    int index = -1;
+
+    for (size_t i = 0; i < captureTransfers.size(); i++)
+    {
+        if (captureTransfers[i] == transfer)
+        {
+            index = static_cast<int>(i);
+
+            break;
+        }
+    }
+
+    if (index < 0)
+    {
+        return false;
+    }
+
+    const int packetSize = static_cast<int>(UsbWiredDevice::AUDIO_MAX_PACKET_SIZE);
+
+    libusb_fill_iso_transfer(transfer, device->deviceHandle(),
+                             UsbWiredDevice::AUDIO_ENDPOINT_IN,
+                             captureBuffers[index].data(),
+                             packetSize * AUDIO_PACKETS_PER_TRANSFER,
+                             AUDIO_PACKETS_PER_TRANSFER, captureCallback, this, 1000);
+
+    libusb_set_iso_packet_lengths(transfer, packetSize);
+
+    int error = libusb_submit_transfer(transfer);
+
+    if (error)
+    {
+        Log::error("Wired: capture submit failed: %s", libusb_error_name(error));
 
         return false;
     }
