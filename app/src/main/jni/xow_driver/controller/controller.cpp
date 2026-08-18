@@ -1004,7 +1004,16 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
 
         audioState = AUDIO_STREAMING;
         stopAudioThread = false;
-        audioThread = std::thread(&Controller::processAudio, this);
+
+        /*
+         * Only where we are the clock. A transport that carries audio itself is paced by its own
+         * bus and pulls through drainAudio() from its completion callbacks, so a sender thread
+         * pushing at the host's rate would be a second, disagreeing clock on the same ring.
+         */
+        if (audioTransport == nullptr)
+        {
+            audioThread = std::thread(&Controller::processAudio, this);
+        }
     }
 }
 
@@ -1027,6 +1036,46 @@ void Controller::begin()
     }
 
     initInput();
+}
+
+size_t Controller::drainAudio(uint8_t *out, size_t length)
+{
+    size_t taken = 0;
+
+    {
+        std::lock_guard<std::mutex> lock(audioMutex);
+
+        taken = std::min(length, audioBuffer.size());
+
+        std::copy(audioBuffer.begin(), audioBuffer.begin() + taken, out);
+        audioBuffer.erase(audioBuffer.begin(), audioBuffer.begin() + taken);
+    }
+
+    // Silence rather than stale samples: the endpoint sends this millisecond either way, and a
+    // repeat of the last one is a click where a gap is merely quiet.
+    if (taken < length)
+    {
+        std::fill(out + taken, out + length, 0);
+
+        audioStarved.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // Only where the device refused to attenuate for us; see setAudioVolume()
+    uint16_t scale = audioSoftwareScale.load(std::memory_order_relaxed);
+
+    if (scale != 256 && taken > 0)
+    {
+        auto *samples = reinterpret_cast<int16_t *>(out);
+
+        for (size_t i = 0; i < taken / sizeof(int16_t); i++)
+        {
+            samples[i] = static_cast<int16_t>((samples[i] * scale) >> 8);
+        }
+    }
+
+    audioPacketsSent.fetch_add(1, std::memory_order_relaxed);
+
+    return taken;
 }
 
 void Controller::setAudioTransport(GipAudioTransport *transport)

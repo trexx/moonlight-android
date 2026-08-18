@@ -49,7 +49,6 @@ bool WiredController::start()
      * rather than the adapter's 8 ms buffer. Since the size is also the cadence - the sender paces
      * itself by waiting for one packet's worth of samples - this makes it wait 4 ms rather than 8.
      */
-    gipController->setAudioPacketBytes(AUDIO_PACKETS_PER_TRANSFER * AUDIO_FRAGMENT_BYTES);
     gipController->setAudioTransport(this);
 
     // Android takes this pad back the moment we release it, so switching it off on the way out
@@ -173,32 +172,10 @@ void WiredController::audioTransferComplete(libusb_transfer *transfer)
         return;
     }
 
-    // A transfer's identity is its position in the pool; the pool is four entries, so a scan is
-    // cheaper than carrying an index through user_data alongside the object pointer.
-    int index = -1;
-
-    for (size_t i = 0; i < audioTransfers.size(); i++)
-    {
-        if (audioTransfers[i] == transfer)
-        {
-            index = static_cast<int>(i);
-
-            break;
-        }
-    }
-
-    if (index < 0)
-    {
-        return;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(audioMutex);
-
-        audioFree.push_back(index);
-    }
-
-    audioCondition.notify_one();
+    // Straight back out, filled with whatever the ring has. The bus is the clock here: this
+    // transfer's slots are going to be transmitted regardless, so the only question is whether
+    // they carry audio or silence, and stopping to wait for samples would guarantee silence.
+    submitAudioTransfer(transfer);
 }
 
 bool WiredController::enableAudio()
@@ -214,6 +191,7 @@ bool WiredController::enableAudio()
     }
 
     audioUnderruns.store(0, std::memory_order_relaxed);
+    audioIdle.store(0, std::memory_order_relaxed);
     audioTransfers.clear();
     audioBuffers.clear();
     audioFree.clear();
@@ -238,6 +216,13 @@ bool WiredController::enableAudio()
 
     audioRunning.store(true);
     audioEventThread = std::thread(&WiredController::handleAudioEvents, this);
+
+    // Primed with silence and all submitted, so the endpoint is fed from the first frame and every
+    // completion has a transfer to hand straight back.
+    for (libusb_transfer *transfer : audioTransfers)
+    {
+        submitAudioTransfer(transfer);
+    }
 
     Log::info("Wired: audio ready, %d transfers of %d packets (%d ms queued)",
               AUDIO_TRANSFERS, AUDIO_PACKETS_PER_TRANSFER,
@@ -316,35 +301,32 @@ void WiredController::handleAudioEvents()
 
 bool WiredController::sendAudio(const uint8_t *samples, size_t length)
 {
+    /*
+     * Never called: this transport pulls. Controller only pushes through here when it is the
+     * clock, and it stands its sender thread down when a transport is set.
+     */
+    return false;
+}
+
+bool WiredController::submitAudioTransfer(libusb_transfer *transfer)
+{
     if (!audioRunning.load())
     {
         return false;
     }
 
-    if (length != AUDIO_PACKETS_PER_TRANSFER * AUDIO_FRAGMENT_BYTES)
-    {
-        Log::error("Wired: audio buffer is %zu bytes, expected %zu", length,
-                   AUDIO_PACKETS_PER_TRANSFER * AUDIO_FRAGMENT_BYTES);
-
-        return false;
-    }
-
+    // Which buffer belongs to this transfer; the pool is small, so a scan beats threading an index
+    // through user_data alongside the object pointer.
     int index = -1;
 
+    for (size_t i = 0; i < audioTransfers.size(); i++)
     {
-        std::unique_lock<std::mutex> lock(audioMutex);
-
-        // Waiting here is the back pressure that paces the sender when the bus is the slower end
-        audioCondition.wait_for(lock, std::chrono::milliseconds(20),
-                                [this] { return !audioFree.empty() || !audioRunning.load(); });
-
-        if (audioFree.empty())
+        if (audioTransfers[i] == transfer)
         {
-            return false;
-        }
+            index = static_cast<int>(i);
 
-        index = audioFree.back();
-        audioFree.pop_back();
+            break;
+        }
     }
 
     if (index < 0)
@@ -352,21 +334,24 @@ bool WiredController::sendAudio(const uint8_t *samples, size_t length)
         return false;
     }
 
-    /*
-     * One GIP message per millisecond, each with its own sequence number, laid out at the packet
-     * stride the endpoint expects. The device reads each isochronous packet as a whole message,
-     * so the header cannot be written once for the buffer.
-     */
     uint8_t *buffer = audioBuffers[index].data();
+    uint8_t fragment[AUDIO_FRAGMENT_BYTES];
 
+    /*
+     * One GIP message per millisecond, each with its own sequence number, at the packet stride the
+     * endpoint expects - the device reads each isochronous packet as a whole message, so the header
+     * cannot be written once for the buffer.
+     */
     for (int i = 0; i < AUDIO_PACKETS_PER_TRANSFER; i++)
     {
-        gipController->encodeAudioFragment(samples + i * AUDIO_FRAGMENT_BYTES,
-                                           AUDIO_FRAGMENT_BYTES,
+        if (gipController->drainAudio(fragment, sizeof(fragment)) == 0)
+        {
+            audioIdle.fetch_add(1, std::memory_order_relaxed);
+        }
+
+        gipController->encodeAudioFragment(fragment, sizeof(fragment),
                                            buffer + i * AUDIO_PACKET_BYTES);
     }
-
-    libusb_transfer *transfer = audioTransfers[index];
 
     libusb_fill_iso_transfer(transfer, device->deviceHandle(),
                              UsbWiredDevice::AUDIO_ENDPOINT_OUT,
@@ -381,10 +366,6 @@ bool WiredController::sendAudio(const uint8_t *samples, size_t length)
     if (error)
     {
         Log::error("Wired: audio submit failed: %s", libusb_error_name(error));
-
-        std::lock_guard<std::mutex> lock(audioMutex);
-
-        audioFree.push_back(index);
 
         return false;
     }

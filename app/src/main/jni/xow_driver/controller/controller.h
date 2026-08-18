@@ -139,6 +139,23 @@ public:
     size_t encodeAudioFragment(const uint8_t *samples, size_t length, uint8_t *out);
 
     /*
+     * Takes up to length bytes of audio, filling any shortfall with silence.
+     *
+     * For a transport clocked by something other than the host's audio - isochronous is paced by
+     * the USB bus at exactly one packet per frame, and nothing makes the two agree. Pushing when
+     * samples happen to be ready leaves the endpoint unfed whenever the host's clock is the slower
+     * of the two, which is audible as a hole every few hundred packets and is not something a
+     * deeper queue fixes: a sustained deficit drains any queue eventually.
+     *
+     * So the bus pulls instead, and asks for exactly what it is about to send. Silence is the right
+     * shortfall because the endpoint is going to transmit that millisecond whatever we do; the only
+     * choice is whether it carries our samples or a gap.
+     *
+     * @return bytes of real audio, which is less than length when silence was inserted
+     */
+    size_t drainAudio(uint8_t *out, size_t length);
+
+    /*
      * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
      * dropped, packets late by more than the cadence, send failures, the pad's last requested flow
      * rate, and transport underruns. Reads relaxed atomics, so it costs nothing on the sending

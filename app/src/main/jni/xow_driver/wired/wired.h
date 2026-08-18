@@ -61,7 +61,12 @@ public:
     bool enableAudio() override;
     void disableAudio() override;
     bool sendAudio(const uint8_t *samples, size_t length) override;
-    uint32_t underruns() const override { return audioUnderruns.load(std::memory_order_relaxed); }
+    uint32_t underruns() const override
+    {
+        // Both are gaps in the audio, and neither is visible to the other's mechanism
+        return audioUnderruns.load(std::memory_order_relaxed)
+             + audioIdle.load(std::memory_order_relaxed);
+    }
 
 private:
     void readPackets();
@@ -73,6 +78,9 @@ private:
     void audioTransferComplete(libusb_transfer *transfer);
 
     static void LIBUSB_CALL audioCallback(libusb_transfer *transfer);
+
+    /* Fills a transfer from the ring and puts it back on the wire. */
+    bool submitAudioTransfer(libusb_transfer *transfer);
 
     /* Sends a GIP message out interface 0, which is what GipDevice::sendPacket resolves to here. */
     bool sendPacket(const Bytes &data);
@@ -86,12 +94,16 @@ private:
     /*
      * The isochronous ring.
      *
-     * Each transfer carries AUDIO_PACKETS_PER_TRANSFER packets of one millisecond each, because the
-     * bus consumes exactly one packet per USB frame. Their product is queued audio and therefore
-     * latency: four transfers of four packets is 16 ms, against xone's 12 x 8 = 96 ms. The floor is
-     * two transfers - with one in flight nothing is queued behind the one draining, so any delay in
-     * the callback is a gap - and above that the queue only has to cover our own refill, because
-     * the 32 ms sample ring already absorbs the host's jitter.
+     * Every transfer stays in flight: a completion is refilled from the sample ring and resubmitted
+     * immediately, so the endpoint is never left unfed. That is what makes the depth a latency
+     * choice again rather than a safety one - audio sits here for the whole queue before it is
+     * heard, and nothing is gained by holding more of it.
+     *
+     * It was briefly 12 x 8, matching xone, on the theory that the queue had to absorb the
+     * difference between two clocks - the bus at exactly one packet per frame, the samples arriving
+     * over a network. That is a real problem but a queue is the wrong answer to it: a sustained
+     * deficit drains any depth eventually. Pulling fixes it properly, by asking for samples only
+     * when the bus is about to send them and inserting silence for whatever is missing.
      */
     static const int AUDIO_TRANSFERS = 4;
     static const int AUDIO_PACKETS_PER_TRANSFER = 4;
@@ -110,6 +122,16 @@ private:
 
     std::atomic<bool> audioRunning{false};
     std::atomic<uint32_t> audioUnderruns{0};
+
+    /*
+     * Times the queue was completely drained when a buffer arrived, meaning the endpoint had
+     * nothing to send and the audio has a hole in it.
+     *
+     * The per-packet status cannot see this: it reports on packets that were submitted, and this
+     * counts the ones that never were. Reporting zero underruns through audibly broken audio is
+     * exactly what made the first queue depth look adequate when it was not.
+     */
+    std::atomic<uint32_t> audioIdle{0};
     std::thread audioEventThread;
 
     JavaVM *jvm;
