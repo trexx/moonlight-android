@@ -823,6 +823,29 @@ bool Controller::setAudioEnabled(bool enable)
         audioSendFailures.store(0, std::memory_order_relaxed);
 
         /*
+         * A transport that is already streaming is left entirely alone: the samples simply start
+         * being real again.
+         *
+         * The device is configured once and then never renegotiated, which is both what 2.2.11
+         * describes - "once started, audio data flows continually even if the data represents only
+         * silence" - and what xone does, configuring at gip_headset_probe() and never again for
+         * the life of the client. Neither ever asks a device to be reconfigured repeatedly.
+         *
+         * Doing it per session degraded the pad a little each time: first session clean, second
+         * worse, third worse again, cleared only by unplugging, while our own side measured
+         * perfect throughout - 192.2 bytes supplied per packet sent, no underruns, in the bad
+         * sessions as much as the good one.
+         */
+        if (audioTransport != nullptr && audioState == AUDIO_STREAMING)
+        {
+            audioEnabled = true;
+
+            Log::info("Audio: resuming into the running stream");
+
+            return true;
+        }
+
+        /*
          * Tear the audio sub-device down before setting it up, where the transport gives us no
          * other way to be sure of its state.
          *
@@ -900,6 +923,29 @@ bool Controller::setAudioEnabled(bool enable)
     }
 
     audioEnabled = false;
+
+    /*
+     * The stream stays up and carries silence, for the same reason it is configured only once. The
+     * ring stops being filled, drainAudio() finds it empty and pads, and the device sees exactly
+     * what 2.2.11 says it should see when there is nothing to play.
+     */
+    if (audioTransport != nullptr && audioState == AUDIO_STREAMING)
+    {
+        Log::info("Audio session: %u packets sent, %u bytes queued, %u bytes dropped, %u late, "
+                  "%u send failures, %u underruns, last flow rate %u",
+                  audioPacketsSent.load(std::memory_order_relaxed),
+                  audioBytesQueued.load(std::memory_order_relaxed),
+                  audioBytesDropped.load(std::memory_order_relaxed),
+                  audioStarved.load(std::memory_order_relaxed),
+                  audioSendFailures.load(std::memory_order_relaxed),
+                  audioTransport->underruns(),
+                  (unsigned)audioFlowRate);
+
+        Log::info("Audio paused; the stream stays up carrying silence");
+
+        return true;
+    }
+
     audioState = AUDIO_IDLE;
     stopAudioThread = true;
     audioCondition.notify_one();
