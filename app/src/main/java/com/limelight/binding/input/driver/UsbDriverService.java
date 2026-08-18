@@ -29,6 +29,7 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.binding.audio.PadAudioSink;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -61,6 +62,16 @@ public class UsbDriverService extends Service implements UsbDriverListener {
     private final UsbDriverBinder binder = new UsbDriverBinder();
 
     private final ArrayList<AbstractController> controllers = new ArrayList<>();
+
+    /*
+     * Which USB devices we have already taken, by device name.
+     *
+     * handleUsbDeviceState() is reached from both the attach broadcast and the startup
+     * enumeration, and nothing stopped the same device being claimed twice. A second claim builds
+     * a second controller for one pad: it appears twice in the game menu, and the loser of the
+     * race for the audio interface refuses audio while the winner accepts it.
+     */
+    private final HashMap<String, AbstractController> claimedDevices = new HashMap<>();
 
     // Client callback, null when nothing is bound
     private UsbDriverListener listener;
@@ -103,6 +114,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
     public void deviceRemoved(AbstractController controller) {
         // Remove the the controller from our list (if not removed already)
         controllers.remove(controller);
+        claimedDevices.values().remove(controller);
 
         // A pad taking stream audio must leave the sink before its native driver instance is
         // destroyed, or the audio thread keeps queueing into a freed handle. This is the only
@@ -353,6 +365,11 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                 return;
             }
 
+            // Already ours, so leave it alone rather than building a second controller for it
+            if (claimedDevices.containsKey(device.getDeviceName())) {
+                return;
+            }
+
             // Open the device
             UsbDeviceConnection connection = usbManager.openDevice(device);
             if (connection == null) {
@@ -393,6 +410,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                 // user loses audio rather than their controller.
                 if (controller != null) {
                     controllers.add(controller);
+                    claimedDevices.put(device.getDeviceName(), controller);
                     controller.start();
                     return;
                 }
@@ -425,6 +443,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
             // Add this controller to the list
             controllers.add(controller);
+            claimedDevices.put(device.getDeviceName(), controller);
         }
     }
 
