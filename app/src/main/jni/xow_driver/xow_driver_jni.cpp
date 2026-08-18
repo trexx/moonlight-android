@@ -188,6 +188,51 @@ Java_com_limelight_binding_input_driver_GipController_registerNative(JNIEnv *env
  * transport level - one cable is one device, with no pairing, no client slots and no firmware to
  * load - while everything above GipDevice is common.
  */
+/*
+ * Re-enumerates the device, which is the software equivalent of unplugging it.
+ *
+ * A pad left configured by a run that died mid-stream plays stretched and gapped, and nothing sent
+ * over GIP shifts it - not Set Device State: STOP, not RESET, not proposing a different audio
+ * configuration first. Only pulling the cable clears it, and this is that.
+ *
+ * Deliberately separate from creating the driver, and called only when the previous run is known
+ * to have died with audio running. Doing it on every connect put the device into an attach loop,
+ * with a permission prompt each time round.
+ */
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_binding_input_driver_XboxWiredGipController_resetWiredDevice(JNIEnv *env,
+                                                                                jclass clazz,
+                                                                                jint fd) {
+    libusb_context *ctx = nullptr;
+    libusb_device_handle *handle = nullptr;
+
+    if (libusb_set_option(nullptr, LIBUSB_OPTION_NO_DEVICE_DISCOVERY, nullptr) != LIBUSB_SUCCESS) {
+        return JNI_FALSE;
+    }
+
+    if (libusb_init(&ctx) < 0) {
+        return JNI_FALSE;
+    }
+
+    if (libusb_wrap_sys_device(ctx, (intptr_t) fd, &handle) < 0 || handle == nullptr) {
+        libusb_exit(ctx);
+
+        return JNI_FALSE;
+    }
+
+    /*
+     * NOT_FOUND means the device had to re-enumerate to come back, which is a success here - it is
+     * the whole point - and leaves the handle invalid either way, so it is closed regardless.
+     */
+    int error = libusb_reset_device(handle);
+
+    libusb_close(handle);
+    libusb_exit(ctx);
+
+    return (error == 0 || error == LIBUSB_ERROR_NOT_FOUND) ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C"
 JNIEXPORT jlong JNICALL
 Java_com_limelight_binding_input_driver_XboxWiredGipController_createWiredDriver(JNIEnv *env,

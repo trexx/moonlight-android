@@ -14,6 +14,7 @@ import com.limelight.binding.input.touch.RelativeTouchContext;
 import com.limelight.binding.input.touch.TrackpadContext;
 import com.limelight.binding.input.driver.UsbDriverService;
 import com.limelight.binding.input.driver.GipController;
+import com.limelight.binding.input.driver.XboxWiredGipController;
 import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
@@ -2357,6 +2358,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             final int message;
 
             if (succeeded) {
+                // Remembered across a process that may not get to shut down. A cabled pad left
+                // streaming by a killed run has to be re-enumerated before it will play properly
+                // again, and this is how the next run knows to.
+                if (controller instanceof XboxWiredGipController) {
+                    XboxWiredGipController.setAudioActive(Game.this, enabling);
+                }
+
                 message = enabling ? R.string.toast_pad_audio_enabled
                                    : R.string.toast_pad_audio_disabled;
             }

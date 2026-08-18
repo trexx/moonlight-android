@@ -403,7 +403,8 @@ public class UsbDriverService extends Service implements UsbDriverListener {
              * opt-in until it has been run against real pads.
              */
             if (prefConfig.wiredPadAudio && XboxWiredGipController.canClaimDevice(device)) {
-                controller = XboxWiredGipController.create(device, connection, nextDeviceId++, this);
+                controller = XboxWiredGipController.create(this, device, connection,
+                                                           nextDeviceId++, this);
 
                 // create() releases the interface but leaves the connection open on failure, which
                 // is exactly what the fallback needs - so fall back rather than giving up, and the

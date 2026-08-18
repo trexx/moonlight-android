@@ -1,5 +1,7 @@
 package com.limelight.binding.input.driver;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbInterface;
@@ -54,8 +56,55 @@ public class XboxWiredGipController extends GipController {
      * @return the controller, or null if the device could not be claimed — in which case nothing
      *         has been left running and the caller still owns {@code connection}
      */
-    public static XboxWiredGipController create(UsbDevice device, UsbDeviceConnection connection,
+    /**
+     * Records whether audio is streaming to a cabled pad, so the next run can tell whether this one
+     * ended cleanly.
+     *
+     * <p>A pad left configured by a run that died mid-stream plays stretched and gapped until it is
+     * physically unplugged — nothing over GIP shifts it. This is how {@link #create} knows to
+     * re-enumerate it rather than doing so on every connect, which put the device into an attach
+     * loop with a permission prompt each time round.
+     *
+     * <p>Written synchronously: the point of it is to survive a process that is about to be killed
+     * without warning, and a queued write would not.
+     */
+    public static void setAudioActive(Context context, boolean active) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit()
+                .putBoolean(PREF_AUDIO_ACTIVE, active)
+                .commit();
+    }
+
+    private static final String PREFS = "wired_gip";
+    private static final String PREF_AUDIO_ACTIVE = "audio_active";
+
+    public static XboxWiredGipController create(Context context, UsbDevice device,
+                                                UsbDeviceConnection connection,
                                                 int deviceId, UsbDriverListener listener) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+
+        if (prefs.getBoolean(PREF_AUDIO_ACTIVE, false)) {
+            /*
+             * The last run died with audio streaming, so the pad is still configured by it and will
+             * play badly however we set it up. Re-enumerating is the only thing that clears that —
+             * it is what unplugging the cable does, which is the only recovery found by hand.
+             *
+             * Cleared first, so a reset that somehow fails to fix anything cannot make every future
+             * connect reset as well.
+             */
+            prefs.edit().putBoolean(PREF_AUDIO_ACTIVE, false).commit();
+
+            LimeLog.warning("Wired GIP: previous session left audio running, re-enumerating the pad");
+
+            resetWiredDevice(connection.getFileDescriptor());
+
+            // The descriptor is dead now whether or not the reset reported success. Android will
+            // send a fresh attach when the device comes back, and that connect claims it properly.
+            connection.close();
+
+            return null;
+        }
+
         /*
          * Claimed here rather than natively, and forced. Android's own driver holds this interface
          * - that is the whole reason the pad works without us - and the only thing that detaches it
@@ -148,6 +197,7 @@ public class XboxWiredGipController extends GipController {
         return XboxOneController.canClaimDevice(device);
     }
 
+    private static native boolean resetWiredDevice(int fd);
     private static native long createWiredDriver(int fd);
     private static native boolean startWiredDriver(long handle);
     private static native long wiredControllerHandle(long handle);
