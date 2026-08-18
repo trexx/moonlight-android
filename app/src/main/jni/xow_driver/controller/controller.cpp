@@ -136,6 +136,25 @@ Controller::~Controller()
     setAudioEnabled(false);
 
     /*
+     * The stream is left running between sessions on purpose - the device is configured once and
+     * carries silence when there is nothing to play - so going away is the one moment it genuinely
+     * has to be stopped. Nothing else will: 2.2.11 has it stream until told otherwise, and a pad
+     * on a cable is not re-enumerated when we exit.
+     */
+    if (audioDeviceId != 0)
+    {
+        if (audioTransport != nullptr)
+        {
+            audioTransport->disableAudio();
+        }
+
+        if (!setDeviceState(audioDeviceId, STATE_STOP))
+        {
+            Log::error("Failed to stop the audio device on teardown");
+        }
+    }
+
+    /*
      * Only where the device is ours to switch off. A pad on the adapter is: when this driver stops,
      * nothing else is driving it, and leaving it powered would drain a battery.
      *
@@ -596,6 +615,21 @@ void Controller::identifyReceived(uint8_t id, const IdentifyData *identify,
 
         Log::info("Audio device %u offers %zu format pair(s), first %02x/%02x",
                   id, parsed.size() / METADATA_AUDIO_FORMAT_LENGTH, parsed[0], parsed[1]);
+
+        /*
+         * Silenced on discovery, because we may not be the first host to have configured it.
+         *
+         * 2.2.11 keeps a started audio device streaming "until the device is powered off,
+         * disconnected, or until the host requests a new audio configuration first through
+         * transmission of a Set Device State: STOP" - so a process that exits without sending one
+         * leaves the device playing, and on a cable nothing re-enumerates it in between. It was
+         * heard as repeating noise the moment a stream started, before audio had been enabled at
+         * all, because the previous run's stream had never stopped.
+         */
+        if (!setDeviceState(audioDeviceId, STATE_STOP))
+        {
+            Log::error("Failed to silence the audio device on discovery");
+        }
     }
 
     // The metadata exchange is done, so the device is in Idle and can be started. Wakes the
