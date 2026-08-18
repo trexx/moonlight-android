@@ -715,12 +715,21 @@ void Controller::audioSamplesReceived(const AudioSamplesData *samples)
 
     audioFlowRate = samples->flowRate;
 
-    int delta = static_cast<int>(audioFlowRate) - static_cast<int>(audioPacketBytes);
+    /*
+     * Compared against what a message actually carries on this transport, which is not the same
+     * quantity on both. The adapter sends one message per 8 ms buffer, so the device asks in whole
+     * buffers; a cabled pad sends one per millisecond, so it asks in milliseconds. Comparing a
+     * per-millisecond request against the buffer size reported every healthy rate as an excursion.
+     */
+    size_t expected = audioTransport != nullptr ? AUDIO_BYTES_PER_SECOND / 1000
+                                                : audioPacketBytes;
+
+    int delta = static_cast<int>(audioFlowRate) - static_cast<int>(expected);
 
     if (delta > AUDIO_FLOW_RATE_TOLERANCE || delta < -AUDIO_FLOW_RATE_TOLERANCE)
     {
         Log::debug("Audio flow rate %u is outside the expected band around %u",
-                   audioFlowRate, (unsigned)audioPacketBytes);
+                   audioFlowRate, (unsigned)expected);
     }
 }
 

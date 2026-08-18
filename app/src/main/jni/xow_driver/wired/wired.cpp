@@ -423,25 +423,24 @@ bool WiredController::submitAudioTransfer(libusb_transfer *transfer)
             audioIdle.fetch_add(1, std::memory_order_relaxed);
         }
 
+        /*
+         * Packed contiguously, at the size actually being sent rather than at the maximum stride.
+         * The kernel lays isochronous packets out one after another by their declared lengths, so
+         * a gap between them is not padding - every packet after the first would be read from the
+         * wrong offset, which is heard as noise.
+         */
         gipController->encodeAudioFragment(fragment, fragmentBytes,
-                                           buffer + i * AUDIO_PACKET_BYTES);
+                                           buffer + i * packetBytes);
     }
 
     libusb_fill_iso_transfer(transfer, device->deviceHandle(),
                              UsbWiredDevice::AUDIO_ENDPOINT_OUT,
                              buffer,
-                             static_cast<int>(AUDIO_PACKETS_PER_TRANSFER * AUDIO_PACKET_BYTES),
+                             static_cast<int>(AUDIO_PACKETS_PER_TRANSFER * packetBytes),
                              AUDIO_PACKETS_PER_TRANSFER, audioCallback, this, 1000);
 
-    /*
-     * Stride stays at the maximum so each message keeps its own slot in the buffer, but the packet
-     * lengths are what we actually filled - the device reads one message per packet, and a packet
-     * longer than its message would feed it whatever the last one left behind.
-     */
-    for (int i = 0; i < AUDIO_PACKETS_PER_TRANSFER; i++)
-    {
-        transfer->iso_packet_desc[i].length = static_cast<unsigned int>(packetBytes);
-    }
+    // Every packet in a transfer carries the same size, since the rate is read once per transfer
+    libusb_set_iso_packet_lengths(transfer, static_cast<unsigned int>(packetBytes));
 
     int error = libusb_submit_transfer(transfer);
 
