@@ -2323,14 +2323,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     /**
-     * @return the pads paired through the adapter, in pairing order, or empty if the driver is not
+     * @return every GIP pad we are driving - adapter or cable - or empty if the driver is not
      *         bound. The game menu lists these so the user can send audio to one.
      */
-    public List<GipController> getWirelessControllers() {
+    public List<GipController> getGipControllers() {
         if (usbDriverBinder == null) {
             return Collections.emptyList();
         }
-        return usbDriverBinder.getWirelessControllers();
+        return usbDriverBinder.getGipControllers();
     }
 
     /** @return which pads are currently taking the stream's audio */

@@ -164,7 +164,7 @@ public class GameMenu {
      * than letting a selection quietly do nothing.
      */
     private void showPadAudioMenu() {
-        List<GipController> controllers = game.getWirelessControllers();
+        List<GipController> controllers = game.getGipControllers();
         PadAudioSink sink = game.getPadAudioSink();
         List<MenuOption> options = new ArrayList<>();
 
@@ -282,15 +282,15 @@ public class GameMenu {
         if (game.hasXboxWirelessDongle()) {
             options.add(new MenuOption(getString(R.string.game_menu_pair_xbox_controller),
                     () -> game.startDonglePairing()));
+        }
 
-            // Only when something is actually paired, and only when the stream's audio is a
-            // format a pad can take - otherwise the submenu would be a list whose every entry
-            // refuses.
-            if (!game.getWirelessControllers().isEmpty()
-                    && game.getPadAudioSink().isFormatSupported()) {
-                options.add(new MenuOption(getString(R.string.game_menu_pad_audio),
-                        () -> showPadAudioMenu()));
-            }
+        // Outside the adapter check: a cabled pad has a headphone jack too, and gating this on the
+        // adapter hid the entry entirely when the only pad was on a cable. Still requires a pad to
+        // actually be present and the stream's audio to be a format one can take - otherwise the
+        // submenu would be a list whose every entry refuses.
+        if (!game.getGipControllers().isEmpty() && game.getPadAudioSink().isFormatSupported()) {
+            options.add(new MenuOption(getString(R.string.game_menu_pad_audio),
+                    () -> showPadAudioMenu()));
         }
 
         options.add(new MenuOption(getString(R.string.game_menu_toggle_performance_overlay), () -> game.togglePerformanceOverlay()));

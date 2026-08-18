@@ -209,14 +209,28 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
 
         /**
-         * @return every controller currently paired through an adapter, in pairing order, which
-         *         is what the in-game menu lists so the user can pick which pads get audio
+         * @return every GIP controller we are driving, whatever it is attached by: pads paired
+         *         through an adapter in pairing order, then any on a cable. This is what the
+         *         in-game menu lists so the user can pick which pads get audio.
+         *
+         * <p>Cabled pads belong here as much as wireless ones — a {@link XboxWiredGipController}
+         * is a {@link GipController} with an isochronous transport under it, and its headphone
+         * jack works the same way. Listing only the adapter's pads is what made the audio menu
+         * entry invisible with a cable plugged in and no adapter pad paired.
          */
-        public List<GipController> getWirelessControllers() {
+        public List<GipController> getGipControllers() {
             List<GipController> found = new ArrayList<>();
+
             for (XboxWirelessDongle dongle : xboxWirelessDongles) {
                 found.addAll(dongle.getControllers());
             }
+
+            for (AbstractController controller : controllers) {
+                if (controller instanceof GipController gip) {
+                    found.add(gip);
+                }
+            }
+
             return found;
         }
 
