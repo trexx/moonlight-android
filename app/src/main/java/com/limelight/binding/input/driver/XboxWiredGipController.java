@@ -68,6 +68,46 @@ public class XboxWiredGipController extends GipController {
      * <p>Written synchronously: the point of it is to survive a process that is about to be killed
      * without warning, and a queued write would not.
      */
+    /**
+     * Re-enumerates the pad if the previous run died while audio was streaming.
+     *
+     * <p>Separate from {@link #create} because the outcomes differ: failing to create means fall
+     * back to the standard driver, while a reset means claim nothing at all yet and wait for the
+     * device to come back. Conflating them made the caller fall through to
+     * {@link XboxOneController} holding a connection this had already closed.
+     *
+     * @return true if the device was reset, in which case the connection is closed, nothing should
+     *         be claimed now, and Android will send a fresh attach when it re-enumerates
+     */
+    public static boolean resetIfPreviousSessionUnclean(Context context,
+                                                        UsbDeviceConnection connection) {
+        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+
+        if (!prefs.getBoolean(PREF_AUDIO_ACTIVE, false)) {
+            return false;
+        }
+
+        /*
+         * A pad left configured by a run that died mid-stream plays stretched and gapped however it
+         * is set up afterwards, and nothing sent over GIP shifts it. Re-enumerating is what
+         * unplugging the cable does, and that is the only recovery ever found by hand. xone resets
+         * on every probe; this resets only when it is needed, because on Android it costs a
+         * reconnect where on Linux it costs nothing.
+         *
+         * Cleared first, so a reset that fixes nothing cannot make every future connect reset too.
+         */
+        prefs.edit().putBoolean(PREF_AUDIO_ACTIVE, false).commit();
+
+        LimeLog.warning("Wired GIP: previous session left audio running, re-enumerating the pad");
+
+        resetWiredDevice(connection.getFileDescriptor());
+
+        // Dead either way now: a successful reset re-enumerates the device out from under it
+        connection.close();
+
+        return true;
+    }
+
     public static void setAudioActive(Context context, boolean active) {
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit()
@@ -81,29 +121,6 @@ public class XboxWiredGipController extends GipController {
     public static XboxWiredGipController create(Context context, UsbDevice device,
                                                 UsbDeviceConnection connection,
                                                 int deviceId, UsbDriverListener listener) {
-        SharedPreferences prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-
-        if (prefs.getBoolean(PREF_AUDIO_ACTIVE, false)) {
-            /*
-             * The last run died with audio streaming, so the pad is still configured by it and will
-             * play badly however we set it up. Re-enumerating is the only thing that clears that —
-             * it is what unplugging the cable does, which is the only recovery found by hand.
-             *
-             * Cleared first, so a reset that somehow fails to fix anything cannot make every future
-             * connect reset as well.
-             */
-            prefs.edit().putBoolean(PREF_AUDIO_ACTIVE, false).commit();
-
-            LimeLog.warning("Wired GIP: previous session left audio running, re-enumerating the pad");
-
-            resetWiredDevice(connection.getFileDescriptor());
-
-            // The descriptor is dead now whether or not the reset reported success. Android will
-            // send a fresh attach when the device comes back, and that connect claims it properly.
-            connection.close();
-
-            return null;
-        }
 
         /*
          * Claimed here rather than natively, and forced. Android's own driver holds this interface
