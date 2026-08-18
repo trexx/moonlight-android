@@ -2479,6 +2479,31 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * @return mean milliseconds from a frame arriving to it being presented, over the whole
      *         session, or 0 if no frames have been received
      */
+    /**
+     * Logs the session's video totals, for comparing one run against another.
+     *
+     * <p>Debug builds only, and once per stream, so it costs nothing on any frame path. It exists
+     * because the numbers that matter for a comparison are only otherwise reachable through
+     * {@code RendererException}, which is built on a crash, or the post-stream latency toast, which
+     * rounds to milliseconds and cannot be read back off the device.
+     *
+     * <p>Totals rather than the overlay's per-second window: the overlay forces GPU composition on
+     * this hardware, so it changes frame timing as well as measuring it.
+     */
+    public void logStreamSummary(String label) {
+        if (!BuildConfig.DEBUG) {
+            return;
+        }
+
+        LimeLog.info("Stream summary [" + label + "]: " +
+                globalVideoStats.totalFramesReceived + " received, " +
+                globalVideoStats.totalFramesRendered + " rendered, " +
+                globalVideoStats.framesLost + " lost in " +
+                globalVideoStats.frameLossEvents + " events, " +
+                getAverageEndToEndLatency() + " ms end-to-end, " +
+                getAverageDecoderLatency() + " ms decoder");
+    }
+
     public int getAverageEndToEndLatency() {
         if (globalVideoStats.totalFramesReceived == 0) {
             return 0;

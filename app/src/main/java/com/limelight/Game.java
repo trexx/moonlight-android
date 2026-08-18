@@ -940,6 +940,12 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             int videoFormat = decoderRenderer.getActiveVideoFormat();
 
             displayedFailureDialog = true;
+
+            // Before stopConnection(), which tears the renderer down. Labelled with whether a pad
+            // was taking audio, so two runs can be compared directly.
+            decoderRenderer.logStreamSummary(padAudioSink.hasTargets() ? "pad audio on"
+                                                                       : "pad audio off");
+
             stopConnection();
 
             if (prefConfig.enableLatencyToast) {
