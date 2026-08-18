@@ -635,15 +635,41 @@ open** — the feature works but has not been shown to be worth using.
 
       Flow rate reads 0 on a cable and that is expected: it arrives on Audio Capture messages,
       which come in on the isochronous IN endpoint that nothing here reads.
-- [ ] **A cabled pad survives an app restart without being replugged.** Two faults made this fail
-      and both are fixed but unconfirmed: the metadata-timeout thread was never attached to the
-      JVM, so the handshake died with `no random source` whenever a pad did not answer promptly;
-      and teardown sent Set Device State: OFF to a pad that Android takes straight back, leaving it
-      unresponsive to the next connect. Restart the app twice over with the cable untouched.
+- [x] **Enabling and disabling repeatedly stays clean**, without unplugging or restarting.
+      **The device is configured once and never renegotiated** - this is the rule to keep. 2.2.11
+      has audio flow continually "even if the data represents only silence", and xone configures at
+      `gip_headset_probe()` and never again for the life of the client. A per-session
+      stop/configure/start cycle degrades the pad a step each time: first session clean, each one
+      after it worse, cleared only by unplugging - while our own side measures perfect throughout.
+      *If cabled audio ever starts degrading across sessions again, look here first.*
+- [!] **A pad left streaming by a killed process plays degraded until the cable is pulled.**
+      Understood rather than mysterious, and avoided entirely by exiting cleanly - disable audio,
+      or disconnect from the menu, before closing.
+
+      2.2.11 keeps a started audio device streaming until it is powered off, disconnected or told
+      to stop, and Android closes the USB connection before any teardown of ours runs, so the stop
+      fails with `NO_DEVICE`. Every recovery available to a *new* process was tried on hardware:
+
+      | Attempt | Result |
+      |---|---|
+      | Set Device State: STOP on discovery and on teardown | no effect |
+      | Set Device State: RESET to the audio sub-device | no effect |
+      | Proposing the other advertised format first, so the real one is a change | ran, no effect |
+      | Set Device State: RESET to the primary device | pad leaves the USB bus, permission prompt loop |
+      | `libusb_reset_device()` re-enumeration, as xone does at probe | pad unclaimed, **input dead**, USB stack cycling |
+
+      **Do not reach for re-enumeration again without reading that last row.** It is what unplugging
+      does and what the reference implementation does at every probe, and through a wrapped
+      descriptor on Android it is not equivalent - it cost input, which is the product.
+      `XboxWiredGipController.resetIfPreviousSessionUnclean()` is kept unused as the record.
+- [ ] **Rate adaptation's effect is unmeasured.** The pad asks for 188, 192 or 196 bytes per
+      millisecond in the flow field of its Audio Capture messages, and now gets what it asks for -
+      3.2.5.1.5 calls honouring it "the mechanism GIP devices use to eliminate pops and clicks".
+      Whether it prevents audible drift over a long session has not been tested.
+- [ ] **Two pads at once on a cable**, or one cabled and one wireless together. Never tried.
 - [ ] **A pad on a USB cable without the driver enabled is not offered pad audio at all**, rather
-      than being offered it and going silent. Wired audio needs isochronous transfers (interface 1 alt 1, 228 B at 1 ms) and
-      Android's `UsbDeviceConnection` has no isochronous API, so the cabled path is unimplemented
-      rather than merely untested. Confirm the menu entry stays absent for a cabled-only pad.
+      than being offered it and going silent. Confirm the menu entry stays absent when
+      *Headphone audio on cabled Xbox pads* is off.
 
 ---
 
