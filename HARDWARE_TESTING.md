@@ -910,6 +910,24 @@ open** — the feature works but has not been shown to be worth using.
 
 ---
 
+## 11. Steam controllers announced as `LI_CTYPE_STEAM`
+
+Valve's vendor ID falls through `sendControllerArrival()`'s vendor switch to
+`guessControllerType()`, which now answers `LI_CTYPE_STEAM` for the three Valve gamepad types
+SDL's database lists. The type only selects which button glyphs the host draws, so a wrong
+answer is cosmetic — but it is cosmetic *on the host*, where nothing in this client's logs
+will show it.
+
+- [ ] **A Steam Controller pairs and is playable at all.** More basic than the glyphs, and
+      not a given: this client has never been tested against one.
+- [ ] **The host draws Steam prompts, not Xbox or generic ones.** Sunshine and GFE both pass
+      the type through to the game, so check in a title that shows controller glyphs.
+- [ ] **A HORIPAD for Steam is still reported as unknown.** It is deliberately left unmapped —
+      Steam-branded, but with no touchpads, gyro or grips — so it should keep whatever the
+      host guesses for an unknown pad rather than gaining Steam prompts.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -929,3 +947,4 @@ open** — the feature works but has not been shown to be worth using.
 | §9 v2 security | A pad that uses the ECDH handshake — none has been available to test against |
 | §9 multi-pad | Four pads on one adapter, to confirm per-pad sequence pools |
 | §10 pad audio | Two adapter pads with integrated 3.5 mm jacks, and wired headphones for each |
+| §11 Steam type | A Valve Steam Controller, and a HORIPAD for Steam for the negative case |
