@@ -702,6 +702,31 @@ Driving setup from the hello turned stuttering audio into "no headset detected",
 | Set Device State: STOP on discovery and on teardown | No effect |
 | Set Device State: RESET to the audio sub-device | No effect |
 | RESET, then waiting for the hello §3.1.1 promises | **No hello, ever - loses audio entirely** |
+| Adopting the retained configuration: bare START, no renegotiation | **Accepted in 6 ms, still stutters** |
+| Proposing the other advertised format first | Ran, no effect - and caused the pitch shift |
+| Set Device State: RESET to the primary device | Pad leaves the USB bus, permission prompt loop |
+| `libusb_reset_device()` re-enumeration, at probe | Pad unclaimed, **input dead**, USB stack cycling |
+
+**This is a dead end at the protocol level, and the last row of evidence is the strongest.** Adopting
+the stale configuration works exactly as designed - the device accepts a bare START, reports its
+volume six milliseconds later, and streams - and the two sessions then measure *identically*:
+
+| | Fresh (`announced yes`) | Adopted (`announced no`) |
+|---|---|---|
+| Supplied | 192055 B/s (100.0%) | 192000 B/s (100.0%) |
+| Drained | 999.6 packets/s | 999.9 packets/s |
+| Dropped / late / failures / underruns | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| Flow rate | 192 | 192 |
+
+One sounds right and one stutters. Every message GIP defines for changing a sub-device's state has
+now been tried on hardware, the device reports itself satisfied throughout - a flow rate of 192 is
+it asking for exactly what we send - and delivery is provably perfect. What differs is that the
+pad's audio hardware has not been power-cycled, and nothing in the protocol power-cycles it.
+
+**Unplugging the cable is the fix, and it is the only one.** Treat that as the answer rather than as
+a workaround waiting to be replaced, and spend effort on making it *visible* to the user - the
+`announced no` line predicts the fault before anyone listens - rather than on a seventh way to ask
+the device to reset itself.
 | Proposing the device's other format first, so the real one is a change | Confirmed to run, no effect - **and withdrawn**, see below |
 | Set Device State: RESET to the primary device | Takes the pad off the USB bus; permission prompt loop |
 | `libusb_reset_device()` to re-enumerate, as xone does at probe | Pad left unclaimed, **input dead**, USB stack cycling |

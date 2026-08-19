@@ -758,6 +758,16 @@ open** — the feature works but has not been shown to be worth using.
       hardware: **the pad never announces again**, so the session ends with no audio device at all
       and the menu reports "no headset detected". Reverted. Do not re-try this without a way to
       recover a sub-device that goes silent.
+- [!] **Adopting the stale configuration does not cure the stutter.** *Measured 2026-08-19.* The
+      mechanism works: `announced no` -> `adopting its configuration` -> volume six milliseconds
+      later -> streaming, with no format proposal and no fallback. The two sessions then measure
+      identically - 100.0% supplied, ~1000 packets/s, zero dropped, late, failed and underrun, flow
+      rate 192 in both - and the adopted one still stutters.
+
+      **Stop looking for a protocol fix.** Every GIP state message has now been tried; the table in
+      `AUDIO.md` has all seven. Unplugging the cable is the answer. The change was kept because it
+      is what 2.2.11 and xone both describe and it sends strictly less to the device, not because
+      it helped - do not read it as a fix.
 - [ ] **A relaunched session adopts the pad's configuration instead of rebuilding it.** The check
       for the stutter itself. Unplug first for a clean baseline, then:
 
