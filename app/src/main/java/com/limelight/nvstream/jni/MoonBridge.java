@@ -123,10 +123,6 @@ public class MoonBridge {
     public static final byte LI_CTYPE_XBOX     = 0x01;
     public static final byte LI_CTYPE_PS       = 0x02;
     public static final byte LI_CTYPE_NINTENDO = 0x03;
-    // Only ever produced by guessControllerType(), which reads SDL's controller database
-    // natively; no Java caller assigns it, since nothing here can recognise a Steam pad
-    // from an InputDevice alone.
-    public static final byte LI_CTYPE_STEAM    = 0x04;
 
     public static final short LI_CCAP_ANALOG_TRIGGERS = 0x01;
     public static final short LI_CCAP_RUMBLE          = 0x02;

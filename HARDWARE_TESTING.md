@@ -240,17 +240,12 @@ Small changes, but each touches a path that is easy to break silently.
 
 ---
 
-## 5. Stream decryption (Mbed TLS PSA API)
+## 5. Audio decryption (AES-CBC under mbedTLS)
 
 Audio is the only stream encrypted with AES-CBC — video, control and RTSP all use AES-GCM.
 When CBC breaks, the picture is perfect and only the sound disappears, with no error shown
 to the user, so this needs checking explicitly rather than assuming "video works" means
 crypto works.
-
-Since the PSA migration (upstream `518b244`) every one of those paths was rewritten, not
-just the CBC one, so this section now has to prove out GCM as well. Both directions matter:
-GCM decrypt no longer shuffles the tag and ciphertext around in place, and GCM encrypt is
-what carries Gen 7+ input to the host.
 
 Requires a paired host actually streaming. The failure mode is silent, so run the log check
 rather than trusting your ears alone: a host sending no audio at all looks identical.
@@ -272,22 +267,15 @@ rather than trusting your ears alone: a host sending no audio at all looks ident
       `Frames written` must advance between samples and `Standby` must be `no` while
       streaming. A started-but-starved AudioTrack is exactly what the CBC padding bug
       produced.
-- [ ] **Keyboard and mouse input still reach the host.** Pre-Gen 7 hosts encrypt input with
-      CBC, applying the caller's IV once and then chaining, and the PSA rewrite reproduces
-      that by keeping one cipher operation alive across packets. Hosts new enough to use
-      Gen 7+ input take the GCM branch instead and will not exercise it, so this only proves
-      out against an older host.
+- [ ] **Keyboard and mouse input still reach the host.** The carried patch also changes IV
+      handling for non-GCM contexts, which is the pre-Gen 7 input encryption path. Hosts new
+      enough to use Gen 7+ input will not exercise it, so this only proves out against an
+      older host.
 - [ ] **Decrypt-failure counters read zero.** The end-of-stream summary now ends both RTP
       lines with a decrypt-failed count, and the overlay shows a line only when one is
       non-zero — so on a healthy stream that line should be *absent*, not zero. To prove the
       counter actually moves, remove `MBEDTLS_CIPHER_PADDING_PKCS7` from
       `moonlight_mbedtls_config.h`, rebuild, and confirm the audio count climbs.
-- [ ] **Nothing fails only at stream start, and only sometimes.** PSA keeps its key slots in
-      globals that each stream thread first touches on its own, which is why the config
-      enables `MBEDTLS_THREADING_C`. A race there would not be a clean failure: it would be
-      an occasional stream that decrypts nothing, or one stream of the several, and it would
-      come and go between launches. Start and stop a stream ten or so times rather than
-      trusting one long session, since a single good session says nothing about this.
 
 ### Stream encryption setting
 
@@ -910,24 +898,6 @@ open** — the feature works but has not been shown to be worth using.
 
 ---
 
-## 11. Steam controllers announced as `LI_CTYPE_STEAM`
-
-Valve's vendor ID falls through `sendControllerArrival()`'s vendor switch to
-`guessControllerType()`, which now answers `LI_CTYPE_STEAM` for the three Valve gamepad types
-SDL's database lists. The type only selects which button glyphs the host draws, so a wrong
-answer is cosmetic — but it is cosmetic *on the host*, where nothing in this client's logs
-will show it.
-
-- [ ] **A Steam Controller pairs and is playable at all.** More basic than the glyphs, and
-      not a given: this client has never been tested against one.
-- [ ] **The host draws Steam prompts, not Xbox or generic ones.** Sunshine and GFE both pass
-      the type through to the game, so check in a title that shows controller glyphs.
-- [ ] **A HORIPAD for Steam is still reported as unknown.** It is deliberately left unmapped —
-      Steam-branded, but with no touchpads, gyro or grips — so it should keep whatever the
-      host guesses for an unknown pad rather than gaining Steam prompts.
-
----
-
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -947,4 +917,3 @@ will show it.
 | §9 v2 security | A pad that uses the ECDH handshake — none has been available to test against |
 | §9 multi-pad | Four pads on one adapter, to confirm per-pad sequence pools |
 | §10 pad audio | Two adapter pads with integrated 3.5 mm jacks, and wired headphones for each |
-| §11 Steam type | A Valve Steam Controller, and a HORIPAD for Steam for the negative case |
