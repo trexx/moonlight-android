@@ -646,6 +646,13 @@ open** — the feature works but has not been shown to be worth using.
       Understood rather than mysterious, and avoided entirely by exiting cleanly - disable audio,
       or disconnect from the menu, before closing.
 
+      **Part of what was attributed here was ours.** Degraded audio on every session after the
+      first had a second cause entirely on the host side - the ring's cushion was built once and
+      never rebuilt - and that one is fixed; see the re-priming check below. What remains device-side
+      is what was seen *before audio was ever enabled* in a new process: the previous run's stream
+      still playing, heard as repeating noise the moment a stream started. Only that part needs the
+      cable pulled. Re-test this row after the re-priming fix rather than assuming it is unchanged.
+
       2.2.11 keeps a started audio device streaming until it is powered off, disconnected or told
       to stop, and Android closes the USB connection before any teardown of ours runs, so the stop
       fails with `NO_DEVICE`. Every recovery available to a *new* process was tried on hardware:
@@ -695,6 +702,37 @@ open** — the feature works but has not been shown to be worth using.
 
       *Streaming was unaffected throughout - both measured runs show zero frame loss - so this is
       an audio-path fault only.*
+- [ ] **Audio is as good on the second session as on the first.** This is the check for the ring
+      re-priming fix, and it is the one that reproduced the fault: enable pad audio, listen,
+      disconnect from the menu, reconnect, and enable it again. Before the fix the second session
+      and every one after it played gapped and slightly slowed, because disabling audio leaves the
+      stream up carrying silence - so the ring drains flat - and re-enabling resumes into the
+      running stream without ever rebuilding the cushion. Do three or four sessions in a row: the
+      old fault got no worse after the second, it was simply absent from the first and present from
+      then on.
+
+      Then do the same across an **app restart**, which is how it was reported.
+
+      Read the session summary rather than trusting your ears alone, since the counters separate
+      this from the device-side fault below:
+
+      ```
+      Audio session: N packets sent, N bytes queued, N bytes dropped, N late, N send failures,
+                     N underruns, last flow rate 192
+      ```
+
+      Underruns climbing while bytes dropped stays at zero is a starved ring, which is this.
+      Bytes dropped climbing instead is the opposite - the host outrunning the link - and is not.
+      A flow rate that sits at 196 rather than moving between 188, 192 and 196 means the device is
+      asking for more than a 48 kHz source can supply, which no amount of cushion fixes.
+
+      Expect a few milliseconds of silence at the start of each session, and after any gap: that is
+      the cushion being rebuilt, and it is deliberate.
+- [ ] **The re-prime does not thrash on a healthy stream.** Untested trade-off, and the risk the
+      fix carries. A completely empty ring now costs a full prefill of deliberate silence, where
+      before it cost one padded millisecond, so a stream that empties the ring *often* would chop
+      rather than merely degrade. It should not happen - the verified sessions report no shortfalls
+      at all - but listen across a long session and check underruns are not climbing steadily.
 - [ ] **Rate adaptation's effect is unmeasured.** The pad asks for 188, 192 or 196 bytes per
       millisecond in the flow field of its Audio Capture messages, and now gets what it asks for -
       3.2.5.1.5 calls honouring it "the mechanism GIP devices use to eliminate pops and clicks".

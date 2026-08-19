@@ -541,9 +541,14 @@ That discipline is what eventually pointed at the handshake instead of at the se
   so a device that ever disagrees will be visible rather than silently mismatched.
 - **Stereo 48 kHz only.** Samples are forwarded verbatim with no downmix, so a surround stream
   disables the feature rather than sending something wrong.
-- **A pad left streaming by a killed process plays degraded until the cable is pulled.** See
+- **A pad left streaming by a killed process is heard until the cable is pulled.** See
   "Audio over a cable" below; it is understood rather than mysterious, and exiting cleanly avoids
-  it.
+  it. What survives is the previous run's stream, heard as repeating noise the moment a new stream
+  starts, before audio has been enabled at all.
+
+  Degraded playback across sessions used to be listed here as well, and that part was ours: the
+  ring's cushion was primed once and never rebuilt. It is fixed, and the two are worth keeping
+  apart — this one needs the cable pulled, that one did not.
 
   A pad whose sub-device declares no usable format is still refused with a message saying so,
   rather than moving the stream's audio off the TV into silence.
@@ -574,7 +579,7 @@ claiming only interface 1 is therefore not an option.
 a 6-byte header, 198 inside the endpoint's 228. The bus consumes exactly one packet per frame, so
 that is fixed rather than chosen.
 
-Four things were got wrong and are worth not repeating:
+Five things were got wrong and are worth not repeating:
 
 - **Packets are packed contiguously by their declared length**, not at a fixed stride. Writing each
   message at the maximum stride while declaring a shorter length makes every packet after the first
@@ -587,6 +592,36 @@ Four things were got wrong and are worth not repeating:
   the host is late becomes silence, and the ring never recovers. Real audio interleaved with silence
   does not sound like a dropout; it sounds slowed down. Silence is sent deliberately until a
   cushion accumulates.
+- **The cushion has to be rebuilt, not just built.** Priming was a start-up step, done once when the
+  transport came up, and the cushion only ever shrinks after that: a shortfall is padded with
+  silence and nothing puts the missing milliseconds back. So one late millisecond left the rest of
+  the session playing from a ring hovering at empty.
+
+  It bites hardest between sessions, which is how it was found — audio gapped and slightly slowed
+  on every session after the first, cleanly reproducible by disconnecting and reconnecting.
+  Disabling audio deliberately leaves the stream up carrying silence, so the ring is simply not fed
+  and drains flat; re-enabling takes the "resuming into the running stream" path, which never
+  re-enters the transport and so never re-primes. Every session after the first therefore ran with
+  no cushion at all, from its first sample.
+
+  **It is a regression, and the commit that introduced it is identifiable.** "Stop cycling the audio
+  interface on every session" measured three degrading sessions in one process with healthy numbers
+  throughout — 192.2 bytes queued per packet sent, zero underruns, the ring never dry — and
+  concluded the pipeline was exonerated. That was true of the code as it stood: every session still
+  went through `enableAudio()`, so every session re-primed. The commit immediately after it,
+  "Configure the pad's audio once, as the spec and xone both do", added both early returns — the
+  disable that leaves the stream up and the enable that resumes into it — and from that point no
+  session but the first ever primed. The measurement was never repeated afterwards, so it went on
+  being cited for code it no longer described.
+
+  Worth keeping as the shape of the mistake rather than the mistake itself: an exoneration is only
+  good for the code it was measured on, and this one outlived it by one commit.
+
+  `submitAudioTransfer()` now re-arms whenever it finds the ring completely empty, so a collapse
+  costs one prefill of deliberate silence and then plays with a cushion again. The transport's
+  counters are reset on the resume path too — they were not, so a resumed session inherited the
+  previous one's totals plus a gap counted for every millisecond audio had been off, which would
+  have made this unreadable in the very summary that should show it.
 - **`handlePacket()` is not reentrant.** It owns the chunk reassembly buffer and the sequence
   counters and is only ever entered from the interrupt read thread. Reading the capture endpoint
   through it puts the libusb event thread inside it as well, a thousand times a second, and
@@ -643,5 +678,9 @@ Throughput and stream health are answered above. What is not:
 - **Audible quality over a long session.** 179 late packets in 102 s did not produce anything
   audible, but no one has listened for pops across, say, an hour. If they appear, rate adaptation
   is the mechanism the protocol provides and is the first thing to implement.
+- **Whether re-priming ever thrashes.** An empty ring now costs a full prefill of deliberate
+  silence rather than one padded millisecond, which is the right trade for a collapse and the wrong
+  one for a stream that merely runs close to empty. Nothing measured says this hardware does, and
+  the underrun counter is where it would show.
 
 `HARDWARE_TESTING.md` §10 has the checks for all three.

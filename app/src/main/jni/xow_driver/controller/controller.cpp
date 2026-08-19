@@ -921,9 +921,18 @@ bool Controller::setAudioEnabled(bool enable)
          * worse, third worse again, cleared only by unplugging, while our own side measured
          * perfect throughout - 192.2 bytes supplied per packet sent, no underruns, in the bad
          * sessions as much as the good one.
+         *
+         * What resuming does *not* do is re-enter the transport, so nothing here rebuilds the
+         * ring's cushion - it has been empty for however long audio was off. The transport re-arms
+         * itself on finding it empty for exactly this reason; without that, every session after the
+         * first played from an empty ring. See WiredController::submitAudioTransfer().
          */
         if (audioTransport != nullptr && audioState == AUDIO_STREAMING)
         {
+            // As the counters above are, and for the same reason: this session reports its own
+            // numbers. The transport's are not cleared anywhere else, since it is never re-entered.
+            audioTransport->resetStats();
+
             audioEnabled = true;
 
             Log::info("Audio: resuming into the running stream");
@@ -1063,9 +1072,10 @@ bool Controller::setAudioEnabled(bool enable)
      * have drifted; starved counts mean the reverse, a ring emptied and a gap heard.
      */
     /*
-     * Flow rate reads zero on a transport that carries audio itself: it arrives on Audio Capture
-     * messages, which a cabled pad sends on the isochronous IN endpoint that nothing here reads.
-     * Logged anyway rather than hidden, so a zero is visibly "not reported" rather than absent.
+     * Flow rate is what the device asked for last, from the Audio Capture messages on its
+     * isochronous IN endpoint - the mechanism 3.2.5.1.5 calls the way GIP devices eliminate pops.
+     * A zero means it never reported one, which for a cabled pad means the capture endpoint went
+     * unread, so it is logged rather than hidden.
      */
     Log::info("Audio session: %u packets sent, %u bytes queued, %u bytes dropped, %u late, "
               "%u send failures, %u underruns, last flow rate %u",

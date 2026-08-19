@@ -49,9 +49,13 @@ bool WiredController::start()
     );
 
     /*
-     * The ring drains one transfer's worth at a time, so its packet size is the transfer's payload
-     * rather than the adapter's 8 ms buffer. Since the size is also the cadence - the sender paces
-     * itself by waiting for one packet's worth of samples - this makes it wait 4 ms rather than 8.
+     * Setting a transport is what stands the sender thread down: audio here is pulled from the ring
+     * by the bus, one millisecond per isochronous packet, rather than pushed at the adapter's 8 ms
+     * cadence by a thread of our own. Two clocks on one ring is what that would be.
+     *
+     * The ring's own packet size is left at the default. It sizes the ring - four packets, so
+     * 32 ms - and AUDIO_PREFILL_BYTES is half of that; it is not the cadence here, because
+     * nothing on this transport waits for a packet's worth of samples.
      */
     gipController->setAudioTransport(this);
 
@@ -462,6 +466,27 @@ bool WiredController::submitAudioTransfer(libusb_transfer *transfer)
         else if (gipController->drainAudio(fragment, fragmentBytes) == 0)
         {
             audioIdle.fetch_add(1, std::memory_order_relaxed);
+
+            /*
+             * A completely empty ring is the cushion gone, so rebuild it rather than carrying on
+             * without one. Priming was a start-up step only, and it cannot be: the cushion ratchets
+             * downwards. drainAudio() takes what is there and pads the rest, so a shortfall
+             * shrinks the cushion permanently and nothing ever puts it back - one late
+             * millisecond and every later one is served from a ring hovering at empty. That is
+             * heard as audio interleaved with silence, which does not sound like a dropout; it
+             * sounds gapped and slowed down.
+             *
+             * It matters most between sessions. Disabling audio leaves the stream up carrying
+             * silence, deliberately - the device is configured once and never renegotiated - so the
+             * ring is simply not fed and drains to empty. Re-enabling then resumes into the running
+             * stream without going near enableAudio(), which is the only other place this is
+             * cleared, and the next session plays from an empty ring for its whole length.
+             *
+             * Re-arming here costs the AUDIO_PREFILL_BYTES of deliberate silence that a start
+             * already costs, which is the same trade made there and the one every audio device
+             * makes when it opens.
+             */
+            audioPrimed.store(false, std::memory_order_relaxed);
         }
 
         /*

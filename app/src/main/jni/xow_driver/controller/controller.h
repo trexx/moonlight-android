@@ -52,6 +52,16 @@ public:
 
     /* Packets the transport could not place, which is a gap in the audio. */
     virtual uint32_t underruns() const = 0;
+
+    /*
+     * Zeroes those counters for a new session.
+     *
+     * Needed because a transport is brought up once per connection and then left running across
+     * sessions, so nothing else would ever clear them. Without it a resumed session inherits the
+     * previous one's total plus everything counted while audio was off - and audio being off is
+     * counted as a gap every millisecond, since the ring is deliberately not fed.
+     */
+    virtual void resetStats() = 0;
 };
 
 /*

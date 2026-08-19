@@ -67,6 +67,11 @@ public:
         return audioUnderruns.load(std::memory_order_relaxed)
              + audioIdle.load(std::memory_order_relaxed);
     }
+    void resetStats() override
+    {
+        audioUnderruns.store(0, std::memory_order_relaxed);
+        audioIdle.store(0, std::memory_order_relaxed);
+    }
 
 private:
     void readPackets();
@@ -184,6 +189,11 @@ private:
      * So silence is sent deliberately until there is a cushion, and only then does the ring start
      * being consumed. The pad hears a few milliseconds of nothing at the start of a session, which
      * is the same thing every audio device does when it opens.
+     *
+     * Cleared again whenever the ring is found completely empty, not only at start-up. The cushion
+     * only ever shrinks otherwise - a shortfall is padded and never made back - so a single late
+     * millisecond would leave the rest of the session playing from an empty ring. See
+     * submitAudioTransfer(), which is where both the arming and the re-arming happen.
      */
     std::atomic<bool> audioPrimed{false};
 
