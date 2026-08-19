@@ -827,6 +827,19 @@ open** — the feature works but has not been shown to be worth using.
 
       The mediashell `ENCODING_E_AC3_JOC` crash in logcat is a Google bug on audio route changes,
       already present at stream end, and closing the stream will trigger it more often. Not ours.
+- [!] **A USB reset does not recover a stale pad, and takes the controller with it.** *Measured
+      2026-08-19, and withdrawn.* Retried on a proper footing - detach handling in place and
+      verified, permission persisting, the pad re-claimed directly instead of waiting on a broadcast
+      that never comes - and it still fails in two distinct ways.
+
+      `USBDEVFS_RESET` does not re-enumerate a device whose descriptors are unchanged: it resets the
+      port and restores it in place. So no attach broadcast follows and nothing re-claims the pad on
+      its own. Re-claiming it by hand then finds a device that opens, accepts the claim, and answers
+      nothing - no metadata, no hello, no input - for as long as it is watched (63 s here), until
+      the cable is physically pulled.
+
+      The menu action for it is reverted. It bricked the controller until a replug, which is a worse
+      fault than the stutter it was meant to fix. **Do not try a fourth time**; see `AUDIO.md`.
 - [ ] **The re-prime recovers a real silence gap.** The check the fix actually needs, and the one
       run 2 did not exercise - it had continuous audio, so the ring never collapsed. Play audio,
       let the PC go **fully silent for a minute**, then play audio again. It must come back clean.

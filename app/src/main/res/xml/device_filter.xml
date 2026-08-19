@@ -4,9 +4,14 @@
 
     The point is not auto-launching, which is a side effect we tolerate: it is the "use by default
     for this USB device" checkbox. Android only offers that when a matching intent-filter exists,
-    and without it permission is asked for again on every enumeration - measured here as a dialog on
-    each of six replugs. Anything that re-enumerates a pad deliberately, rather than a user pulling
-    a cable, is unusable until that stops.
+    and without one permission is asked for again on every enumeration - measured here as a dialog
+    on each of six replugs, and nearly three seconds from attach to a claimed device rather than
+    one.
+
+    That matters because unplugging and replugging the pad is a real part of using it: it is the
+    only way to clear the audio state a killed process leaves behind, every software route having
+    been tried and failed (see jni/xow_driver/AUDIO.md). A recovery the user performs by hand should
+    not also cost them a dialog.
 
     Cabled pads are matched on the GIP signature rather than on product IDs: vendor 0x045e, and the
     vendor-specific interface 0xff / 0x47 / 0xd0 that MS-GIPUSB 2.2.12 defines and that

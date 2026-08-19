@@ -706,6 +706,35 @@ Driving setup from the hello turned stuttering audio into "no headset detected",
 | Proposing the other advertised format first | Ran, no effect - and caused the pitch shift |
 | Set Device State: RESET to the primary device | Pad leaves the USB bus, permission prompt loop |
 | `libusb_reset_device()` re-enumeration, at probe | Pad unclaimed, **input dead**, USB stack cycling |
+| `libusb_reset_device()` again, with teardown and re-claim in place | **Pad goes silent for good** |
+
+**The USB reset is settled, and it is not a way out.** It was retried properly: the service now
+handles `ACTION_USB_DEVICE_DETACHED` (verified over six replug cycles), permission survives
+re-enumeration, and the pad is re-claimed directly rather than waiting on a broadcast. It still
+fails, and the log says exactly how:
+
+```
+Wired GIP: resetting the pad
+Wired GIP: the pad stayed on the bus; re-claiming it
+Wired: device opened
+Wired: controller started
+No metadata after 500 ms; starting the controller anyway     <- and then nothing, for 63 s
+```
+
+Two things to take from that. **`USBDEVFS_RESET` does not re-enumerate** when the descriptors are
+unchanged - it resets the port and restores the device in place, only reporting `NOT_FOUND` and
+re-enumerating when they differ. So no detach or attach broadcast ever arrives and nothing picks the
+pad back up on its own; *that* is what "left the pad unclaimed and input dead" meant the first time,
+not any missing teardown. And **the pad does not survive the port reset**: it stays on the bus,
+opens, accepts a claim, and then answers nothing at all - no metadata, no hello, no input - until
+the cable is physically pulled.
+
+§3.1.1 says "USB Reset and USB Suspend MUST be handled by all GIP states". This pad does not handle
+it. Pulling the cable and a `USBDEVFS_RESET` are not equivalent on this hardware, and no amount of
+teardown around the reset changes that.
+
+**Do not try this a fourth time.** The remaining difference between a cable pull and everything
+available in software is the physical disconnect, and Android exposes no way to produce one.
 
 **This is a dead end at the protocol level, and the last row of evidence is the strongest.** Adopting
 the stale configuration works exactly as designed - the device accepts a bare START, reports its
