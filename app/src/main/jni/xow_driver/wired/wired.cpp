@@ -283,7 +283,36 @@ bool WiredController::enableAudio()
     }
 
     audioRunning.store(true);
+    streamingStarted.store(false, std::memory_order_relaxed);
     audioEventThread = std::thread(&WiredController::handleAudioEvents, this);
+
+    /*
+     * Nothing is submitted here. The pools exist, the event thread is pumping, and the endpoints
+     * stay untouched until the device reports its volume - see startStreaming(). This used to
+     * submit everything immediately, which put GIP silence messages on the render endpoint while
+     * the sub-device was still Idle, before it had been stopped, configured or started. No
+     * reference host does that: xone's first URBs are gated on the volume having arrived, and the
+     * Windows capture starts render 31 ms after it.
+     */
+    Log::info("Wired: audio ready, %d transfers of %d packets (%d ms queued), awaiting the device",
+              AUDIO_TRANSFERS, AUDIO_PACKETS_PER_TRANSFER,
+              AUDIO_TRANSFERS * AUDIO_PACKETS_PER_TRANSFER);
+
+    return true;
+}
+
+bool WiredController::startStreaming()
+{
+    if (!audioRunning.load())
+    {
+        return false;
+    }
+
+    // A resumed session calls this again on pools that are already in flight
+    if (streamingStarted.exchange(true))
+    {
+        return true;
+    }
 
     // Listening before sending, so the first flow rate is in hand as early as possible
     for (libusb_transfer *transfer : captureTransfers)
@@ -291,16 +320,14 @@ bool WiredController::enableAudio()
         submitCaptureTransfer(transfer);
     }
 
-    // Primed with silence and all submitted, so the endpoint is fed from the first frame and every
-    // completion has a transfer to hand straight back.
+    // Primed with silence until the cushion builds, and all in flight from the first frame so
+    // every completion has a transfer to hand straight back
     for (libusb_transfer *transfer : audioTransfers)
     {
         submitAudioTransfer(transfer);
     }
 
-    Log::info("Wired: audio ready, %d transfers of %d packets (%d ms queued)",
-              AUDIO_TRANSFERS, AUDIO_PACKETS_PER_TRANSFER,
-              AUDIO_TRANSFERS * AUDIO_PACKETS_PER_TRANSFER);
+    Log::info("Wired: streaming");
 
     return true;
 }

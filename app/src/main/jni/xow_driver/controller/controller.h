@@ -43,9 +43,22 @@ class GipAudioTransport
 public:
     virtual ~GipAudioTransport() = default;
 
-    /* Brings up whatever the transport needs before samples can flow. */
+    /* Brings up whatever the transport needs before samples can flow. Sends nothing. */
     virtual bool enableAudio() = 0;
     virtual void disableAudio() = 0;
+
+    /*
+     * Puts the first transfers on the wire, in both directions.
+     *
+     * Split from enableAudio() because the two happen at different points of 2.2.11: the transport
+     * is brought up before Set Device State: START, but nothing may be *sent* until the device has
+     * reported its volume. Both references hold that line - xone submits its first URBs in
+     * gip_headset_register(), which is gated on the volume (or a capture packet) having arrived,
+     * and the Windows capture starts render data 31 ms after the volume message. Feeding
+     * isochronous render data to a device that is still Idle is a state no reference
+     * implementation ever puts it in.
+     */
+    virtual bool startStreaming() = 0;
 
     /* @return whether the buffer was accepted for sending */
     virtual bool sendAudio(const uint8_t *samples, size_t length) = 0;
@@ -397,6 +410,19 @@ private:
     std::vector<uint8_t> audioBuffer;
     // Last flow rate the pad reported, tracked only to notice it drifting from the packet size
     std::atomic<uint16_t> audioFlowRate{0};
+
+    /*
+     * How the flow rate moved across the session: extremes and how often it changed.
+     *
+     * 3.2.5.1.5 has the device modulate the rate by a sample per channel per millisecond to
+     * reconcile its DAC clock with the bus - "the mechanism GIP devices use to eliminate pops and
+     * clicks". A device whose rate never moves over a long session is not adapting, and a stuck
+     * rate with clean delivery is what a desynchronised pad would look like from here. Written
+     * only from the capture path, which is a single thread, and only when the rate changes.
+     */
+    std::atomic<uint16_t> audioFlowMin{0};
+    std::atomic<uint16_t> audioFlowMax{0};
+    std::atomic<uint32_t> audioFlowChanges{0};
 
     /*
      * One 8 ms GIP message of 48 kHz 16-bit stereo, which is what the wireless adapter carries and

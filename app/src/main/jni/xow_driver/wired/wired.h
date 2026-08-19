@@ -60,6 +60,7 @@ public:
      */
     bool enableAudio() override;
     void disableAudio() override;
+    bool startStreaming() override;
     bool sendAudio(const uint8_t *samples, size_t length) override;
     uint32_t underruns() const override
     {
@@ -155,6 +156,15 @@ private:
     std::condition_variable audioCondition;
 
     std::atomic<bool> audioRunning{false};
+
+    /*
+     * Whether the transfer pools have been put on the wire this session.
+     *
+     * enableAudio() builds them and startStreaming() submits them, and the gap between the two is
+     * deliberate: nothing may touch the isochronous endpoints until the device has reported its
+     * volume. See GipAudioTransport::startStreaming().
+     */
+    std::atomic<bool> streamingStarted{false};
 
     /*
      * Transfers submitted but not yet completed or cancelled.

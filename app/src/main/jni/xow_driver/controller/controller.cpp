@@ -961,6 +961,13 @@ bool Controller::setAudioEnabled(bool enable)
             // numbers. The transport's are not cleared anywhere else, since it is never re-entered.
             audioTransport->resetStats();
 
+            // The device is already streaming, so there is no volume message coming to open the
+            // data plane; the transfer pools enableAudio() just rebuilt start here instead.
+            if (!audioTransport->startStreaming())
+            {
+                Log::error("Audio transport would not resume streaming");
+            }
+
             audioEnabled = true;
 
             Log::info("Audio: resuming into the running stream");
@@ -999,6 +1006,9 @@ bool Controller::setAudioEnabled(bool enable)
         }
 
         audioFlowRate = 0;
+        audioFlowMin = 0;
+        audioFlowMax = 0;
+        audioFlowChanges = 0;
         audioPacketsSent = 0;
         audioBytesDropped = 0;
         audioSendFailures = 0;
@@ -1080,14 +1090,17 @@ bool Controller::setAudioEnabled(bool enable)
     if (audioTransport != nullptr && audioState == AUDIO_STREAMING)
     {
         Log::info("Audio session: %u packets sent, %u bytes queued, %u bytes dropped, %u late, "
-                  "%u send failures, %u underruns, last flow rate %u",
+                  "%u send failures, %u underruns, flow rate %u (%u-%u, %u changes)",
                   audioPacketsSent.load(std::memory_order_relaxed),
                   audioBytesQueued.load(std::memory_order_relaxed),
                   audioBytesDropped.load(std::memory_order_relaxed),
                   audioStarved.load(std::memory_order_relaxed),
                   audioSendFailures.load(std::memory_order_relaxed),
                   audioTransport->underruns(),
-                  (unsigned)audioFlowRate.load(std::memory_order_relaxed));
+                  (unsigned)audioFlowRate.load(std::memory_order_relaxed),
+                  (unsigned)audioFlowMin.load(std::memory_order_relaxed),
+                  (unsigned)audioFlowMax.load(std::memory_order_relaxed),
+                  audioFlowChanges.load(std::memory_order_relaxed));
 
         Log::info("Audio paused; the stream stays up carrying silence");
 
@@ -1131,14 +1144,17 @@ bool Controller::setAudioEnabled(bool enable)
      * unread, so it is logged rather than hidden.
      */
     Log::info("Audio session: %u packets sent, %u bytes queued, %u bytes dropped, %u late, "
-              "%u send failures, %u underruns, last flow rate %u",
+              "%u send failures, %u underruns, flow rate %u (%u-%u, %u changes)",
               audioPacketsSent.load(std::memory_order_relaxed),
               audioBytesQueued.load(std::memory_order_relaxed),
               audioBytesDropped.load(std::memory_order_relaxed),
               audioStarved.load(std::memory_order_relaxed),
               audioSendFailures.load(std::memory_order_relaxed),
               audioTransport != nullptr ? audioTransport->underruns() : 0,
-              (unsigned)audioFlowRate);
+              (unsigned)audioFlowRate,
+              (unsigned)audioFlowMin.load(std::memory_order_relaxed),
+              (unsigned)audioFlowMax.load(std::memory_order_relaxed),
+              audioFlowChanges.load(std::memory_order_relaxed));
 
     if (audioTransport != nullptr)
     {
@@ -1386,6 +1402,18 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
         volumeCondition.notify_one();
 
         /*
+         * Only now does anything touch the isochronous endpoints. The volume message is 2.2.11's
+         * signal that the device is ready - xone gates its first URBs on it, and the Windows
+         * capture starts render 31 ms after it - and this driver used to ignore that line,
+         * spraying silence into the endpoint from the moment the transport came up, before the
+         * device had even been stopped and configured.
+         */
+        if (audioTransport != nullptr && !audioTransport->startStreaming())
+        {
+            Log::error("Audio transport would not start streaming");
+        }
+
+        /*
          * Only where we are the clock. A transport that carries audio itself is paced by its own
          * bus and pulls through drainAudio() from its completion callbacks, so a sender thread
          * pushing at the host's rate would be a second, disagreeing clock on the same ring.
@@ -1501,6 +1529,29 @@ void Controller::audioFlowRateReported(uint16_t flowRate)
     }
 
     audioFlowRate.store(flowRate, std::memory_order_relaxed);
+
+    if (flowRate == 0)
+    {
+        return;
+    }
+
+    /*
+     * Single writer - only the capture path reaches this - so read-modify-write on relaxed
+     * atomics is race-free, and it only runs on a change, which 3.2.5.1.5 expects to be rare.
+     */
+    uint16_t seen = audioFlowMin.load(std::memory_order_relaxed);
+
+    if (seen == 0 || flowRate < seen)
+    {
+        audioFlowMin.store(flowRate, std::memory_order_relaxed);
+    }
+
+    if (flowRate > audioFlowMax.load(std::memory_order_relaxed))
+    {
+        audioFlowMax.store(flowRate, std::memory_order_relaxed);
+    }
+
+    audioFlowChanges.fetch_add(1, std::memory_order_relaxed);
 }
 
 void Controller::setJavaVM(JavaVM *vm)

@@ -840,6 +840,22 @@ open** — the feature works but has not been shown to be worth using.
 
       The menu action for it is reverted. It bricked the controller until a replug, which is a worse
       fault than the stutter it was meant to fix. **Do not try a fourth time**; see `AUDIO.md`.
+- [ ] **Holding the isochronous stream until the volume message cures the relaunch stutter.** The
+      last wire-level divergence from both references: xone submits its first URBs only once the
+      volume (or a capture packet) has arrived, and the Windows capture starts render 31 ms after
+      the volume - while this driver sprayed GIP silence onto the render endpoint from the moment
+      the transport came up, before the sub-device had been stopped, configured or started. A fresh
+      pad tolerates that; a stale one is exactly where undefined input goes wrong.
+
+      Same reproduction as ever: fresh session (control), then kill, relaunch, reconnect, enable.
+      Expect `Wired: audio ready ... awaiting the device` at enable and `Wired: streaming` only
+      after `device reported volume`. The ears decide, as always.
+- [ ] **Whether the pad's rate adaptation moves.** The session summary now ends
+      `flow rate 192 (188-196, N changes)`. 3.2.5.1.5 has the device modulate by a sample per
+      channel per millisecond to reconcile its DAC clock with the bus. Compare fresh against stale:
+      a stale session whose rate never changes (`192-192, 0 changes`) over minutes, against a fresh
+      one that wanders, is a pad whose clock recovery is stuck - which would explain a stutter that
+      delivery counters cannot see, and would mean the impairment is measurable at last.
 - [ ] **The re-prime recovers a real silence gap.** The check the fix actually needs, and the one
       run 2 did not exercise - it had continuous audio, so the ring never collapsed. Play audio,
       let the PC go **fully silent for a minute**, then play audio again. It must come back clean.
