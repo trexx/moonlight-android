@@ -206,6 +206,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int numFramesIn;
     private int numFramesOut;
 
+    // Debug-only accounting for the copy-free picture data path, reported by buildStreamSummary().
+    //
+    // The counters exist because a passing test run is not evidence unless you can show it reached
+    // the risky cases. Native writes picture data at the input buffer's *position*, which is only
+    // non-zero when CSD has been prepended for a fused IDR frame - so a session that never
+    // prepended CSD never tested the offset arithmetic at all, and reads identically to one that
+    // did. Same for the abort path, which healthy hardware essentially never takes.
+    //
+    // picDataExpectedLength and csdBytesPrepended are what startPicData() promised native, checked
+    // against what came back in submitPicData(). Every write to them is behind BuildConfig.DEBUG
+    // as well: they are written once per frame, and the rule is that per-frame diagnostics are
+    // absent from release rather than merely unread.
+    private int picDataFusedCsdFrames;
+    private int picDataInvariantFailures;
+    private int picDataAborts;
+    private int picDataExpectedLength;
+    private int csdBytesPrepended;
+    private boolean picDataInvariantReported;
+
     private MediaCodecInfo findAvcDecoder() {
         MediaCodecInfo decoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", MediaCodecInfo.CodecProfileLevel.AVCProfileHigh);
         if (decoder == null) {
@@ -1663,6 +1682,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      */
     // !!! May be called even if setup()/start() fails !!!
     public void prepareForStop() {
+        // stop() calls this again unconditionally, so the debug summary below has to know whether
+        // this is the first pass
+        boolean alreadyStopping = stopping;
+
         // Let the decoding code know to ignore codec exceptions now
         stopping = true;
 
@@ -1699,6 +1722,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     Choreographer.getInstance().removeFrameCallback(MediaCodecDecoderRenderer.this);
                 }
             });
+        }
+
+        // The stream counters are otherwise only reachable by crashing: their one formatter lives
+        // in RendererException, so a session that ended cleanly - which is every session worth
+        // measuring - printed nothing at all. Once per stream, off every frame path, debug only.
+        //
+        // warning() rather than info() because the debug build sets minifyEnabled too, and
+        // proguard-rules.pro declares LimeLog.info() free of side effects so R8 may delete the call
+        // outright - AGP claims it disables optimizations for debuggable builds, which would spare
+        // it, but that is a guarantee about the toolchain rather than about this rule. warning() is
+        // preserved by that file on purpose, so it survives either way. This is the one build that
+        // can emit this line; it is not worth making it depend on a shrinker detail.
+        if (BuildConfig.DEBUG && !alreadyStopping) {
+            LimeLog.warning("Stream summary:"+RendererException.DELIMITER+buildStreamSummary(this));
         }
     }
 
@@ -2274,6 +2311,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return null;
         }
 
+        // Remembered so submitPicData() can check that what native wrote matches what it was told
+        // to write. See checkPicDataInvariants().
+        if (BuildConfig.DEBUG) {
+            picDataExpectedLength = decodeUnitLength;
+        }
+
         return nextInputBuffer;
     }
 
@@ -2283,9 +2326,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * <p>The position has to be advanced here. Native wrote through a raw pointer obtained from
      * {@code GetDirectBufferAddress}, which does not touch the ByteBuffer's own state, and
      * {@link #queueNextInputBuffer} takes the buffer's length from {@code position()}.
+     *
+     * <p>{@link #nextInputBuffer} is dereferenced without a null check deliberately. It can only be
+     * null here if codec recovery completed while native held a raw pointer into the buffer -
+     * {@link #doCodecRecoveryIfRequired} nulls it - which is the use-after-free the two-phase
+     * protocol is designed to make impossible. Guarding would convert a loud, diagnosable
+     * NullPointerException naming this method into a silent dropped frame, and that exception is
+     * the only free detector we have for the one hazard with no other instrument. Leave it.
      */
     @Override
     public int submitPicData(int bytesWritten) {
+        if (BuildConfig.DEBUG) {
+            checkPicDataInvariants(nextInputBuffer.position(), bytesWritten);
+        }
+
         nextInputBuffer.position(nextInputBuffer.position() + bytesWritten);
 
         if (!queueNextInputBuffer(pendingTimestampUs, pendingCodecFlags)) {
@@ -2293,6 +2347,59 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         return MoonBridge.DR_OK;
+    }
+
+    /**
+     * Debug-only check that native wrote the bytes it was asked to write, where it was asked to
+     * write them.
+     *
+     * <p>Three things can go wrong in the copy-free path, and only the first would be obvious
+     * without this: a wrong length truncates the frame, a wrong offset lands the frame on top of
+     * the prepended codec-specific data, and a doubly-prepended CSD (a fused IDR retried after
+     * {@link #abortPicData} failed to reset the buffer) shifts everything by a constant. All three
+     * produce corrupt video rather than an exception, which on a real device is easy to mistake for
+     * ordinary packet loss - so they are checked as numbers rather than judged by eye.
+     *
+     * <p>Reported once and then counted, because a violation on one frame will recur on every frame
+     * after it, and this runs on the decode thread where a per-frame log is a per-frame string
+     * build. The counter reaches {@link #buildStreamSummary()}.
+     *
+     * @param startPosition where native was told to write, i.e. the buffer position it read
+     * @param bytesWritten  how many bytes native reports writing
+     */
+    private void checkPicDataInvariants(int startPosition, int bytesWritten) {
+        boolean lengthOk = bytesWritten == picDataExpectedLength;
+        boolean offsetOk = startPosition == csdBytesPrepended;
+
+        // Picture data always begins a new unit: an Annex-B start code for H.264/HEVC, an OBU
+        // header with its forbidden bit clear for AV1. This is what catches a correct-length write
+        // at the wrong offset, which the two checks above cannot see.
+        boolean contentOk = true;
+        if (bytesWritten >= 4 && startPosition + 4 <= nextInputBuffer.limit()) {
+            if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_AV1) != 0) {
+                contentOk = (nextInputBuffer.get(startPosition) & 0x80) == 0;
+            }
+            else {
+                contentOk = nextInputBuffer.get(startPosition) == 0 &&
+                        nextInputBuffer.get(startPosition + 1) == 0 &&
+                        (nextInputBuffer.get(startPosition + 2) == 1 ||
+                                (nextInputBuffer.get(startPosition + 2) == 0 &&
+                                        nextInputBuffer.get(startPosition + 3) == 1));
+            }
+        }
+
+        if (lengthOk && offsetOk && contentOk) {
+            return;
+        }
+
+        picDataInvariantFailures++;
+
+        if (!picDataInvariantReported) {
+            picDataInvariantReported = true;
+            LimeLog.severe("Picture data invariant violated: wrote "+bytesWritten+" bytes (expected "+
+                    picDataExpectedLength+") at "+startPosition+" (expected "+csdBytesPrepended+
+                    "), unit start "+(contentOk ? "ok" : "BAD"));
+        }
     }
 
     /**
@@ -2311,6 +2418,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      */
     @Override
     public int abortPicData() {
+        if (BuildConfig.DEBUG) {
+            picDataAborts++;
+        }
+
         if (nextInputBuffer != null) {
             nextInputBuffer.clear();
         }
@@ -2345,11 +2456,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         int codecFlags = 0;
 
+        // How far into the buffer the picture data will land. Non-zero only in the fused IDR case
+        // below, and that is precisely the case native has to get right: GetDirectBufferAddress
+        // reports where the buffer starts, not where the data belongs.
+        if (BuildConfig.DEBUG) {
+            csdBytesPrepended = 0;
+        }
+
         if (frameType == MoonBridge.FRAME_TYPE_IDR) {
             codecFlags |= MediaCodec.BUFFER_FLAG_SYNC_FRAME;
 
             // If we are using fused IDR frames, submit the CSD with each IDR frame
             if (fusedIdrFrame && !csdSubmittedForThisFrame) {
+                // Read rather than assumed to be zero: a buffer arriving here already positioned is
+                // one of the faults checkPicDataInvariants() exists to catch, and deriving the
+                // expected offset from position() alone would absorb it silently. Folded away
+                // entirely in release, where nothing reads it.
+                //
+                // The difference is taken under the same guard, so csdBytesPrepended is written
+                // only where positionBeforeCsd means something. Ungated it would still compile to
+                // position() - 0 in release - the absolute offset rather than the CSD length - and
+                // a later reader outside DEBUG would get a plausible wrong number.
+                int positionBeforeCsd = BuildConfig.DEBUG ? nextInputBuffer.position() : 0;
+
                 for (byte[] vpsBuffer : vpsBuffers) {
                     nextInputBuffer.put(vpsBuffer);
                 }
@@ -2358,6 +2487,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 }
                 for (byte[] ppsBuffer : ppsBuffers) {
                     nextInputBuffer.put(ppsBuffer);
+                }
+
+                if (BuildConfig.DEBUG) {
+                    csdBytesPrepended = nextInputBuffer.position() - positionBeforeCsd;
+                    picDataFusedCsdFrames++;
                 }
             }
         }
@@ -2631,91 +2765,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 str = "ErrorWhileStreaming";
             }
 
-            str += "Format: "+String.format("%x", renderer.videoFormat)+DELIMITER;
-            str += "AVC Decoder: "+((renderer.avcDecoder != null) ? renderer.avcDecoder.getName():"(none)")+DELIMITER;
-            str += "HEVC Decoder: "+((renderer.hevcDecoder != null) ? renderer.hevcDecoder.getName():"(none)")+DELIMITER;
-            str += "AV1 Decoder: "+((renderer.av1Decoder != null) ? renderer.av1Decoder.getName():"(none)")+DELIMITER;
-            if (renderer.avcDecoder != null) {
-                Range<Integer> avcWidthRange = renderer.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getSupportedWidths();
-                str += "AVC supported width range: "+avcWidthRange+DELIMITER;
-                try {
-                    Range<Double> avcFpsRange = renderer.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.initialWidth, renderer.initialHeight);
-                    str += "AVC achievable FPS range: "+avcFpsRange+DELIMITER;
-                } catch (IllegalArgumentException e) {
-                    str += "AVC achievable FPS range: UNSUPPORTED!"+DELIMITER;
-                }
-            }
-            if (renderer.hevcDecoder != null) {
-                Range<Integer> hevcWidthRange = renderer.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getSupportedWidths();
-                str += "HEVC supported width range: "+hevcWidthRange+DELIMITER;
-                try {
-                    Range<Double> hevcFpsRange = renderer.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.initialWidth, renderer.initialHeight);
-                    str += "HEVC achievable FPS range: " + hevcFpsRange + DELIMITER;
-                } catch (IllegalArgumentException e) {
-                    str += "HEVC achievable FPS range: UNSUPPORTED!"+DELIMITER;
-                }
-            }
-            if (renderer.av1Decoder != null) {
-                Range<Integer> av1WidthRange = renderer.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getSupportedWidths();
-                str += "AV1 supported width range: "+av1WidthRange+DELIMITER;
-                try {
-                    Range<Double> av1FpsRange = renderer.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getAchievableFrameRatesFor(renderer.initialWidth, renderer.initialHeight);
-                    str += "AV1 achievable FPS range: " + av1FpsRange + DELIMITER;
-                } catch (IllegalArgumentException e) {
-                    str += "AV1 achievable FPS range: UNSUPPORTED!"+DELIMITER;
-                }
-            }
-            str += "Configured format: "+renderer.configuredFormat+DELIMITER;
-            str += "Input format: "+renderer.inputFormat+DELIMITER;
-            str += "Output format: "+renderer.outputFormat+DELIMITER;
-            str += "Adaptive playback: "+renderer.adaptivePlayback+DELIMITER;
-            str += "GL Renderer: "+renderer.glRenderer+DELIMITER;
-            //str += "Build fingerprint: "+Build.FINGERPRINT+DELIMITER;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                str += "SOC: "+Build.SOC_MANUFACTURER+" - "+Build.SOC_MODEL+DELIMITER;
-                str += "Performance class: "+Build.VERSION.MEDIA_PERFORMANCE_CLASS+DELIMITER;
-                /*str += "Vendor params: ";
-                List<String> params = renderer.videoDecoder.getSupportedVendorParameters();
-                if (params.isEmpty()) {
-                    str += "NONE";
-                }
-                else {
-                    for (String param : params) {
-                        str += param + " ";
-                    }
-                }
-                str += DELIMITER;*/
-            }
-            str += "Consecutive crashes: "+renderer.consecutiveCrashCount+DELIMITER;
-            str += "RFI active: "+renderer.refFrameInvalidationActive+DELIMITER;
-            str += "Fused IDR frames: "+renderer.fusedIdrFrame+DELIMITER;
-            str += "Video dimensions: "+renderer.initialWidth+"x"+renderer.initialHeight+DELIMITER;
-            str += "FPS target: "+renderer.refreshRate+DELIMITER;
-            str += "Bitrate: "+renderer.prefs.bitrate+" Kbps"+DELIMITER;
-            str += "CSD stats: "+renderer.numVpsIn+", "+renderer.numSpsIn+", "+renderer.numPpsIn+DELIMITER;
-            str += "Frames in-out: "+renderer.numFramesIn+", "+renderer.numFramesOut+DELIMITER;
-            str += "Total frames received: "+renderer.globalVideoStats.totalFramesReceived+DELIMITER;
-            str += "Total frames rendered: "+renderer.globalVideoStats.totalFramesRendered+DELIMITER;
-            str += "Frame losses: "+renderer.globalVideoStats.framesLost+" in "+renderer.globalVideoStats.frameLossEvents+" loss events"+DELIMITER;
-            long[] videoRtp = MoonBridge.getRTPVideoStats();
-            long[] audioRtp = MoonBridge.getRTPAudioStats();
-            if (videoRtp != null) {
-                str += "Video RTP packets/FEC/recovered/failed/OOS/invalid/decrypt-failed: "+
-                        videoRtp[MoonBridge.RTP_STAT_PACKETS]+", "+videoRtp[MoonBridge.RTP_STAT_FEC]+", "+
-                        videoRtp[MoonBridge.RTP_STAT_FEC_RECOVERED]+", "+videoRtp[MoonBridge.RTP_STAT_FEC_FAILED]+", "+
-                        videoRtp[MoonBridge.RTP_STAT_OOS]+", "+videoRtp[MoonBridge.RTP_STAT_INVALID]+", "+
-                        videoRtp[MoonBridge.RTP_STAT_DECRYPT_FAILED]+DELIMITER;
-            }
-            if (audioRtp != null) {
-                str += "Audio RTP packets/FEC/recovered/failed/OOS/invalid/decrypt-failed: "+
-                        audioRtp[MoonBridge.RTP_STAT_PACKETS]+", "+audioRtp[MoonBridge.RTP_STAT_FEC]+", "+
-                        audioRtp[MoonBridge.RTP_STAT_FEC_RECOVERED]+", "+audioRtp[MoonBridge.RTP_STAT_FEC_FAILED]+", "+
-                        audioRtp[MoonBridge.RTP_STAT_OOS]+", "+audioRtp[MoonBridge.RTP_STAT_INVALID]+", "+
-                        audioRtp[MoonBridge.RTP_STAT_DECRYPT_FAILED]+DELIMITER;
-            }
-            str += "Average end-to-end client latency: "+renderer.getAverageEndToEndLatency()+"ms"+DELIMITER;
-            str += "Average hardware decoder latency: "+renderer.getAverageDecoderLatency()+"ms"+DELIMITER;
-            str += "Frame pacing mode: "+renderer.prefs.framePacing+DELIMITER;
+            str += buildStreamSummary(renderer);
 
             if (originalException instanceof CodecException) {
                 CodecException ce = (CodecException) originalException;
@@ -2731,5 +2781,120 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
             return str;
         }
+    }
+
+    /**
+     * Builds the decoder and stream state block shared by the crash report and the debug
+     * end-of-session dump.
+     *
+     * <p>Extracted from {@link RendererException} because it was only ever reachable through a
+     * thrown exception: a stream that ended cleanly printed none of these counters, which made
+     * {@code Frames in-out}, {@code CSD stats} and the loss counts unreadable on exactly the runs
+     * you want to measure. {@link #prepareForStop()} now logs it in debug builds.
+     *
+     * <p>Static, and reached through the renderer rather than {@code this}, only so the body stays
+     * identical to the version that lived in the exception - it is called once per stream and the
+     * distinction costs nothing.
+     */
+    private static String buildStreamSummary(MediaCodecDecoderRenderer renderer) {
+        final String DELIMITER = RendererException.DELIMITER;
+        String str = "";
+        str += "Format: "+String.format("%x", renderer.videoFormat)+DELIMITER;
+        str += "AVC Decoder: "+((renderer.avcDecoder != null) ? renderer.avcDecoder.getName():"(none)")+DELIMITER;
+        str += "HEVC Decoder: "+((renderer.hevcDecoder != null) ? renderer.hevcDecoder.getName():"(none)")+DELIMITER;
+        str += "AV1 Decoder: "+((renderer.av1Decoder != null) ? renderer.av1Decoder.getName():"(none)")+DELIMITER;
+        if (renderer.avcDecoder != null) {
+            Range<Integer> avcWidthRange = renderer.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getSupportedWidths();
+            str += "AVC supported width range: "+avcWidthRange+DELIMITER;
+            try {
+                Range<Double> avcFpsRange = renderer.avcDecoder.getCapabilitiesForType("video/avc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.initialWidth, renderer.initialHeight);
+                str += "AVC achievable FPS range: "+avcFpsRange+DELIMITER;
+            } catch (IllegalArgumentException e) {
+                str += "AVC achievable FPS range: UNSUPPORTED!"+DELIMITER;
+            }
+        }
+        if (renderer.hevcDecoder != null) {
+            Range<Integer> hevcWidthRange = renderer.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getSupportedWidths();
+            str += "HEVC supported width range: "+hevcWidthRange+DELIMITER;
+            try {
+                Range<Double> hevcFpsRange = renderer.hevcDecoder.getCapabilitiesForType("video/hevc").getVideoCapabilities().getAchievableFrameRatesFor(renderer.initialWidth, renderer.initialHeight);
+                str += "HEVC achievable FPS range: " + hevcFpsRange + DELIMITER;
+            } catch (IllegalArgumentException e) {
+                str += "HEVC achievable FPS range: UNSUPPORTED!"+DELIMITER;
+            }
+        }
+        if (renderer.av1Decoder != null) {
+            Range<Integer> av1WidthRange = renderer.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getSupportedWidths();
+            str += "AV1 supported width range: "+av1WidthRange+DELIMITER;
+            try {
+                Range<Double> av1FpsRange = renderer.av1Decoder.getCapabilitiesForType("video/av01").getVideoCapabilities().getAchievableFrameRatesFor(renderer.initialWidth, renderer.initialHeight);
+                str += "AV1 achievable FPS range: " + av1FpsRange + DELIMITER;
+            } catch (IllegalArgumentException e) {
+                str += "AV1 achievable FPS range: UNSUPPORTED!"+DELIMITER;
+            }
+        }
+        str += "Configured format: "+renderer.configuredFormat+DELIMITER;
+        str += "Input format: "+renderer.inputFormat+DELIMITER;
+        str += "Output format: "+renderer.outputFormat+DELIMITER;
+        str += "Adaptive playback: "+renderer.adaptivePlayback+DELIMITER;
+        str += "GL Renderer: "+renderer.glRenderer+DELIMITER;
+        //str += "Build fingerprint: "+Build.FINGERPRINT+DELIMITER;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            str += "SOC: "+Build.SOC_MANUFACTURER+" - "+Build.SOC_MODEL+DELIMITER;
+            str += "Performance class: "+Build.VERSION.MEDIA_PERFORMANCE_CLASS+DELIMITER;
+            /*str += "Vendor params: ";
+            List<String> params = renderer.videoDecoder.getSupportedVendorParameters();
+            if (params.isEmpty()) {
+                str += "NONE";
+            }
+            else {
+                for (String param : params) {
+                    str += param + " ";
+                }
+            }
+            str += DELIMITER;*/
+        }
+        str += "Consecutive crashes: "+renderer.consecutiveCrashCount+DELIMITER;
+        str += "RFI active: "+renderer.refFrameInvalidationActive+DELIMITER;
+        str += "Fused IDR frames: "+renderer.fusedIdrFrame+DELIMITER;
+        str += "Video dimensions: "+renderer.initialWidth+"x"+renderer.initialHeight+DELIMITER;
+        str += "FPS target: "+renderer.refreshRate+DELIMITER;
+        str += "Bitrate: "+renderer.prefs.bitrate+" Kbps"+DELIMITER;
+        str += "CSD stats: "+renderer.numVpsIn+", "+renderer.numSpsIn+", "+renderer.numPpsIn+DELIMITER;
+        str += "Frames in-out: "+renderer.numFramesIn+", "+renderer.numFramesOut+DELIMITER;
+        str += "Total frames received: "+renderer.globalVideoStats.totalFramesReceived+DELIMITER;
+        str += "Total frames rendered: "+renderer.globalVideoStats.totalFramesRendered+DELIMITER;
+        str += "Frame losses: "+renderer.globalVideoStats.framesLost+" in "+renderer.globalVideoStats.frameLossEvents+" loss events"+DELIMITER;
+        long[] videoRtp = MoonBridge.getRTPVideoStats();
+        long[] audioRtp = MoonBridge.getRTPAudioStats();
+        if (videoRtp != null) {
+            str += "Video RTP packets/FEC/recovered/failed/OOS/invalid/decrypt-failed: "+
+                    videoRtp[MoonBridge.RTP_STAT_PACKETS]+", "+videoRtp[MoonBridge.RTP_STAT_FEC]+", "+
+                    videoRtp[MoonBridge.RTP_STAT_FEC_RECOVERED]+", "+videoRtp[MoonBridge.RTP_STAT_FEC_FAILED]+", "+
+                    videoRtp[MoonBridge.RTP_STAT_OOS]+", "+videoRtp[MoonBridge.RTP_STAT_INVALID]+", "+
+                    videoRtp[MoonBridge.RTP_STAT_DECRYPT_FAILED]+DELIMITER;
+        }
+        if (audioRtp != null) {
+            str += "Audio RTP packets/FEC/recovered/failed/OOS/invalid/decrypt-failed: "+
+                    audioRtp[MoonBridge.RTP_STAT_PACKETS]+", "+audioRtp[MoonBridge.RTP_STAT_FEC]+", "+
+                    audioRtp[MoonBridge.RTP_STAT_FEC_RECOVERED]+", "+audioRtp[MoonBridge.RTP_STAT_FEC_FAILED]+", "+
+                    audioRtp[MoonBridge.RTP_STAT_OOS]+", "+audioRtp[MoonBridge.RTP_STAT_INVALID]+", "+
+                    audioRtp[MoonBridge.RTP_STAT_DECRYPT_FAILED]+DELIMITER;
+        }
+        str += "Average end-to-end client latency: "+renderer.getAverageEndToEndLatency()+"ms"+DELIMITER;
+        str += "Average hardware decoder latency: "+renderer.getAverageDecoderLatency()+"ms"+DELIMITER;
+        str += "Frame pacing mode: "+renderer.prefs.framePacing+DELIMITER;
+
+        // Which cases the copy-free picture data path actually reached. Without these a clean
+        // run is not evidence: the offset arithmetic is only exercised when CSD was prepended,
+        // and the abort path essentially never runs on healthy hardware, so a session that
+        // missed both reads exactly like one that passed them.
+        if (BuildConfig.DEBUG) {
+            str += "Fused CSD frames: "+renderer.picDataFusedCsdFrames+DELIMITER;
+            str += "Picture data aborts: "+renderer.picDataAborts+DELIMITER;
+            str += "Picture data invariant failures: "+renderer.picDataInvariantFailures+DELIMITER;
+        }
+
+        return str;
     }
 }
