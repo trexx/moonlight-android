@@ -758,6 +758,34 @@ open** — the feature works but has not been shown to be worth using.
       hardware: **the pad never announces again**, so the session ends with no audio device at all
       and the menu reports "no headset detected". Reverted. Do not re-try this without a way to
       recover a sub-device that goes silent.
+- [ ] **A relaunched session adopts the pad's configuration instead of rebuilding it.** The check
+      for the stutter itself. Unplug first for a clean baseline, then:
+
+      1. Fresh session - expect `announced yes` and the full sequence. Must be no worse than today.
+      2. Kill Moonlight, relaunch, reconnect, enable audio - expect `announced no`, **no**
+         `proposed format` line, and `adopting its configuration` followed by
+         `device reported volume, streaming`.
+      3. The summary should still read ~192000 B/s supplied and ~1000 packets/s. It read that while
+         stuttering too, so this confirms no regression rather than success - the ears decide.
+
+      If `no volume after 3000 ms; renegotiating the format` appears, the pad did not accept a bare
+      START: audio starts three seconds late and behaves as it did before. That is the fallback
+      working, not a new fault.
+- [ ] **START is repeated until the volume arrives.** 2.2.11 asks for it at 500 ms intervals for up
+      to 3 s and it was never implemented, so a lost START left audio enabled and silent. Hard to
+      provoke deliberately; the fallback line above is the evidence it runs.
+- [ ] **The TV stream is closed while a pad has the audio, not merely silent.**
+      ```bash
+      adb shell dumpsys media.audio_flinger | awk '/name AudioOut_D,/,/Hal stream/'
+      ```
+      Expect `Audio moved to a pad; local output closed`, and the stream gone rather than idling.
+      Then toggle pad audio off and on **several times mid-stream**: TV audio must come back within
+      a buffer or two each time (`Audio returned from the pads; local output reopened`). The rebuild
+      is the risk here, not the close - `Unable to reopen local audio output` means it failed, and
+      the session stays silent on the TV by design rather than half-open.
+
+      The mediashell `ENCODING_E_AC3_JOC` crash in logcat is a Google bug on audio route changes,
+      already present at stream end, and closing the stream will trigger it more often. Not ours.
 - [ ] **The re-prime recovers a real silence gap.** The check the fix actually needs, and the one
       run 2 did not exercise - it had continuous audio, so the ring never collapsed. Play audio,
       let the PC go **fully silent for a minute**, then play audio again. It must come back clean.
