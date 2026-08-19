@@ -749,6 +749,15 @@ open** — the feature works but has not been shown to be worth using.
 
       Divide `bytes queued` by the time audio was enabled and compare against 192000 B/s before
       blaming the pad for anything.
+- [x] **The announce is the discriminator, and a sub-device RESET cannot restore it.** *Measured
+      2026-08-19.* A clean session opens with `Device 3 announced`; a stuttering one goes straight
+      to metadata. Five sessions, exact correlation, with 100% supply and no underruns in both -
+      so it is device state, not our pipeline. Watch for `announced yes|no` at discovery.
+
+      Resetting the stale sub-device and waiting for the hello §3.1.1 promises was tried on
+      hardware: **the pad never announces again**, so the session ends with no audio device at all
+      and the menu reports "no headset detected". Reverted. Do not re-try this without a way to
+      recover a sub-device that goes silent.
 - [ ] **The re-prime recovers a real silence gap.** The check the fix actually needs, and the one
       run 2 did not exercise - it had continuous audio, so the ring never collapsed. Play audio,
       let the PC go **fully silent for a minute**, then play audio again. It must come back clean.

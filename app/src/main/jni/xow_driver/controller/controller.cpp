@@ -619,50 +619,26 @@ void Controller::identifyReceived(uint8_t id, const IdentifyData *identify,
                   audioDeviceAnnounced.load() ? "yes" : "no");
 
         /*
-         * A sub-device that never announced is the last process's, not ours, and it is reset rather
-         * than configured in place.
+         * Configured wherever it is, including when it never announced.
          *
-         * 2.2.1 has a device send Hello only while in Arrival. One left Active by a killed process
-         * never goes back there, so it never announces - but it still answers a metadata request,
-         * which is how setup used to proceed against a device that had never stopped. On hardware
-         * that is the whole difference: five sessions, every one with an announce clean, every one
-         * without it stuttering, our own side reporting 100% supply and no underruns in both.
+         * 2.2.1 has a device send Hello only while in Arrival, so a sub-device left Active by a
+         * killed process never announces - and on hardware that is exactly the sessions that
+         * stutter: five in a row, every one with an announce clean and every one without it not,
+         * while our own side reported 100% supply and no underruns in both. The announce state is
+         * logged above so this stays visible rather than inferred.
          *
-         * 3.1.1 gives the way back: on RESET a device "SHOULD cleanly tear down the GIP stack as if
-         * it were shutting down", then "reinitialize everything as it does on power up", and "upon
-         * reconnection after a GIP Set Device State RESET, the device SHOULD send GIP Hello's at
-         * 500 ms intervals until the host responds". So the announce we are missing is exactly what
-         * a RESET produces, and this returns rather than pressing on: the Hello brings us back here
-         * with the device in Arrival, where the 2.2.11 sequence means something.
+         * **Resetting it does not bring it back.** 3.1.1 says a device reinitialises on RESET and
+         * then "SHOULD send GIP Hello's at 500 ms intervals until the host responds", so a reset
+         * here should produce the announce we are missing. It does not: this pad answers a
+         * sub-device RESET with silence and never announces again, which leaves it with no audio
+         * device at all until the cable is pulled. That was tried, on hardware, and reverted - it
+         * turned stuttering audio into "no headset detected", which is worse.
          *
-         * A RESET was sent here before and recorded as no cure. It was sent from setAudioEnabled(),
-         * followed 200 ms later by STOP, the format and START - inside the 500 ms 3.1.1 gives the
-         * device to tear down, during which "no state change other than the initial OFF or RESET is
-         * allowed". It was never the reset that failed; it was never waiting for what the reset
-         * produces.
-         *
-         * Tried once. If no Hello follows, the next metadata pass configures it as before - audio
-         * that stutters is still better than none, and the log says which happened.
+         * So there is no known way back to Arrival for a sub-device short of unplugging, and this
+         * configures what is there. See AUDIO.md for what else has been tried.
          */
-        if (!audioDeviceAnnounced.load() && !audioDeviceResetTried.exchange(true))
-        {
-            Log::info("Audio device %u never announced; resetting it and awaiting its hello", id);
-
-            if (!setDeviceState(id, STATE_RESET))
-            {
-                Log::error("Failed to reset the stale audio device");
-            }
-
-            return;
-        }
-
         audioDeviceId = id;
         audioDeviceFormats = parsed;
-
-        if (!audioDeviceAnnounced.load())
-        {
-            Log::error("Audio device %u still has not announced; configuring it anyway", id);
-        }
 
         /*
          * Silenced on discovery, because we may not be the first host to have configured it.

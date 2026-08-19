@@ -682,10 +682,26 @@ stop — and Android closes the USB connection before any teardown of ours runs,
 with `NO_DEVICE`. A new process cannot undo it either. All of these were tried on hardware and none
 worked:
 
+**What separates a good session from a bad one is one packet.** A clean session opens with the
+sub-device announcing itself; a stuttering one goes straight to metadata with no announce. Five
+sessions on the Shield, and the correlation is exact - announce present, audio clean; announce
+absent, audio stutters - while our own counters read 100% supply, bus-rate drain and no underruns
+in both. §2.2.1 has a device send Hello only while in Arrival, so a sub-device left Active by a
+killed process never announces, and everything we then send is addressed to the previous run's
+stream. `Audio device N offers ... announced yes|no` is logged at discovery, so a session that will
+stutter says so before anyone listens to it.
+
+**A sub-device RESET does not bring it back, and this is now tested rather than assumed.** §3.1.1
+has a device reinitialise "as it does on power up" on RESET and then "send GIP Hello's at 500 ms
+intervals until the host responds", which is precisely the announce we are missing. This pad
+answers with silence: no hello, ever, and therefore no audio device for the rest of the session.
+Driving setup from the hello turned stuttering audio into "no headset detected", and was reverted.
+
 | Attempt | Result |
 |---|---|
 | Set Device State: STOP on discovery and on teardown | No effect |
 | Set Device State: RESET to the audio sub-device | No effect |
+| RESET, then waiting for the hello §3.1.1 promises | **No hello, ever - loses audio entirely** |
 | Proposing the device's other format first, so the real one is a change | Confirmed to run, no effect - **and withdrawn**, see below |
 | Set Device State: RESET to the primary device | Takes the pad off the USB bus; permission prompt loop |
 | `libusb_reset_device()` to re-enumerate, as xone does at probe | Pad left unclaimed, **input dead**, USB stack cycling |

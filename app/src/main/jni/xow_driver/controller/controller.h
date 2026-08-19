@@ -323,17 +323,20 @@ private:
     std::vector<uint8_t> audioDeviceFormats;
 
     /*
-     * Whether the audio sub-device introduced itself this session, and whether we have already
-     * tried to make it.
+     * Whether the audio sub-device introduced itself this session.
      *
      * This is the difference between a pad that is ours to configure and one still running the last
      * process's stream. 2.2.1 has a device send Hello only while in Arrival, so a sub-device left
      * Active by a killed process never announces - its metadata still answers, so setup proceeds
      * and configures a device that never stopped. Measured on hardware: every session with an
      * announce played cleanly and every session without one stuttered, across five sessions.
+     *
+     * Diagnostic only, and deliberately so. Acting on it by resetting the sub-device was tried and
+     * reverted: the pad does not announce again afterwards, so it ends the session with no audio
+     * device at all. It is logged at discovery, which makes "this session will stutter" visible
+     * before anyone listens for it.
      */
     std::atomic<bool> audioDeviceAnnounced{false};
-    std::atomic<bool> audioDeviceResetTried{false};
 
     /*
      * Where 2.2.11's initialisation sequence has got to. The host cannot simply send a format and
