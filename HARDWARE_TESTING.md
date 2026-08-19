@@ -118,8 +118,26 @@ pad. Test both configurations — the second block is the regression check.
       specifies m/s²; that was fixed during the port and this is the check that confirms it.
 - [ ] Motion is usable in practice — e.g. motion aiming in an emulator such as Cemu, Yuzu or
       Ryujinx.
-- [ ] **Unplug and replug mid-stream: the controller comes back, and the app does not leak the
-      USB interface or crash.** Expect this to have *failed* before the detach handling landed -
+- [x] **Unplug and replug mid-stream: the controller comes back, and the app does not leak the
+      USB interface or crash.** *Verified on the Shield, 2026-08-19, cabled Xbox One pad, six
+      cycles in one session - three with pad audio on.* Each one:
+
+      ```
+      Wired: device is gone; stopping audio
+      USB device detached: /dev/bus/usb/001/0NN
+      Removed controller: N
+      Controller number 0 is now available
+      Wired: device opened            (on replug)
+      Assigned as controller 0
+      ```
+
+      The controller number returned to 0 every time, so nothing leaked - the number in
+      `Removed controller: N` is the monotonic device id, which is meant to climb. With audio on,
+      `Wired: audio stopped` and `Audio returned from the pads; local output reopened` followed
+      without intervention. Errors were bounded at two to seven `LIBUSB_ERROR_NO_DEVICE` inside the
+      same second as each unplug and then stopped: no spin. Crash buffer empty throughout.
+
+      Before the detach handling this had *failed* -
       nothing noticed a cabled pad going away at all, so the claim, the controller number and the
       native driver all survived the unplug.
 
