@@ -925,36 +925,27 @@ bool Controller::setAudioEnabled(bool enable)
         }
 
         /*
-         * Tear the audio sub-device down before setting it up, where the transport gives us no
-         * other way to be sure of its state.
+         * No RESET here, and that is deliberate rather than an omission.
          *
-         * 2.2.11: "once started, audio data flows continually ... until the device is powered off,
-         * disconnected, or until the host requests a new audio configuration first through
-         * transmission of a Set Device State: STOP". A process that is killed sends no STOP, so the
-         * pad stays started, waiting on a stream that has gone - and the next session's STOP is
-         * issued to a device mid-stream rather than idle. On a cable that state survives, because
-         * nothing re-enumerates the device between sessions; the audio came back stretched and
-         * gapped on every session after the first, and only unplugging the pad cleared it.
+         * One was sent to the audio sub-device, followed by a 200 ms wait, to tear it down before
+         * setting it up - a process that is killed sends no STOP, so the pad stays started and the
+         * next session's configuration is issued to a device mid-stream. It never fixed that, and
+         * 3.1.1 says why it could not: a device receiving RESET "MUST immediately reply with a GIP
+         * Status that indicates powering off" and "SHOULD then wait 500 ms before a power off or
+         * reset". A STOP arriving inside that window tells it to "immediately tear down all
+         * sub-devices and then power off or reset from that point", and "no state change other than
+         * the initial OFF or RESET is allowed".
          *
-         * RESET is aimed at the audio sub-device alone. Sent to the primary it takes the whole pad
-         * off the USB bus - that was tried, and it looped the permission prompt - but a sub-device
-         * is a logical device of its own, and this is the teardown the specification defines for
-         * one.
+         * So the old sequence reset the sub-device, interrupted its teardown 200 ms in, and then
+         * configured and started it within a few milliseconds more - while the specification has it
+         * tearing down and going back to Arrival to send Hellos, ignoring exactly the messages we
+         * were sending. It was left in after being measured as no cure, which is how the
+         * discovery-time format retune survived too, and that one turned out to be causing the
+         * pitch shift.
          *
-         * Wireless pads do not need it: a pad that disconnects has already lost this state, and
-         * this is not a path worth exercising on a link that works.
+         * What remains is 2.2.11's sequence and nothing else: STOP, configure, wait for the echo,
+         * START, wait for the volume. That is also what the Windows capture does.
          */
-        if (audioTransport != nullptr)
-        {
-            if (!setDeviceState(audioDeviceId, STATE_RESET))
-            {
-                Log::error("Failed to reset the audio device");
-            }
-
-            // Long enough for the device to act on it; 2.2.11 gives a device 500 ms to assume a
-            // state message was lost, so this is well inside what it expects to be waited.
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        }
 
         /*
          * 2.2.11's sequence, and the order is the point: stop the device, propose a format, and
