@@ -34,6 +34,13 @@ public class XboxWiredGipController extends GipController {
     private final UsbDeviceConnection connection;
     private final UsbInterface gipInterface;
 
+    /*
+     * Something to recognise this pad by after it has been re-enumerated. The device name is a bus
+     * path and changes every time; the serial does not. Read once here, while permission is
+     * certainly held, rather than from a UsbDevice we would otherwise have to keep alive.
+     */
+    private final String serial;
+
     static {
         System.loadLibrary("xow-driver");
     }
@@ -46,6 +53,14 @@ public class XboxWiredGipController extends GipController {
         this.wiredHandle = wiredHandle;
         this.connection = connection;
         this.gipInterface = gipInterface;
+
+        String reported = device.getSerialNumber();
+        this.serial = reported != null ? reported : device.getDeviceName();
+    }
+
+    /** @return an identity that survives re-enumeration, unlike the device name */
+    public String getSerial() {
+        return serial;
     }
 
     /**
@@ -141,6 +156,42 @@ public class XboxWiredGipController extends GipController {
     }
 
     /**
+     * Tears the driver down and re-enumerates the pad, which is what pulling its cable does.
+     *
+     * <p>One method rather than a reset the caller sequences itself, because the ordering is the
+     * whole difficulty. The native driver has to stop first, or its read thread and libusb event
+     * thread are still working a descriptor that is about to be reset out from under them — but the
+     * connection has to stay <em>open</em> across the reset, since the reset needs its descriptor.
+     * {@link #stop()} closes it, so this cannot be built out of {@code stop()} plus a reset.
+     *
+     * <p>Afterwards the pad is gone from the bus and will attach again by itself.
+     * {@code UsbDriverService} sees the detach and attach broadcasts and re-claims it.
+     *
+     * @return whether the device was reset. The controller is torn down and removed either way.
+     */
+    public boolean resetAndStop() {
+        if (wiredHandle == 0) {
+            return false;
+        }
+
+        long handle = wiredHandle;
+        wiredHandle = 0;
+
+        // Threads first, connection still open: the reset below needs the descriptor
+        destroyWiredDriver(handle);
+        connection.releaseInterface(gipInterface);
+
+        boolean reset = resetWiredDevice(connection.getFileDescriptor());
+
+        // Dead either way now - a successful reset re-enumerates the device out from under it
+        connection.close();
+
+        notifyDeviceRemoved();
+
+        return reset;
+    }
+
+    /**
      * @return whether this device is a cabled GIP pad. The same descriptor test
      *         {@link XboxOneController} uses, because it is the same hardware — what differs is
      *         which driver we put on it.
@@ -153,4 +204,20 @@ public class XboxWiredGipController extends GipController {
     private static native boolean startWiredDriver(long handle);
     private static native long wiredControllerHandle(long handle);
     private static native void destroyWiredDriver(long handle);
+
+    /**
+     * Re-enumerates the pad, which is what pulling the cable does.
+     *
+     * <p>The one recovery for the audio state a killed process leaves behind — see
+     * {@code jni/xow_driver/AUDIO.md} for the six GIP-level attempts that do not work. The pad is
+     * battery powered, so a cable pull is not a power cycle but a <em>disconnect</em>, which
+     * MS-GIPUSB 2.2.11 names as one of the three things that end an audio stream.
+     *
+     * <p>The connection is dead either way once this returns: a successful reset re-enumerates the
+     * device out from under it. The caller must release everything and let the attach broadcast
+     * bring the pad back.
+     *
+     * @return whether the device was reset
+     */
+    public static native boolean resetWiredDevice(int fd);
 }

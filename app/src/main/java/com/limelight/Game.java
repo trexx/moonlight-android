@@ -2325,6 +2325,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      *         whether the game menu offers to pair a controller with it. False when the USB
      *         driver preference is off, since nothing binds the service then.
      */
+    public boolean hasWiredGipPad() {
+        return usbDriverBinder != null && usbDriverBinder.hasWiredGipPad();
+    }
+
     public boolean hasXboxWirelessDongle() {
         return usbDriverBinder != null && usbDriverBinder.hasXboxWirelessDongle();
     }
@@ -2393,6 +2397,34 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             new Handler(Looper.getMainLooper()).post(
                     () -> Toast.makeText(Game.this, message, Toast.LENGTH_SHORT).show());
         }).start();
+    }
+
+    /**
+     * Re-enumerates the cabled pad, which is what pulling its cable does.
+     *
+     * <p>The only recovery for the audio state a killed process leaves behind — see
+     * {@code jni/xow_driver/AUDIO.md} for the GIP-level attempts that do not work, and note that
+     * the pad is battery powered, so a cable pull is a <em>disconnect</em> rather than a power
+     * cycle. Manual rather than automatic because it briefly takes the controller away, and doing
+     * that to someone without warning is worse than the stutter it fixes.
+     *
+     * <p>Three messages, because the pad is genuinely gone for a second or so and silence there is
+     * indistinguishable from a crash: one before, one when it comes back, and one saying to use the
+     * cable if it does not.
+     */
+    public void resetPadAudio() {
+        if (usbDriverBinder == null) {
+            return;
+        }
+
+        boolean started = usbDriverBinder.resetWiredPad(returned ->
+                Toast.makeText(Game.this,
+                        returned ? R.string.toast_pad_reset_done : R.string.toast_pad_reset_lost,
+                        Toast.LENGTH_LONG).show());
+
+        Toast.makeText(this,
+                started ? R.string.toast_pad_reset_started : R.string.toast_pad_reset_failed,
+                Toast.LENGTH_SHORT).show();
     }
 
     /**

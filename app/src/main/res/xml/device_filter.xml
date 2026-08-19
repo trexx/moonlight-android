@@ -8,11 +8,21 @@
     each of six replugs. Anything that re-enumerates a pad deliberately, rather than a user pulling
     a cable, is unusable until that stops.
 
-    Matched on the GIP signature rather than on product IDs: vendor 0x045e, and the vendor-specific
-    interface 0xff / 0x47 / 0xd0 that MS-GIPUSB 2.2.12 defines and that
+    Cabled pads are matched on the GIP signature rather than on product IDs: vendor 0x045e, and the
+    vendor-specific interface 0xff / 0x47 / 0xd0 that MS-GIPUSB 2.2.12 defines and that
     XboxOneController.canClaimDevice() already tests for. Listing product IDs instead would need
     this file edited for every pad the driver gains, and the two lists would drift.
+
+    The wireless adapter is matched by product ID, because that is how
+    XboxWirelessDongle.canClaimDevice() matches it - it takes exactly two, and its interface is one
+    vendor-specific descriptor with bulk endpoints rather than the GIP layout above. Keeping each
+    entry in step with the predicate that claims it is what stops this file drifting from the code.
 -->
 <resources>
+    <!-- Cabled Xbox pads: the GIP data interface -->
     <usb-device vendor-id="1118" class="255" subclass="71" protocol="208" />
+
+    <!-- Xbox Wireless Adapter, older (0x02e6) and newer (0x02fe) -->
+    <usb-device vendor-id="1118" product-id="742" />
+    <usb-device vendor-id="1118" product-id="766" />
 </resources>

@@ -210,6 +210,16 @@ public class GameMenu {
                     () -> showPadAudioVolumeMenu()));
         }
 
+        /*
+         * Last, and only for a cabled pad. It briefly takes the controller away, so it sits below
+         * the things someone came here to do rather than next to them - and it is the recovery for
+         * a fault that only a cabled pad has, since a wireless one loses the state by disconnecting.
+         */
+        if (game.hasWiredGipPad()) {
+            options.add(new MenuOption(getString(R.string.game_menu_pad_audio_reset),
+                    () -> game.resetPadAudio()));
+        }
+
         options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
 
         showMenuDialog(getString(R.string.game_menu_pad_audio),

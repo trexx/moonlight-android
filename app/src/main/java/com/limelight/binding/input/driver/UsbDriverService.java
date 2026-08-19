@@ -30,6 +30,8 @@ import com.limelight.binding.audio.PadAudioSink;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.function.Consumer;
 import java.util.List;
 
 /**
@@ -81,6 +83,26 @@ public class UsbDriverService extends Service implements UsbDriverListener {
      * parallel map rather than a different scheme, so the detach handler looks both up the same way.
      */
     private final HashMap<String, XboxWirelessDongle> claimedDongles = new HashMap<>();
+
+    /**
+     * Devices already re-enumerated this process, so a pad that does not come back cannot be reset
+     * over and over. Keyed on the USB serial, which survives re-enumeration where the device name
+     * does not — the name is a bus path and changes every time.
+     */
+    private final HashSet<String> resetDevices = new HashSet<>();
+
+    /** Called once when a pad returns from {@link UsbDriverBinder#resetWiredPad}, or times out. */
+    private Runnable resetPending;
+    private final Handler resetHandler = new Handler(Looper.getMainLooper());
+
+    /**
+     * How long a re-enumerated pad has to come back.
+     *
+     * <p>A replug measures about a second from attach to open now that permission persists, and the
+     * attach path deliberately waits 1000 ms of that to let the kernel settle. Five seconds is
+     * generous against that and still short enough that a user is still watching when it fails.
+     */
+    private static final long RESET_TIMEOUT_MS = 5000;
 
     // Client callback, null when nothing is bound
     private UsbDriverListener listener;
@@ -143,6 +165,15 @@ public class UsbDriverService extends Service implements UsbDriverListener {
     /** {@inheritDoc} */
     @Override
     public void deviceAdded(AbstractController controller) {
+        // A pad we re-enumerated has come back. Reported before the listener, so the menu's toast
+        // lands with the reconnection rather than behind whatever the listener does with it.
+        if (resetPending != null && controller instanceof XboxWiredGipController) {
+            Runnable done = resetPending;
+            resetPending = null;
+            resetHandler.removeCallbacksAndMessages(null);
+            resetHandler.post(done);
+        }
+
         // Call through to the client's listener
         if (listener != null) {
             listener.deviceAdded(controller);
@@ -217,6 +248,34 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         /** Stops watching and releases every claimed device. */
         public void stop() {
             UsbDriverService.this.stop();
+        }
+
+        /** @return true if a cabled GIP pad is claimed, so resetting one is possible at all */
+        public boolean hasWiredGipPad() {
+            for (AbstractController controller : controllers) {
+                if (controller instanceof XboxWiredGipController) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /**
+         * Re-enumerates the cabled GIP pad, which is what pulling its cable does.
+         *
+         * <p>The only recovery for the audio state a killed process leaves behind; see
+         * {@code jni/xow_driver/AUDIO.md} for the GIP-level attempts that do not work. The pad
+         * drops off the bus and comes back a second or so later, so input stops for that window —
+         * which is why the caller is expected to say so before calling this.
+         *
+         * @param onReturn run on the main thread when the pad comes back, or when it has not come
+         *                 back within {@link #RESET_TIMEOUT_MS}. The boolean is whether it returned.
+         * @return false if there was nothing to reset, or it has already been reset this process,
+         *         in which case {@code onReturn} is never run
+         */
+        public boolean resetWiredPad(Consumer<Boolean> onReturn) {
+            return UsbDriverService.this.resetWiredPad(onReturn);
         }
 
         /**
@@ -345,6 +404,75 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
             LimeLog.info(line.toString());
         }
+    }
+
+    /**
+     * Re-enumerates the claimed cabled pad. See {@link UsbDriverBinder#resetWiredPad}.
+     *
+     * <p>Ordering matters and is the reason this lives here rather than in the controller: the
+     * driver has to be torn down before the reset, or its read thread and libusb event thread are
+     * still working a descriptor that is about to become invalid. That teardown is the same one
+     * {@link #handleUsbDeviceDetached} drives, and it is why this is worth attempting at all — when
+     * re-enumeration was tried before, nothing handled the device going away and it left the pad
+     * unclaimed with input dead.
+     */
+    private boolean resetWiredPad(Consumer<Boolean> onReturn) {
+        XboxWiredGipController pad = null;
+
+        for (AbstractController controller : controllers) {
+            if (controller instanceof XboxWiredGipController wired) {
+                pad = wired;
+                break;
+            }
+        }
+
+        if (pad == null) {
+            return false;
+        }
+
+        /*
+         * Once per pad per process. A reset that does not bring the device back would otherwise be
+         * repeatable indefinitely, and the failure it produces - no controller at all - is exactly
+         * the one worth not doing twice.
+         */
+        String identity = pad.getSerial();
+
+        if (!resetDevices.add(identity)) {
+            LimeLog.info("Wired GIP: pad " + identity + " has already been reset this session");
+
+            return false;
+        }
+
+        final XboxWiredGipController target = pad;
+
+        resetPending = () -> onReturn.accept(true);
+
+        resetHandler.postDelayed(() -> {
+            if (resetPending == null) {
+                return;
+            }
+
+            resetPending = null;
+
+            LimeLog.warning("Wired GIP: pad did not come back after the reset");
+            onReturn.accept(false);
+        }, RESET_TIMEOUT_MS);
+
+        /*
+         * Off the main thread, like the detach path and Game.togglePadAudio(): stopping the pad
+         * joins its read thread, which can be inside a transfer with a 500 ms timeout.
+         */
+        new Thread(() -> {
+            LimeLog.info("Wired GIP: re-enumerating the pad");
+
+            // Tears the driver down and resets in the right order; see resetAndStop(). It ends in
+            // notifyDeviceRemoved(), so deviceRemoved() clears both lists - nothing to do here.
+            if (!target.resetAndStop()) {
+                LimeLog.warning("Wired GIP: the reset itself failed");
+            }
+        }).start();
+
+        return true;
     }
 
     /**
