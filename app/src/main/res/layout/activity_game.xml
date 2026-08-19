@@ -30,7 +30,7 @@
       a separate one.
 
       Whether that actually happens is device-dependent, so it is a check rather than an assumption:
-      HARDWARE_TESTING.md section 8 has the dumpsys SurfaceFlinger command and the pass condition.
+      HARDWARE_TESTING.md section 14 has the dumpsys SurfaceFlinger command and the pass condition.
       If composition does not change on either box, revert this - legibility over a bright scene is
       worse with a hard black box, and that is not worth paying for nothing.
     -->

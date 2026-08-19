@@ -3,6 +3,7 @@ package com.limelight;
 
 import com.limelight.binding.PlatformBinding;
 import com.limelight.binding.audio.LowLatencyAudioRenderer;
+import com.limelight.binding.audio.PadAudioSink;
 import com.limelight.binding.input.ControllerHandler;
 import com.limelight.binding.input.GameInputDevice;
 import com.limelight.binding.input.KeyboardTranslator;
@@ -12,6 +13,8 @@ import com.limelight.binding.input.touch.AbsoluteTouchContext;
 import com.limelight.binding.input.touch.RelativeTouchContext;
 import com.limelight.binding.input.touch.TrackpadContext;
 import com.limelight.binding.input.driver.UsbDriverService;
+import com.limelight.binding.input.driver.GipController;
+import com.limelight.binding.input.driver.XboxWiredGipController;
 import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
@@ -83,6 +86,8 @@ import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
 import java.util.Queue;
 
@@ -190,11 +195,23 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private boolean connectedToUsbDriverService = false;
     // Retained so the game menu can ask about, and drive, the USB driver's dongles
     private UsbDriverService.UsbDriverBinder usbDriverBinder;
+
+    // Which pads are taking the stream's audio. Shared with the renderer, which reads it per
+    // frame, and mutated from the game menu. Empty until the user asks for it, so the audio path
+    // is unchanged for anyone who never opens that menu.
+    private final PadAudioSink padAudioSink = new PadAudioSink();
+
+    // Whether any pad took audio during this stream, for labelling the end-of-stream summary. Set
+    // rather than cleared, because the question is what the stream contained, not how it ended.
+    private volatile boolean padAudioUsedThisStream;
     private ServiceConnection usbDriverServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
             UsbDriverService.UsbDriverBinder binder = (UsbDriverService.UsbDriverBinder) iBinder;
             binder.setListener(controllerHandler);
+            // Before start(): the service drops a disconnecting pad from the sink, and a pad can
+            // go away as soon as the driver is running.
+            binder.setPadAudioSink(padAudioSink);
             binder.start();
             usbDriverBinder = binder;
             connectedToUsbDriverService = true;
@@ -510,7 +527,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 .setRemoteConfiguration(StreamConfiguration.STREAM_CFG_AUTO) // NvConnection will perform LAN and VPN detection
                 .setSupportedVideoFormats(supportedVideoFormats)
                 .setAttachedGamepadMask(gamepadMask)
-                .setClientRefreshRateX100((int)(displayRefreshRate * 100))
+                // Rounded, not truncated: the host paces against this value, and a cast loses
+                // a hundredth of a hertz on the fractional NTSC modes both target boxes use.
+                // 59.94f * 100 is 5993.99986 in float, so a cast sends 5993.
+                .setClientRefreshRateX100(Math.round(displayRefreshRate * 100))
                 .setAudioConfiguration(prefConfig.audioConfiguration)
                 .setEncryptionFlags(prefConfig.encryptionFlags)
                 .setColorSpace(decoderRenderer.getPreferredColorSpace())
@@ -924,6 +944,18 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             int videoFormat = decoderRenderer.getActiveVideoFormat();
 
             displayedFailureDialog = true;
+
+            /*
+             * Before stopConnection(), which tears the renderer down.
+             *
+             * Labelled from whether a pad took audio at any point, not from whether one is taking
+             * it now: disconnecting removes the pad from the sink before this runs, so asking the
+             * sink labelled every run "off" - including a run with ninety seconds of pad audio in
+             * it.
+             */
+            decoderRenderer.logStreamSummary(padAudioUsedThisStream ? "pad audio on"
+                                                                    : "pad audio off");
+
             stopConnection();
 
             if (prefConfig.enableLatencyToast) {
@@ -1461,15 +1493,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     /**
-     * Central dispatcher for every pointer-like event: joystick axes, mouse movement and buttons,
-     * stylus, and finger touches routed to the {@link TouchContext} for their pointer index.
-     *
-     * <p>Also intercepts the three-finger gestures that belong to the client rather than the host.
-     *
-     * @param view the view the event landed on, or null for events delivered to the activity
-     * @return true if the event was consumed
-     */
-    /**
      * @return true if the device that produced this event reports joystick axes, whatever the
      *         event's own source says. A DualShock touchpad arrives as a separate source on a
      *         device that is otherwise a gamepad, which is what this distinguishes.
@@ -1479,6 +1502,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         return device != null && (device.getSources() & InputDevice.SOURCE_CLASS_JOYSTICK) != 0;
     }
 
+    /**
+     * Central dispatcher for every pointer-like event: joystick axes, mouse movement and buttons,
+     * stylus, and finger touches routed to the {@link TouchContext} for their pointer index.
+     *
+     * <p>Also intercepts the three-finger gestures that belong to the client rather than the host.
+     *
+     * @param view the view the event landed on, or null for events delivered to the activity
+     * @return true if the event was consumed
+     */
     private boolean handleMotionEvent(View view, MotionEvent event) {
         // Pass through mouse/touch/joystick input if we're not grabbing
         if (!grabbedInput) {
@@ -2183,7 +2215,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             UiHelper.notifyStreamConnecting(Game.this);
 
             decoderRenderer.setRenderTarget(holder);
-            conn.start(new LowLatencyAudioRenderer(prefConfig.enableAAudio),
+            conn.start(new LowLatencyAudioRenderer(prefConfig.enableAAudio, padAudioSink),
                     decoderRenderer, Game.this);
         }
     }
@@ -2250,10 +2282,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     /** {@inheritDoc} Posts the decoder's stats text to the overlay on the UI thread. */
     @Override
     public void onPerfUpdate(final String text) {
+        // Appended here rather than in the decoder, which has no business knowing about audio, and
+        // on this thread rather than the UI one - the decoder already hopped off the frame path to
+        // format, and this is the same hop. Costs nothing when no pad is taking audio.
+        final String full = text + padAudioSink.getOverlayText();
+
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
-                performanceOverlayView.setText(text);
+                performanceOverlayView.setText(full);
             }
         });
     }
@@ -2314,6 +2351,79 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         if (usbDriverBinder != null) {
             usbDriverBinder.setDonglePairingMode(true);
         }
+    }
+
+    /**
+     * @return every GIP pad we are driving - adapter or cable - or empty if the driver is not
+     *         bound. The game menu lists these so the user can send audio to one.
+     */
+    public List<GipController> getGipControllers() {
+        if (usbDriverBinder == null) {
+            return Collections.emptyList();
+        }
+        return usbDriverBinder.getGipControllers();
+    }
+
+    /** @return which pads are currently taking the stream's audio */
+    public PadAudioSink getPadAudioSink() {
+        return padAudioSink;
+    }
+
+    /**
+     * Turns audio to a pad's headphone jack on or off mid-stream, reporting the outcome. A refusal
+     * is either the two-pad bandwidth limit or a pad with no audio endpoint at all, and the toast
+     * distinguishes them rather than leaving the user to wonder why the menu did nothing.
+     */
+    public void togglePadAudio(GipController controller) {
+        final boolean enabling = !padAudioSink.isEnabled(controller);
+
+        // Off the main thread, for the same reason setDonglePairingMode() is: both ends of this
+        // are USB transfers. Disabling also joins the pad's sender thread, which can be inside a
+        // bulk write with a one-second timeout, and that is far too long to hold the UI.
+        new Thread(() -> {
+            final boolean succeeded = enabling
+                    ? padAudioSink.enable(controller)
+                    : disablePadAudio(controller);
+
+            final int message;
+
+            if (succeeded) {
+                if (enabling) {
+                    padAudioUsedThisStream = true;
+                }
+
+                message = enabling ? R.string.toast_pad_audio_enabled
+                                   : R.string.toast_pad_audio_disabled;
+            }
+            else if (!controller.hasAudioSupport()) {
+                // Read after the attempt rather than before it, so the reason reported is the one
+                // that actually stopped it rather than a guess made in advance
+                message = R.string.toast_pad_audio_unsupported;
+            }
+            else {
+                message = R.string.toast_pad_audio_failed;
+            }
+
+            new Handler(Looper.getMainLooper()).post(
+                    () -> Toast.makeText(Game.this, message, Toast.LENGTH_SHORT).show());
+        }).start();
+    }
+
+    /**
+     * Sets the headphone volume on every pad taking audio.
+     *
+     * <p>Runs on the calling thread rather than being posted off it: a volume change is one short
+     * GIP command per pad, not the format renegotiation and thread teardown that enabling and
+     * disabling involve.
+     */
+    public void setPadAudioVolume(int percent) {
+        padAudioSink.setVolume(percent);
+    }
+
+    /** Disabling always succeeds; wrapped so the toggle above can treat both directions alike. */
+    private boolean disablePadAudio(GipController controller) {
+        padAudioSink.disable(controller);
+        return true;
     }
 
     /** Ends the stream and finishes the activity. */

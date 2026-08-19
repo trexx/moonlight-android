@@ -160,6 +160,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long initialExceptionTimestamp;
     private static final int EXCEPTION_REPORT_DELAY_MS = 3000;
 
+    // How long the decoder may refuse to hand back an input buffer before we call it hung. The
+    // user has been looking at a frozen picture for this whole time, so it cannot be generous.
+    private static final int DECODER_HANG_THRESHOLD_MS = 5000;
+
     // Stats for the current one-second window, the previous one (what the overlay displays), and
     // the whole session (what the post-stream summary displays)
     private final VideoStats activeWindowVideoStats = new VideoStats();
@@ -1548,7 +1552,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * Obtains an input buffer to write the next decode unit into, blocking until one is free.
      *
      * <p>A decoder that stops returning input buffers is hung, and is tolerated only briefly:
-     * the user is watching a frozen picture.
+     * the user is watching a frozen picture. The wait is therefore bounded by
+     * {@link #DECODER_HANG_THRESHOLD_MS} rather than running until {@code stopping} is set.
+     * Without that bound the wait was unbounded and the hang check below sat after it, so a
+     * genuine hang spun here forever and was never reported — the report could only fire once
+     * the user gave up and quit, by which time it was indistinguishable from ordinary shutdown.
      *
      * @return true if {@link #nextInputBuffer} is ready to be filled
      */
@@ -1564,9 +1572,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         startTime = SystemClock.uptimeMillis();
 
         try {
-            // If we don't have an input buffer index yet, fetch one now
+            // If we don't have an input buffer index yet, fetch one now.
+            //
+            // Bounded by the hang threshold so a decoder that never returns a buffer falls out
+            // of here and gets reported while the stream is still up. Each iteration has
+            // already blocked 10 ms inside dequeueInputBuffer(), so the clock read costs
+            // nothing measurable and never runs at all in the steady state - the common case
+            // returns on the first call.
             while (nextInputBufferIndex < 0 && !stopping) {
                 nextInputBufferIndex = videoDecoder.dequeueInputBuffer(10000);
+
+                if (nextInputBufferIndex < 0 &&
+                        SystemClock.uptimeMillis() - startTime >= DECODER_HANG_THRESHOLD_MS) {
+                    break;
+                }
             }
 
             // Get the backing ByteBuffer for the input buffer index
@@ -1594,6 +1613,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         }
 
+        // prepareForStop() deliberately breaks the wait above, so reaching here with 'stopping'
+        // set says nothing about the decoder's health. A codec backpressured for several
+        // seconds - after heavy packet loss, say - that the user then quits would otherwise
+        // clear the hang threshold on the way out and record a crash that never happened.
+        // Bail before the timing checks so teardown does not log a long-dequeue warning either.
+        if (stopping) {
+            return false;
+        }
+
         int deltaMs = (int)(SystemClock.uptimeMillis() - startTime);
 
         if (deltaMs >= 20) {
@@ -1601,9 +1629,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         if (nextInputBuffer == null) {
-            // We've been hung for 5 seconds and no other exception was reported,
-            // so generate a decoder hung exception
-            if (deltaMs >= 5000 && initialException == null) {
+            // The decoder has refused us a buffer for the whole threshold and no other exception
+            // was reported, so call it hung.
+            if (deltaMs >= DECODER_HANG_THRESHOLD_MS && initialException == null) {
                 DecoderHungException decoderHungException = new DecoderHungException(deltaMs);
                 if (!reportedCrash) {
                     reportedCrash = true;
@@ -2495,6 +2523,31 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * @return mean milliseconds from a frame arriving to it being presented, over the whole
      *         session, or 0 if no frames have been received
      */
+    /**
+     * Logs the session's video totals, for comparing one run against another.
+     *
+     * <p>Debug builds only, and once per stream, so it costs nothing on any frame path. It exists
+     * because the numbers that matter for a comparison are only otherwise reachable through
+     * {@code RendererException}, which is built on a crash, or the post-stream latency toast, which
+     * rounds to milliseconds and cannot be read back off the device.
+     *
+     * <p>Totals rather than the overlay's per-second window: the overlay forces GPU composition on
+     * this hardware, so it changes frame timing as well as measuring it.
+     */
+    public void logStreamSummary(String label) {
+        if (!BuildConfig.DEBUG) {
+            return;
+        }
+
+        LimeLog.info("Stream summary [" + label + "]: " +
+                globalVideoStats.totalFramesReceived + " received, " +
+                globalVideoStats.totalFramesRendered + " rendered, " +
+                globalVideoStats.framesLost + " lost in " +
+                globalVideoStats.frameLossEvents + " events, " +
+                getAverageEndToEndLatency() + " ms end-to-end, " +
+                getAverageDecoderLatency() + " ms decoder");
+    }
+
     public int getAverageEndToEndLatency() {
         if (globalVideoStats.totalFramesReceived == 0) {
             return 0;

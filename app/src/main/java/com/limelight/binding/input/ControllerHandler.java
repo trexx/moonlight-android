@@ -2950,6 +2950,21 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         conn.sendControllerMotionEvent((byte) context.controllerNumber, motionType, motionX, motionY, motionZ);
     }
 
+    /** {@inheritDoc} Battery state from a controller driven by our own USB drivers. */
+    @Override
+    public void reportControllerBattery(int controllerId, byte batteryState, byte batteryPercentage) {
+        if (stopped) {
+            return;
+        }
+
+        GenericControllerContext context = usbDeviceContexts.get(controllerId);
+        if (context == null) {
+            return;
+        }
+
+        conn.sendControllerBatteryEvent((byte) context.controllerNumber, batteryState, batteryPercentage);
+    }
+
     /** {@inheritDoc} Releases the context and player number for a USB controller that went away. */
     @Override
     public void deviceRemoved(AbstractController controller) {

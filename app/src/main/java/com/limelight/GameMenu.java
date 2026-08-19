@@ -5,8 +5,10 @@ import android.os.Handler;
 import android.os.Looper;
 import android.widget.ArrayAdapter;
 
+import com.limelight.binding.audio.PadAudioSink;
 import com.limelight.binding.input.GameInputDevice;
 import com.limelight.binding.input.KeyboardTranslator;
+import com.limelight.binding.input.driver.GipController;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.KeyboardPacket;
 
@@ -153,6 +155,109 @@ public class GameMenu {
         builder.show();
     }
 
+    /**
+     * Lists the paired pads with their current audio state, so one can be toggled mid-game.
+     *
+     * <p>Each entry says what it is now rather than what selecting it would do, and a pad that
+     * cannot be enabled because the two-pad limit is reached says so on the row. The cap is a
+     * bandwidth budget on a link shared with controller input, so it is worth showing rather
+     * than letting a selection quietly do nothing.
+     */
+    private void showPadAudioMenu() {
+        List<GipController> controllers = game.getGipControllers();
+        PadAudioSink sink = game.getPadAudioSink();
+        List<MenuOption> options = new ArrayList<>();
+
+        int number = 1;
+        for (GipController controller : controllers) {
+            boolean enabled = sink.isEnabled(controller);
+
+            /*
+             * A pad left streaming by a killed process stutters until its cable is pulled, and
+             * nothing sent over GIP or USB clears it - the attempts are tabulated in AUDIO.md.
+             * The driver can see the condition before a note is played (the sub-device answers
+             * metadata without ever announcing), so the row says what to do about it rather than
+             * leaving the stutter to be discovered by ear and blamed on the stream.
+             */
+            boolean stale = controller.audioNeedsReplug();
+            String state;
+
+            if (enabled) {
+                state = getString(stale ? R.string.game_menu_pad_audio_on_stale
+                                        : R.string.game_menu_pad_audio_on);
+            }
+            else if (!sink.isSupportedBy(controller)) {
+                /*
+                 * No audio sub-device has announced. That is almost always an empty headphone
+                 * jack rather than a pad without one: [MS-GIPUSB] 1.2 makes sub-devices hot
+                 * swappable, so the 3.5 mm audio device appears when a headset is plugged in and
+                 * not before. The two cases are indistinguishable from here - both are simply an
+                 * absent sub-device - so the wording names the one the user can act on.
+                 *
+                 * Distinct from the two-pad cap below, and worth saying so rather than blaming
+                 * the limit.
+                 */
+                state = getString(R.string.game_menu_pad_audio_unsupported);
+            }
+            else if (sink.canEnableMore()) {
+                state = getString(stale ? R.string.game_menu_pad_audio_off_stale
+                                        : R.string.game_menu_pad_audio_off);
+            }
+            else {
+                state = getString(R.string.game_menu_pad_audio_unavailable);
+            }
+
+            String label = game.getResources().getString(
+                    R.string.game_menu_pad_audio_entry, number++, state);
+
+            options.add(new MenuOption(label, () -> game.togglePadAudio(controller)));
+        }
+
+        // Only worth offering once a pad is actually taking audio - there is nothing to set the
+        // volume of otherwise, and the level applies to whichever pads are on rather than to one.
+        if (sink.hasTargets()) {
+            options.add(new MenuOption(game.getResources().getString(
+                    R.string.game_menu_pad_audio_volume, sink.getVolume()),
+                    () -> showPadAudioVolumeMenu()));
+        }
+
+        options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
+
+        showMenuDialog(getString(R.string.game_menu_pad_audio),
+                options.toArray(new MenuOption[0]));
+    }
+
+    /**
+     * Fixed volume steps rather than a slider.
+     *
+     * <p>This menu is driven by a d-pad from across a room, where a slider means holding a
+     * direction and guessing when to stop. Steps are one press each and land on the same value
+     * every time, which also makes "put it back where it was" possible.
+     *
+     * <p>Volume has to exist somewhere in the UI because pad audio bypasses AudioTrack and AAudio
+     * entirely, so the TV remote's volume keys do not reach it — see {@link PadAudioSink}.
+     */
+    private void showPadAudioVolumeMenu() {
+        PadAudioSink sink = game.getPadAudioSink();
+        int current = sink.getVolume();
+        List<MenuOption> options = new ArrayList<>();
+
+        for (int level : new int[]{100, 80, 60, 40, 20}) {
+            String label = game.getResources().getString(
+                    level == current ? R.string.game_menu_pad_audio_volume_current
+                                     : R.string.game_menu_pad_audio_volume_entry, level);
+
+            options.add(new MenuOption(label, () -> game.setPadAudioVolume(level)));
+        }
+
+        options.add(new MenuOption(getString(R.string.game_menu_pad_audio_volume_mute),
+                () -> game.setPadAudioVolume(0)));
+        options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
+
+        showMenuDialog(getString(R.string.game_menu_pad_audio_volume_title),
+                options.toArray(new MenuOption[0]));
+    }
+
     private void showSpecialKeysMenu() {
         showMenuDialog(getString(R.string.game_menu_send_keys), new MenuOption[]{
                 new MenuOption(getString(R.string.game_menu_send_keys_esc),
@@ -196,6 +301,15 @@ public class GameMenu {
         if (game.hasXboxWirelessDongle()) {
             options.add(new MenuOption(getString(R.string.game_menu_pair_xbox_controller),
                     () -> game.startDonglePairing()));
+        }
+
+        // Outside the adapter check: a cabled pad has a headphone jack too, and gating this on the
+        // adapter hid the entry entirely when the only pad was on a cable. Still requires a pad to
+        // actually be present and the stream's audio to be a format one can take - otherwise the
+        // submenu would be a list whose every entry refuses.
+        if (!game.getGipControllers().isEmpty() && game.getPadAudioSink().isFormatSupported()) {
+            options.add(new MenuOption(getString(R.string.game_menu_pad_audio),
+                    () -> showPadAudioMenu()));
         }
 
         options.add(new MenuOption(getString(R.string.game_menu_toggle_performance_overlay), () -> game.togglePerformanceOverlay()));

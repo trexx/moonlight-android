@@ -22,6 +22,7 @@
 
 #include "dongle.h"
 #include "../utils/log.h"
+#include "../utils/jni.h"
 
 Dongle::Dongle(
     std::unique_ptr<UsbDevice> usbDevice,
@@ -75,19 +76,40 @@ void Dongle::stop() {
 Dongle::~Dongle()
 {
     stop();
-    JNIEnv *env = nullptr;
-    jint r;
-    r = jvm->AttachCurrentThread(&env, nullptr);
-    if(r != JNI_OK || env == nullptr) {
+
+    // Reached from destroyDriver() on the app's own thread, which is a Java thread and therefore
+    // already attached. stop() has joined the read threads by now, so they have detached
+    // themselves.
+    JNIEnv *env = getAttachedEnv(jvm);
+    if (env == nullptr) {
         return;
     }
-    env->DeleteGlobalRef(jthis);
+
+    if (jthis != nullptr) {
+        env->DeleteGlobalRef(jthis);
+        jthis = nullptr;
+    }
 }
 
 void Dongle::handleControllerConnect(Bytes address)
 {
     Log::debug("handleControllerConnect");
     std::lock_guard<std::mutex> lock(controllerMutex);
+
+    // A controller retransmits its association request if it doesn't see the response quickly
+    // enough. associateClient() keys purely off a free-slot bitmask and never looks at the
+    // address, so without this the retransmission takes a second WCID and builds a second
+    // Controller for one physical pad - which then shows up twice in Moonlight, with only one
+    // of the two receiving input. There are 16 slots, so repeated retries exhaust them too.
+    for (uint8_t i = 0; i < MT_WCID_COUNT; i++)
+    {
+        if (controllers[i] && clientAddresses[i] == address)
+        {
+            Log::debug("Ignoring duplicate association for controller '%d'", i + 1);
+
+            return;
+        }
+    }
 
     uint8_t wcid = associateClient(address);
 
@@ -108,24 +130,25 @@ void Dongle::handleControllerConnect(Bytes address)
     auto uptr = std::make_unique<Controller>(sendPacket);
     Controller *rawptr = uptr.get();
     controllers[wcid - 1] = std::move(uptr);
+    clientAddresses[wcid - 1] = address;
     notifyJavaControllerAdd(wcid - 1, rawptr, 0xdead, 0xbeef);
     Log::info("Controller '%d' connected", wcid);
 }
 
 void Dongle::notifyJavaControllerAdd(int id, Controller *controller, short vid, short pid) {
-    JNIEnv *env = nullptr;
-    jint r = jvm->AttachCurrentThread(&env, nullptr);
-    if (r != JNI_OK || env == nullptr) {
+    // Called from the read thread, which readBulkPackets() keeps attached. Detaching here would
+    // detach that thread out from under its own loop.
+    JNIEnv *env = getAttachedEnv(jvm);
+    if (env == nullptr) {
         Log::error("cannot get jnienv from javavm");
         return;
     }
     jclass clazz = env->GetObjectClass(jthis);
     jmethodID method = env->GetMethodID(clazz, "addNewController", "(IJSS)V");
     env->CallVoidMethod(jthis, method, id, (jlong) controller, vid, pid);
-    r = jvm->DetachCurrentThread();
-    if (r != JNI_OK ) {
-        Log::error("jvm cannot DetachCurrentThread");
-    }
+    // Freed explicitly: without the detach that used to do it, local references accumulate for
+    // the life of the thread. Pairing is rare, but the read thread is not short-lived.
+    env->DeleteLocalRef(clazz);
 }
 
 void Dongle::handleControllerDisconnect(uint8_t wcid)
@@ -148,6 +171,9 @@ void Dongle::handleControllerDisconnect(uint8_t wcid)
 
     controllers[wcid - 1].reset();
 
+    // Release the address alongside the slot, so the same pad can associate again later
+    clientAddresses[wcid - 1] = Bytes();
+
     if (!removeClient(wcid))
     {
         Log::error("Failed to remove controller");
@@ -159,19 +185,16 @@ void Dongle::handleControllerDisconnect(uint8_t wcid)
 }
 
 void Dongle::notifyJavaControllerRemove(int id) {
-    JNIEnv *env = nullptr;
-    jint r = jvm->AttachCurrentThread(&env, nullptr);
-    if (r != JNI_OK || env == nullptr) {
+    // See notifyJavaControllerAdd() on why this neither attaches nor detaches.
+    JNIEnv *env = getAttachedEnv(jvm);
+    if (env == nullptr) {
         Log::error("cannot get jnienv from javavm");
         return;
     }
     jclass clazz = env->GetObjectClass(jthis);
     jmethodID method = env->GetMethodID(clazz, "removeController", "(I)V");
     env->CallVoidMethod(jthis, method, id);
-    r = jvm->DetachCurrentThread();
-    if (r != JNI_OK ) {
-        Log::error("jvm cannot DetachCurrentThread");
-    }
+    env->DeleteLocalRef(clazz);
 }
 
 void Dongle::handleControllerPair(Bytes address, const Bytes &packet)
@@ -204,10 +227,15 @@ void Dongle::handleControllerPair(Bytes address, const Bytes &packet)
         return;
     }
 
+    // Guarded at the call site, not left to Log::debug(): its release body is empty but its
+    // arguments are still evaluated, and formatBytes() builds a string. The only call site in
+    // this driver where a debug line costs anything when nothing is listening.
+#ifdef _DEBUG
     Log::debug(
         "Controller paired: %s",
         Log::formatBytes(address).c_str()
     );
+#endif
 }
 
 void Dongle::handleControllerPacket(uint8_t wcid, const Bytes &packet)
@@ -232,6 +260,15 @@ void Dongle::handleControllerPacket(uint8_t wcid, const Bytes &packet)
     // Ignore unconnected controllers
     if (!controllers[wcid - 1])
     {
+#ifdef _DEBUG
+        // The one drop above GipDevice that could hide a second client. A GIP accessory is
+        // supposed to share its pad's wireless client and be told apart by device id, not to
+        // associate separately - but that is an assumption, and this is where a packet would
+        // vanish if it were wrong. Reported so that "no accessory ever appeared" can be stated
+        // about the whole path rather than only about the parser.
+        Log::info("Data frame for wcid %u with no controller", (unsigned)wcid);
+#endif
+
         return;
     }
 
@@ -360,6 +397,18 @@ void Dongle::readBulkPackets(uint8_t endpoint)
 {
     FixedBytes<USB_MAX_BULK_TRANSFER_SIZE> buffer;
 
+    // Attach once for the life of the thread rather than around each callback. Every JNI call the
+    // driver makes happens below this point - input reports at up to ~125 Hz per pad, four pads on
+    // the adapter - and the attach/detach pair was the expensive part of each one. Nothing beneath
+    // this may detach; see utils/jni.h.
+    JNIEnv *env = nullptr;
+    if (jvm == nullptr || jvm->AttachCurrentThread(&env, nullptr) != JNI_OK)
+    {
+        Log::error("Failed to attach read thread to the JVM");
+
+        return;
+    }
+
     while (!stopThreads)
     {
         int transferred = usbDevice->bulkRead(endpoint, buffer);
@@ -377,4 +426,6 @@ void Dongle::readBulkPackets(uint8_t endpoint)
             handleBulkData(data);
         }
     }
+
+    jvm->DetachCurrentThread();
 }

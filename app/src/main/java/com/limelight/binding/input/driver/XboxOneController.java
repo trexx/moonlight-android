@@ -80,6 +80,11 @@ public class XboxOneController extends AbstractXboxController {
     private short leftTriggerMotor = 0;
     private short rightTriggerMotor = 0;
 
+    // Motor levels are a percentage, not a raw byte. MS-GIPUSB v20240916 section 3.1.5.6.1
+    // (Direct Motor Command) specifies every level field as "Percentage, 0 - 100% (0x00 to
+    // 0x64), of PWM for motor".
+    private static final int RUMBLE_MAX_POWER = 100;
+
     /** {@inheritDoc} Advertises trigger rumble, which this generation adds. */
     public XboxOneController(UsbDevice device, UsbDeviceConnection connection, int deviceId, UsbDriverListener listener) {
         super(device, connection, deviceId, listener);
@@ -218,17 +223,28 @@ public class XboxOneController extends AbstractXboxController {
     }
 
     /**
-     * Sends all four motor levels. The 16-bit amplitudes are shifted down to the 7-bit range the
-     * protocol uses, and the trailing bytes are the fixed on/off/repeat envelope.
+     * Scales a 16-bit rumble magnitude onto the protocol's 0 - 100 range.
+     *
+     * <p>The mask is load-bearing: {@code short} is signed in Java, so any magnitude at or above
+     * half strength arrives negative. The previous {@code >> 9} sign-extended it, which sent 192
+     * for half strength and 255 for full where the maximum is 100 - and left a discontinuity at
+     * the midpoint, climbing to 63 across the bottom half before jumping to 192.
+     */
+    private static byte scaleMotor(short magnitude) {
+        return (byte)(((magnitude & 0xFFFF) * RUMBLE_MAX_POWER) / 0xFFFF);
+    }
+
+    /**
+     * Sends all four motor levels, followed by the fixed on/off/repeat envelope.
      */
     private void sendRumblePacket() {
         byte[] data = {
                 0x09, 0x00, seqNum++, 0x09, 0x00,
                 0x0F,
-                (byte)(leftTriggerMotor >> 9),
-                (byte)(rightTriggerMotor >> 9),
-                (byte)(lowFreqMotor >> 9),
-                (byte)(highFreqMotor >> 9),
+                scaleMotor(leftTriggerMotor),
+                scaleMotor(rightTriggerMotor),
+                scaleMotor(lowFreqMotor),
+                scaleMotor(highFreqMotor),
                 (byte)0xFF, 0x00, (byte)0xFF
         };
         int res = connection.bulkTransfer(outEndpt, data, data.length, 100);

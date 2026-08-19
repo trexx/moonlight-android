@@ -36,6 +36,18 @@ public abstract class AbstractXboxController extends AbstractController {
     // on outEndpt
     protected UsbEndpoint inEndpt, outEndpt;
 
+    /**
+     * The buttons every Xbox generation exposes, advertised to the host so it knows what this pad
+     * can send. Shared with {@link GipController}, which reaches the same hardware through
+     * the wireless adapter's native driver rather than this class.
+     */
+    static final int XBOX_BUTTON_FLAGS =
+            ControllerPacket.A_FLAG | ControllerPacket.B_FLAG | ControllerPacket.X_FLAG | ControllerPacket.Y_FLAG |
+                    ControllerPacket.UP_FLAG | ControllerPacket.DOWN_FLAG | ControllerPacket.LEFT_FLAG | ControllerPacket.RIGHT_FLAG |
+                    ControllerPacket.LB_FLAG | ControllerPacket.RB_FLAG |
+                    ControllerPacket.LS_CLK_FLAG | ControllerPacket.RS_CLK_FLAG |
+                    ControllerPacket.BACK_FLAG | ControllerPacket.PLAY_FLAG | ControllerPacket.SPECIAL_BUTTON_FLAG;
+
     /** Declares the button set and rumble support common to every Xbox controller generation. */
     public AbstractXboxController(UsbDevice device, UsbDeviceConnection connection, int deviceId, UsbDriverListener listener) {
         super(deviceId, listener, device.getVendorId(), device.getProductId());
@@ -43,12 +55,11 @@ public abstract class AbstractXboxController extends AbstractController {
         this.connection = connection;
         this.type = MoonBridge.LI_CTYPE_XBOX;
         this.capabilities = MoonBridge.LI_CCAP_ANALOG_TRIGGERS | MoonBridge.LI_CCAP_RUMBLE;
-        this.buttonFlags =
-                ControllerPacket.A_FLAG | ControllerPacket.B_FLAG | ControllerPacket.X_FLAG | ControllerPacket.Y_FLAG |
-                        ControllerPacket.UP_FLAG | ControllerPacket.DOWN_FLAG | ControllerPacket.LEFT_FLAG | ControllerPacket.RIGHT_FLAG |
-                        ControllerPacket.LB_FLAG | ControllerPacket.RB_FLAG |
-                        ControllerPacket.LS_CLK_FLAG | ControllerPacket.RS_CLK_FLAG |
-                        ControllerPacket.BACK_FLAG | ControllerPacket.PLAY_FLAG | ControllerPacket.SPECIAL_BUTTON_FLAG;
+        // supportedButtonFlags, not buttonFlags: the latter is live state, reported to the host on
+        // every input report. Seeding it with the whole set claimed every button was held until the
+        // first report arrived, and left getSupportedButtonFlags() returning zero - so the host was
+        // told this pad has no buttons at all.
+        this.supportedButtonFlags = XBOX_BUTTON_FLAGS;
     }
 
     /**

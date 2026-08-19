@@ -124,6 +124,19 @@
     <string name="game_menu_toggle_mouse_on">Enable Controller Mouse Emulation</string>
     <string name="game_menu_toggle_mouse_off">Disable Controller Mouse Emulation</string>
     <string name="game_menu_pair_xbox_controller">Pair Xbox Wireless Controller</string>
+    <string name="game_menu_pad_audio">Controller headphone audio</string>
+    <string name="game_menu_pad_audio_entry">Controller %1$d: %2$s</string>
+    <string name="game_menu_pad_audio_on">On</string>
+    <string name="game_menu_pad_audio_off">Off</string>
+    <string name="game_menu_pad_audio_unavailable">Off (two controllers already)</string>
+    <string name="game_menu_pad_audio_unsupported">Unavailable (no headset detected)</string>
+    <string name="game_menu_pad_audio_on_stale">On — replug the pad to fix stuttering</string>
+    <string name="game_menu_pad_audio_off_stale">Off — replug the pad first, or audio will stutter</string>
+    <string name="game_menu_pad_audio_volume">Headphone volume: %1$d%%</string>
+    <string name="game_menu_pad_audio_volume_title">Headphone volume</string>
+    <string name="game_menu_pad_audio_volume_entry">%1$d%%</string>
+    <string name="game_menu_pad_audio_volume_current">%1$d%% (current)</string>
+    <string name="game_menu_pad_audio_volume_mute">Mute</string>
     <string name="game_menu_disconnect">Disconnect</string>
     <string name="game_menu_cancel">Cancel</string>
     <string name="game_menu_send_keys">Send special Key(s)</string>
@@ -200,6 +213,8 @@
     <string name="summary_checkbox_xb1_driver">Enables a built-in USB driver for devices without native Xbox controller support</string>
     <string name="title_checkbox_usb_bind_all">Override native Xbox gamepad support</string>
     <string name="summary_checkbox_usb_bind_all">Use Moonlight\'s USB driver for all supported gamepads, even if native Xbox controller support is present</string>
+    <string name="title_checkbox_wired_pad_audio">Headphone audio on cabled Xbox pads</string>
+    <string name="summary_checkbox_wired_pad_audio">Use the full Xbox protocol driver for cabled controllers, so their headphone jack can play game audio. Experimental</string>
     <string name="title_checkbox_mouse_emulation">Mouse emulation via gamepad</string>
     <string name="summary_checkbox_mouse_emulation">Long pressing the Start button will switch the gamepad into mouse mode</string>
     <string name="title_checkbox_flip_face_buttons">Flip face buttons</string>
@@ -253,6 +268,10 @@
     <!-- Toasts -->
     <string name="toast_controller_type_changed">Gamepad type may be changed due to motion sensor emulation</string>
     <string name="toast_dongle_pairing_enabled">Pairing mode on. Hold the pair button on your controller until it connects.</string>
+    <string name="toast_pad_audio_enabled">Audio moved to the controller\'s headphone jack.</string>
+    <string name="toast_pad_audio_disabled">Audio moved back to this device.</string>
+    <string name="toast_pad_audio_failed">Couldn\'t send audio to that controller. Two controllers is the limit.</string>
+    <string name="toast_pad_audio_unsupported">No headset detected on that controller. Plug headphones into its 3.5&#160;mm jack and try again.</string>
     <string name="toast_dongle_pairing_failed">Could not put the Xbox Wireless Adapter into pairing mode</string>
 
     <!-- Array strings -->

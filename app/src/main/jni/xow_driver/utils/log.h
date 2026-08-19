@@ -31,8 +31,15 @@ class Bytes;
 #pragma GCC diagnostic ignored "-Wformat-security"
 
 /*
- * Provides logging functions for different log levels
- * Debug logging can be enabled by defining DEBUG
+ * Provides logging functions for different log levels.
+ *
+ * Debug logging exists only in debug builds: _DEBUG comes from Android.mk under NDK_DEBUG=1, and
+ * without it the calls below have empty bodies, so the compiler discards both the call and its
+ * format string rather than emitting a line nobody reads. Info and error are unconditional.
+ *
+ * Because the release bodies are empty rather than absent, arguments are still evaluated. That
+ * costs nothing for a literal or a scalar, which is all but one of the call sites; anything that
+ * builds a string to pass in needs guarding at the call site instead. See Dongle::handleControllerPair().
  */
 namespace Log
 {
@@ -44,6 +51,7 @@ namespace Log
         setlinebuf(stdout);
     }
 
+#ifdef _DEBUG
     inline void debug(const char *message)
     {
         __android_log_print(ANDROID_LOG_DEBUG, APPNAME, message);
@@ -54,6 +62,12 @@ namespace Log
     {
         __android_log_print(ANDROID_LOG_DEBUG, APPNAME, message, args...);
     }
+#else
+    inline void debug(const char *) {}
+
+    template<typename... Args>
+    inline void debug(const char *, Args...) {}
+#endif
 
     inline void info(const char * message)
     {
