@@ -2472,6 +2472,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // one of the faults checkPicDataInvariants() exists to catch, and deriving the
                 // expected offset from position() alone would absorb it silently. Folded away
                 // entirely in release, where nothing reads it.
+                //
+                // The difference is taken under the same guard, so csdBytesPrepended is written
+                // only where positionBeforeCsd means something. Ungated it would still compile to
+                // position() - 0 in release - the absolute offset rather than the CSD length - and
+                // a later reader outside DEBUG would get a plausible wrong number.
                 int positionBeforeCsd = BuildConfig.DEBUG ? nextInputBuffer.position() : 0;
 
                 for (byte[] vpsBuffer : vpsBuffers) {
@@ -2484,9 +2489,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     nextInputBuffer.put(ppsBuffer);
                 }
 
-                csdBytesPrepended = nextInputBuffer.position() - positionBeforeCsd;
-
                 if (BuildConfig.DEBUG) {
+                    csdBytesPrepended = nextInputBuffer.position() - positionBeforeCsd;
                     picDataFusedCsdFrames++;
                 }
             }
