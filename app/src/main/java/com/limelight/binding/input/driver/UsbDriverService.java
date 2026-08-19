@@ -104,6 +104,14 @@ public class UsbDriverService extends Service implements UsbDriverListener {
      */
     private static final long RESET_TIMEOUT_MS = 5000;
 
+    /**
+     * How long to let a just-reset pad settle before re-claiming it.
+     *
+     * <p>The same 1000 ms the attach path already waits, and for the same reason: the kernel brings
+     * its own stack up over a device that has just been reset, and claiming into that races it.
+     */
+    private static final long RESET_SETTLE_MS = 1000;
+
     // Client callback, null when nothing is bound
     private UsbDriverListener listener;
     // Monotonic ID handed to each new controller; never reused within a process
@@ -418,10 +426,12 @@ public class UsbDriverService extends Service implements UsbDriverListener {
      */
     private boolean resetWiredPad(Consumer<Boolean> onReturn) {
         XboxWiredGipController pad = null;
+        String name = null;
 
-        for (AbstractController controller : controllers) {
-            if (controller instanceof XboxWiredGipController wired) {
+        for (HashMap.Entry<String, AbstractController> entry : claimedDevices.entrySet()) {
+            if (entry.getValue() instanceof XboxWiredGipController wired) {
                 pad = wired;
+                name = entry.getKey();
                 break;
             }
         }
@@ -444,6 +454,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
 
         final XboxWiredGipController target = pad;
+        final String deviceName = name;
 
         resetPending = () -> onReturn.accept(true);
 
@@ -463,13 +474,42 @@ public class UsbDriverService extends Service implements UsbDriverListener {
          * joins its read thread, which can be inside a transfer with a 500 ms timeout.
          */
         new Thread(() -> {
-            LimeLog.info("Wired GIP: re-enumerating the pad");
+            LimeLog.info("Wired GIP: resetting the pad");
 
             // Tears the driver down and resets in the right order; see resetAndStop(). It ends in
             // notifyDeviceRemoved(), so deviceRemoved() clears both lists - nothing to do here.
             if (!target.resetAndStop()) {
                 LimeLog.warning("Wired GIP: the reset itself failed");
             }
+
+            /*
+             * Re-claim it ourselves, because a reset usually does not re-enumerate.
+             *
+             * USBDEVFS_RESET resets the port and then restores the device in place when its
+             * descriptors are unchanged; it only re-enumerates - reporting NOT_FOUND - when they
+             * are not. So in the ordinary case Android never sees a disconnect, no attach broadcast
+             * arrives, and nothing would ever pick the pad back up. That is what "left the pad
+             * unclaimed and input dead" was when this was first tried, and waiting for a broadcast
+             * that is not coming is how it presented the second time.
+             *
+             * Given a settle delay, whichever happened is readable: the device is still in the list
+             * under the same name if it was restored in place, and gone from it if it really
+             * re-enumerated, in which case the attach broadcast has it and this stands aside.
+             */
+            resetHandler.postDelayed(() -> {
+                UsbDevice returned = usbManager != null
+                        ? usbManager.getDeviceList().get(deviceName) : null;
+
+                if (returned == null) {
+                    LimeLog.info("Wired GIP: the pad re-enumerated; waiting for the attach");
+
+                    return;
+                }
+
+                LimeLog.info("Wired GIP: the pad stayed on the bus; re-claiming it");
+
+                handleUsbDeviceState(returned);
+            }, RESET_SETTLE_MS);
         }).start();
 
         return true;
