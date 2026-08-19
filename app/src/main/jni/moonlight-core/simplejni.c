@@ -275,9 +275,23 @@ Java_com_limelight_nvstream_jni_MoonBridge_guessControllerType(JNIEnv *env, jcla
                 case k_eControllerType_Switch2InputOnlyController:
                     return LI_CTYPE_NINTENDO;
 
+                // Valve's own gamepads, all of which match what LI_CTYPE_STEAM describes:
+                // an Xbox-style face layout plus dual touchpads, gyro and grip buttons.
+                case k_eControllerType_SteamController:
+                case k_eControllerType_SteamControllerV2:
+                // The Steam Deck's built-in controller, reachable here only if a host box
+                // ever enumerates one over USB
+                case k_eControllerType_SteamControllerNeptune:
+                    return LI_CTYPE_STEAM;
+
                 // Deliberately unmapped: 8BitDoController and XInputPS4Controller cover
-                // devices with varying button layouts, and the Steam/Valve types have no
-                // equivalent, so guessing a type would be worse than reporting unknown.
+                // devices with varying button layouts, so guessing a type would be worse
+                // than reporting unknown. The same applies to two Steam-adjacent types:
+                // HoriSteamController is a plain Xbox-layout pad with none of the touchpads,
+                // gyro or grips LI_CTYPE_STEAM implies, and SteamControllerTriton is the
+                // Steam Frame hardware behind the Proteus and Nereid dongles, which is not
+                // a gamepad layout at all. Reporting either as LI_CTYPE_STEAM would have
+                // the host prompting for controls that are not on the device.
 
                 default:
                     return LI_CTYPE_UNKNOWN;
