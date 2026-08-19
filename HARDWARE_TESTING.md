@@ -176,22 +176,46 @@ it is switched on.
 - [ ] Setting on, **5.1 or 7.1**: **every speaker produces sound.** Use Windows'
       per-speaker test (Sound → Speakers → Configure → Test). This is the exact check that
       exposed the silent-surround-channels bug in ClassicOldSong #567.
-- [ ] Setting on, **route change mid-stream**: unplug/replug HDMI, or switch audio output.
-      Audio must recover, or fall back to AudioTrack for the rest of the session — it must
-      not go permanently silent, and the stream must not hang at "Waiting for audio stream
-      establishment".
+- [ ] Setting on, **route change mid-stream**: unplug/replug HDMI, change HDMI mode, or switch
+      audio output. Audio must recover, and the stream must not hang at "Waiting for audio
+      stream establishment". Recovery happens natively — `errorCallback()` in
+      `aaudio_renderer.c` reopens the stream on `AAUDIO_ERROR_DISCONNECTED` — so the pass
+      condition is `Recovered AAudio stream after device disconnect` in logcat, with a sane
+      frame buffer size on the line. **This is the check that matters most**, because if native
+      recovery fails there is now no second line of defence: the session stays silent until the
+      user turns the setting off. That is deliberate, but it makes this path the one that has
+      to work.
 - [ ] Setting on, **surround below Android 12L** (API 32) if such a device is available:
       must fall back to AudioTrack rather than opening a stream with an undefined layout.
 - [ ] Under load — packet loss, decoder pressure — audio does not stutter. Two independent
       reports of unplayable stuttering exist against the implementation this replaces, so it
       is worth deliberately stressing.
 
-> **Cannot be verified on the hardware available.** The problem this targets is AudioTrack's
-> fast path being denied on certain Android TV devices, producing roughly 0.5–1 s of audio
-> delay. The Android TV box on hand does **not** exhibit that symptom, so the latency win
-> itself is unconfirmed. Everything above is still worth running — it establishes the
-> feature does no harm — but the benefit remains unproven until it reaches an affected
-> device (Google TV Streamer or similar).
+> **Measured, and the Homatics is an affected device.** This file previously said the latency
+> win was unconfirmed because no device on hand showed the symptom. That was an assumption, and
+> it was wrong — it predates the granted-configuration readback, which disproves it outright.
+>
+> On the **Homatics Box R 4K**, AudioTrack is *denied* the fast path: AudioFlinger reports
+> requested flags `00000004` against output flags `00000002`, and the track lands on Android's
+> deep-buffer output — `PERFORMANCE_MODE_NONE`, a 1924-frame buffer, **169.6 ms** of measured
+> output latency. AAudio on the same box, same stream, back to back, is granted `LOW_LATENCY`
+> and `EXCLUSIVE` and measures **22.6 ms**. That is a 147 ms difference.
+>
+> On the **Shield TV** the picture is the opposite and stands on its own: AudioTrack *is*
+> granted the fast path, the two paths differ by 2.5 ms, and AAudio costs two stream rebuilds
+> and an order of magnitude more discarded audio for it. Keep the feature for the Homatics, not
+> for that box.
+>
+> **The consequence, recorded rather than acted on:** `DEFAULT_ENABLE_AAUDIO` is false, so the
+> Homatics currently ships with roughly 170 ms of audio latency by default, fixable only by a
+> setting most users will never find. Both paths report their granted mode, so detecting the
+> downgrade and switching automatically is possible rather than hypothetical. Not implemented —
+> changing the default would make the Shield slightly worse, and picking per device needs more
+> hardware time than has gone into it.
+>
+> Source: commit `810858bf` on `feature/audio-observability`, which also carries the readback
+> instrumentation the measurement depends on. That instrumentation is **not** on master, so
+> reproducing these numbers here means building that branch.
 
 ---
 
@@ -240,12 +264,17 @@ Small changes, but each touches a path that is easy to break silently.
 
 ---
 
-## 5. Audio decryption (AES-CBC under mbedTLS)
+## 5. Stream decryption (Mbed TLS PSA API)
 
 Audio is the only stream encrypted with AES-CBC — video, control and RTSP all use AES-GCM.
 When CBC breaks, the picture is perfect and only the sound disappears, with no error shown
 to the user, so this needs checking explicitly rather than assuming "video works" means
 crypto works.
+
+Since the PSA migration (upstream `518b244`) every one of those paths was rewritten, not
+just the CBC one, so this section now has to prove out GCM as well. Both directions matter:
+GCM decrypt no longer shuffles the tag and ciphertext around in place, and GCM encrypt is
+what carries Gen 7+ input to the host.
 
 Requires a paired host actually streaming. The failure mode is silent, so run the log check
 rather than trusting your ears alone: a host sending no audio at all looks identical.
@@ -267,15 +296,22 @@ rather than trusting your ears alone: a host sending no audio at all looks ident
       `Frames written` must advance between samples and `Standby` must be `no` while
       streaming. A started-but-starved AudioTrack is exactly what the CBC padding bug
       produced.
-- [ ] **Keyboard and mouse input still reach the host.** The carried patch also changes IV
-      handling for non-GCM contexts, which is the pre-Gen 7 input encryption path. Hosts new
-      enough to use Gen 7+ input will not exercise it, so this only proves out against an
-      older host.
+- [ ] **Keyboard and mouse input still reach the host.** Pre-Gen 7 hosts encrypt input with
+      CBC, applying the caller's IV once and then chaining, and the PSA rewrite reproduces
+      that by keeping one cipher operation alive across packets. Hosts new enough to use
+      Gen 7+ input take the GCM branch instead and will not exercise it, so this only proves
+      out against an older host.
 - [ ] **Decrypt-failure counters read zero.** The end-of-stream summary now ends both RTP
       lines with a decrypt-failed count, and the overlay shows a line only when one is
       non-zero — so on a healthy stream that line should be *absent*, not zero. To prove the
       counter actually moves, remove `MBEDTLS_CIPHER_PADDING_PKCS7` from
       `moonlight_mbedtls_config.h`, rebuild, and confirm the audio count climbs.
+- [ ] **Nothing fails only at stream start, and only sometimes.** PSA keeps its key slots in
+      globals that each stream thread first touches on its own, which is why the config
+      enables `MBEDTLS_THREADING_C`. A race there would not be a clean failure: it would be
+      an occasional stream that decrypts nothing, or one stream of the several, and it would
+      come and go between launches. Start and stop a stream ten or so times rather than
+      trusting one long session, since a single good session says nothing about this.
 
 ### Stream encryption setting
 
@@ -898,12 +934,154 @@ open** — the feature works but has not been shown to be worth using.
 
 ---
 
+## 11. Steam controllers announced as `LI_CTYPE_STEAM`
+
+Valve's vendor ID falls through `sendControllerArrival()`'s vendor switch to
+`guessControllerType()`, which now answers `LI_CTYPE_STEAM` for the three Valve gamepad types
+SDL's database lists. The type only selects which button glyphs the host draws, so a wrong
+answer is cosmetic — but it is cosmetic *on the host*, where nothing in this client's logs
+will show it.
+
+- [ ] **A Steam Controller pairs and is playable at all.** More basic than the glyphs, and
+      not a given: this client has never been tested against one.
+- [ ] **The host draws Steam prompts, not Xbox or generic ones.** Sunshine and GFE both pass
+      the type through to the game, so check in a title that shows controller glyphs.
+- [ ] **A HORIPAD for Steam is still reported as unknown.** It is deliberately left unmapped —
+      Steam-branded, but with no touchpads, gyro or grips — so it should keep whatever the
+      host guesses for an unknown pad rather than gaining Steam prompts.
+
+---
+
+## 12. Input path: two-controller checks
+
+Both items below are invisible with a single controller connected — that is the whole reason
+they went unnoticed. Each needs a USB-driven pad (Switch Pro, or an Xbox pad on our own
+driver) **and** an Android-enumerated pad connected at the same time.
+
+- [ ] **Two pads, both sticks independent.** The scratch vector used for deadzone maths was
+      shared across every controller while being written from two threads — the main thread for
+      Android-enumerated pads, and the USB driver's reader thread for ours. The symptom is one
+      pad's deflection perturbing the other's: hold the left stick hard over on pad A and work
+      pad B's sticks, watching for A's reported position twitching. It is now one scratch vector
+      per controller, so this should be clean.
+- [ ] **Mouse emulation with two pads.** Enable mouse emulation on both and use them together.
+      The mouse-emulation maths still shares one vector, which is safe only because that path
+      runs entirely on the main thread — this is the check that says so.
+
+---
+
+## 13. USB controller motion is gated on what the host asked for
+
+USB-driven pads used to report gyro and accelerometer on every input report, whether or not the
+host had enabled those sensors — the Android sensor path avoids this for free by not registering
+a listener until asked, but a USB driver parses motion out of every report it reads. It is now
+gated on the rate the host requested.
+
+The failure mode of a wrong gate is **silence, not an error**: motion simply stops reaching the
+host, and nothing logs. So these need checking rather than assuming.
+
+- [ ] **Gyro reaches a host that wants it.** With a pad that has one, in a game or test app that
+      requests motion, confirm the host receives it. Check Sunshine's log for the enable request
+      rather than judging by feel.
+- [ ] **Motion stops when the host disables it**, rather than running for the rest of the session.
+- [ ] **Motion survives an unplug/replug mid-stream.** This is the one most at risk. A reconnect
+      builds a fresh `UsbDeviceContext` with both rates back at 0, so motion depends on the host
+      re-enabling it in response to the controller-arrival event. `InputDeviceContext` carries its
+      rates across a reconfiguration for exactly this reason; the USB path has no equivalent and
+      leans on the protocol instead. If motion does not come back after a replug, that is what to
+      fix — carry the rates across, keyed on the controller number.
+
+---
+
+## 14. Overlay composition
+
+**Closed, negative, and reverted.** The overlays were briefly made opaque black (`#FF000000`) on
+the theory that their translucent background forced the hardware composer to blend, costing the
+video its own plane and making the performance overlay change the frame timing it exists to
+measure. Measured on the Shield TV, the theory is wrong twice over. Both overlays are back to
+`#80000000`. **Do not retry this** — the reasons it failed are not device-specific bad luck.
+
+### What was measured
+
+Shield TV at 4K, streaming at 4K, release build with the opaque change installed and confirmed
+present in the APK (`aapt2 dump xmltree` showed `android:background=#ff000000` on both TextViews).
+The comparison apps each set their own refresh rate, so the output mode is given per state below.
+
+```bash
+adb shell dumpsys SurfaceFlinger    # the vendor "h/w composer state:" block is the part that matters
+```
+
+| State on screen | Output mode | Nvidia HWC 2.0 composition |
+|---|---|---|
+| Launcher, no video | 4K @ 59.94 | `1 layers in a scratch buffer` |
+| Our stream, overlay **off** | 4K @ 60 | `1 layers in a scratch buffer` |
+| Our stream, overlay **on** | 4K @ 60 | `2 layers in a scratch buffer` |
+| YouTube TV, 4K video | 4K @ 59.94 | `2 layers in a scratch buffer` |
+| Kodi, 4K video | 4K @ 23.976 | `3 layers in a scratch buffer` |
+
+In all five, `Compositor: draw_arrays` and every physical display window is idle except the one
+holding the scratch buffer:
+
+```
+Window 0 (phys 0 caps 1f5): unused
+Window 1 (phys 2 caps 1d5): unused
+Window 2 (phys 3 caps 0):   unused
+Window 3 (phys 1 caps 469 blend 0x100 xform 0x0 z=3): scratch containing N layers
+```
+
+### Why it cannot work
+
+**1. A child View's background alpha never reaches the compositor.** Layer opacity comes from the
+*window's* pixel format, not from a `TextView`'s background. `Game`'s window has to stay
+translucent so the `SurfaceView` can show through it — that is what the layer's
+`transparentRegionHint` is for — so the layer stays `blend=PREMULTIPLIED`, `isOpaque=false`,
+RGBA_8888 no matter what colour goes in the layout. `#80000000` and `#FF000000` are identical to
+the composer. The only lever that would change it, `getWindow().setFormat(PixelFormat.OPAQUE)`,
+would black out the stream.
+
+**2. There is no hardware plane to lose.** The Tegra composer puts everything through a scratch
+buffer regardless — including Google's own 4K video app, and including the launcher with no video
+at all. It is unconditional policy at this display configuration, not something our surface
+provokes.
+
+That second point also disposes of the obvious follow-up, that our decoder hands back a buffer the
+display windows cannot scan out. Three different Tegra video formats were observed across the
+three apps — ours `0x16b`, YouTube's `0x146`, Kodi's `0x18b` — and all three land in the same
+scratch buffer. Kodi is the strongest of the comparisons: it drove the display into a 23.976 Hz
+mode to match its content and put *three* layers up (video, its 1080p UI window, and a second
+720p SurfaceView upscaled to 4K), and still got no plane.
+
+### What this corrects elsewhere
+
+`CLAUDE.md` claimed the overlay "forces GPU composition" on this hardware. It does not — the
+composition pass happens with the overlay down, with the app backgrounded, and in other apps. That
+sentence has been corrected. The overlay does still perturb what it measures, by adding a second
+layer to the pass and by costing the decode thread its formatting work, so *compare overlay-on
+with overlay-on* still stands; the reason given for it was wrong.
+
+Our stream is also the leanest of the three on layer count: one layer with the overlay down, where
+YouTube pays two permanently and Kodi three.
+
+### Not tested, and deliberately not chased
+
+- [ ] **Homatics Box R 4K.** Its Amlogic composer could behave differently. Left unrun because the
+      mechanism in point 1 above is platform-independent — the change could not work there either,
+      whatever its composer does with planes.
+- [ ] **Whether shallower HDMI signalling frees the display windows.** The link runs
+      `Rec.2020, 12-bit YUV422` with `[Dynamically switching Rec.709 on]` in every state above, and
+      a shallower mode might let the composer scan out directly. Refresh rate is already ruled out
+      — three of them appear in the table (60, 59.94 and 23.976 Hz) and all composite the same way
+      — so only the colour depth and colorspace are untested. Not worth chasing: trading output
+      quality for one composition pass is a bad deal, and no third-party app gets a plane either.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
 |---|---|
 | §2 in full | Nintendo Switch Pro Controller + USB cable |
-| §3 latency claim | Google TV Streamer, or another device with the AudioTrack fast-path bug |
+| ~~§3 latency claim~~ | ~~A device with the AudioTrack fast-path bug~~ — met: the Homatics is one, measured at 169.6 ms vs 22.6 ms |
 | §3 surround | 5.1 or 7.1 output on the host |
 | §4 pads | Xbox Series S/X pad, 8BitDo pad, PowerA Pro |
 | §4 decoder | Amlogic-based Android TV device |
@@ -917,3 +1095,6 @@ open** — the feature works but has not been shown to be worth using.
 | §9 v2 security | A pad that uses the ECDH handshake — none has been available to test against |
 | §9 multi-pad | Four pads on one adapter, to confirm per-pad sequence pools |
 | §10 pad audio | Two adapter pads with integrated 3.5 mm jacks, and wired headphones for each |
+| §11 Steam type | A Valve Steam Controller, and a HORIPAD for Steam for the negative case |
+| §12 both items | A USB-driven pad *and* an Android-enumerated pad, connected together |
+| §13 motion | A pad with a gyro (Switch Pro, DualSense, DualShock 4) + a host game that requests it |

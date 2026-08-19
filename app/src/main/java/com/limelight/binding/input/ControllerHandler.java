@@ -136,7 +136,11 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             // FIXME: Paddles?
     );
 
-    private final Vector2d inputVector = new Vector2d();
+    // Scratch vector for the mouse emulation maths. Safe to share across every controller because
+    // mouseEmulationRunnable is only ever posted to mainThreadHandler, so all of its users run on
+    // the main thread one after another. The stick processing cannot share it - see
+    // GenericControllerContext.stickVector.
+    private final Vector2d mouseEmulationVector = new Vector2d();
 
     private final SparseArray<InputDeviceContext> inputDeviceContexts = new SparseArray<>();
     private final SparseArray<UsbDeviceContext> usbDeviceContexts = new SparseArray<>();
@@ -1593,13 +1597,13 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     }
 
     /**
-     * @return the shared scratch vector, loaded with the given values. Reused rather than
+     * @return the context's own scratch vector, loaded with the given values. Reused rather than
      *         allocated because this runs for every axis event.
      */
-    private Vector2d populateCachedVector(float x, float y) {
-        // Reinitialize our cached Vector2d object
-        inputVector.initialize(x, y);
-        return inputVector;
+    private static Vector2d populateCachedVector(GenericControllerContext context, float x, float y) {
+        // Reinitialize the context's cached Vector2d object
+        context.stickVector.initialize(x, y);
+        return context.stickVector;
     }
 
     /**
@@ -1651,7 +1655,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                                float rsY, float lt, float rt, float hatX, float hatY) {
 
         if (context.leftStickXAxis != -1 && context.leftStickYAxis != -1) {
-            Vector2d leftStickVector = populateCachedVector(lsX, lsY);
+            Vector2d leftStickVector = populateCachedVector(context, lsX, lsY);
 
             handleDeadZone(leftStickVector, context.leftStickDeadzoneRadius);
 
@@ -1660,7 +1664,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         if (context.rightStickXAxis != -1 && context.rightStickYAxis != -1) {
-            Vector2d rightStickVector = populateCachedVector(rsX, rsY);
+            Vector2d rightStickVector = populateCachedVector(context, rsX, rsY);
 
             handleDeadZone(rightStickVector, context.rightStickDeadzoneRadius);
 
@@ -1921,9 +1925,12 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         return true;
     }
 
-    /** @return cursor movement in pixels for a stick deflection, in mouse emulation mode */
+    /**
+     * @return cursor movement in pixels for a stick deflection, in mouse emulation mode. The
+     *         returned vector is the shared main-thread scratch, valid only until the next call.
+     */
     private Vector2d convertRawStickAxisToPixelMovement(short stickX, short stickY) {
-        Vector2d vector = new Vector2d();
+        Vector2d vector = mouseEmulationVector;
         vector.initialize(stickX, stickY);
         vector.scalarMultiply(1 / 32766.0f);
         vector.scalarMultiply(4);
@@ -2337,6 +2344,20 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                         break;
                 }
                 break;
+            }
+        }
+
+        // USB-driven pads have no SensorManager to register with - their driver parses motion out
+        // of every input report it reads and pushes it unconditionally - so recording what the
+        // host asked for is the only gate available. reportControllerMotion() applies it.
+        for (int i = 0; i < usbDeviceContexts.size(); i++) {
+            UsbDeviceContext deviceContext = usbDeviceContexts.valueAt(i);
+
+            if (deviceContext.controllerNumber == controllerNumber) {
+                switch (motionType) {
+                    case MoonBridge.LI_MOTION_TYPE_ACCEL -> deviceContext.accelReportRateHz = reportRateHz;
+                    case MoonBridge.LI_MOTION_TYPE_GYRO -> deviceContext.gyroReportRateHz = reportRateHz;
+                }
             }
         }
     }
@@ -2873,14 +2894,14 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             return;
         }
 
-        Vector2d leftStickVector = populateCachedVector(leftStickX, leftStickY);
+        Vector2d leftStickVector = populateCachedVector(context, leftStickX, leftStickY);
 
         handleDeadZone(leftStickVector, context.leftStickDeadzoneRadius);
 
         context.leftStickX = (short) (leftStickVector.getX() * 0x7FFE);
         context.leftStickY = (short) (-leftStickVector.getY() * 0x7FFE);
 
-        Vector2d rightStickVector = populateCachedVector(rightStickX, rightStickY);
+        Vector2d rightStickVector = populateCachedVector(context, rightStickX, rightStickY);
 
         handleDeadZone(rightStickVector, context.rightStickDeadzoneRadius);
 
@@ -2911,6 +2932,18 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         GenericControllerContext context = usbDeviceContexts.get(controllerId);
         if (context == null) {
+            return;
+        }
+
+        // Drop samples for a sensor the host has not enabled. The Android sensor path gets this
+        // for free - it never registers a SensorEventListener until the host asks - but a USB
+        // driver parses motion out of every input report and calls this regardless. Without the
+        // gate a Switch Pro Controller reading at ~120 Hz sends 240 motion events a second for
+        // the whole session whether or not anything on the host wants them, and each one is a
+        // JNI call that moonlight-common-c then discards.
+        short requestedRateHz = motionType == MoonBridge.LI_MOTION_TYPE_GYRO
+                ? context.gyroReportRateHz : context.accelReportRateHz;
+        if (requestedRateHz == 0) {
             return;
         }
 
@@ -2966,6 +2999,17 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public int id;
         public boolean external;
 
+        // Scratch vector for this controller's stick processing, reused rather than allocated
+        // because it is touched on every axis event. One per context rather than one per
+        // ControllerHandler because the two callers of populateCachedVector() run on different
+        // threads: handleAxisSet() on the main thread for Android-enumerated pads, and
+        // reportControllerState() on the reader thread of whichever USB driver owns the device -
+        // UsbDriverService forwards straight through with no Handler hop. A single shared vector
+        // let two pads interleave writes to the same x/y/magnitude fields, so one pad's deadzone
+        // maths could be applied to the other's stick values. A context belongs to exactly one
+        // device, and therefore to exactly one thread.
+        public final Vector2d stickVector = new Vector2d();
+
         public int vendorId;
         public int productId;
 
@@ -2984,6 +3028,18 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public short rightStickY = 0x0000;
         public short leftStickX = 0x0000;
         public short leftStickY = 0x0000;
+
+        // What the host has asked this controller to report, or 0 for "not wanted". Kept here
+        // rather than on InputDeviceContext because both controller kinds need it: the Android
+        // sensor path uses it to reapply a configuration after sensors disappear and reappear,
+        // and the USB path uses it as the only gate it has - see reportControllerMotion().
+        //
+        // Volatile because all three participants are different threads. The host callback
+        // arrives on moonlight-common-c's control thread (MoonBridge -> Game ->
+        // handleSetMotionEventState, no Handler hop), enableSensorRunnable reads it on the
+        // background thread, and the USB drivers read it on their own reader threads.
+        public volatile short gyroReportRateHz;
+        public volatile short accelReportRateHz;
 
         public boolean mouseEmulationActive;
         public int mouseEmulationLastInputMap;
@@ -3060,9 +3116,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         public SensorManager sensorManager;
         public SensorEventListener gyroListener;
-        public short gyroReportRateHz;
         public SensorEventListener accelListener;
-        public short accelReportRateHz;
 
         public InputDevice inputDevice;
 

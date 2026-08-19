@@ -49,6 +49,9 @@ typedef struct {
     _Atomic uint32_t readIndex;
     _Atomic uint32_t writeIndex;
 
+    // Set only once recovery has been attempted and failed, or for an error that is not a
+    // disconnect. From then on nativeEnqueue() drops everything and the session is silent; nothing
+    // reads this from Java any more, and no renderer swap follows it.
     _Atomic bool dead;
     _Atomic bool recovering;
     _Atomic uint32_t droppedBuffers;
@@ -157,7 +160,10 @@ static void* recoverThread(void* userData) {
             AAudioStream_close(ctx->stream);
             ctx->stream = NULL;
         }
-        // The Java wrapper polls this and falls back to AudioTrack.
+        // Nothing else will be attempted. nativeEnqueue() drops everything from here on, so the
+        // session goes silent rather than swapping renderers underneath the user - see the class
+        // comment on LowLatencyAudioRenderer. Recovering the common case is this thread's job;
+        // reaching here means it could not.
         atomic_store_explicit(&ctx->dead, true, memory_order_release);
     }
     else {
@@ -374,20 +380,6 @@ Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeEnqueue(
 
     // Release pairs with the acquire in dataCallback()
     atomic_store_explicit(&ctx->writeIndex, write + (uint32_t)length, memory_order_release);
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_limelight_binding_audio_NativeAAudioRenderer_nativeIsDead(
-        JNIEnv* env, jclass clazz, jlong handle) {
-    (void)env;
-    (void)clazz;
-
-    AAudioRenderer* ctx = (AAudioRenderer*)(intptr_t)handle;
-    if (ctx == NULL) {
-        return JNI_TRUE;
-    }
-
-    return atomic_load_explicit(&ctx->dead, memory_order_acquire) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL

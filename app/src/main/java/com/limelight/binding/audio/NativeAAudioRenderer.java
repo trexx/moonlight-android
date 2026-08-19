@@ -24,7 +24,6 @@ public class NativeAAudioRenderer implements AudioRenderer {
 
     private static native long nativeSetup(int channelCount, int channelMask, int sampleRate, int samplesPerFrame);
     private static native void nativeEnqueue(long handle, short[] data, int length);
-    private static native boolean nativeIsDead(long handle);
     private static native void nativeCleanup(long handle);
 
     /**
@@ -48,12 +47,10 @@ public class NativeAAudioRenderer implements AudioRenderer {
         return 0;
     }
 
-    /**
-     * @return true if the stream has failed unrecoverably and the caller should stop using it
-     */
-    public boolean isDead() {
-        return handle == 0 || nativeIsDead(handle);
-    }
+    // Frames dropped because moonlight-common-c's queue was already too deep. Counted rather than
+    // logged as they happen, for the same reason as in AndroidAudioRenderer: this runs per audio
+    // packet, so a backlog meant a string build every 5 ms on the audio path.
+    private int droppedFrames;
 
     /**
      * {@inheritDoc}
@@ -68,13 +65,17 @@ public class NativeAAudioRenderer implements AudioRenderer {
             return;
         }
 
-        // Mirrors AndroidAudioRenderer: bound how far behind we can fall by dropping rather than
-        // queueing once there's already 40 ms outstanding.
-        if (MoonBridge.getPendingAudioDuration() < 40) {
+        // Read once - a JNI call on a path that runs per audio packet.
+        int pendingAudioMs = MoonBridge.getPendingAudioDuration();
+
+        // Mirrors AndroidAudioRenderer: bound how deep moonlight-common-c's decode queue may get
+        // by dropping rather than queueing once there's already 40 ms outstanding. As there, this
+        // bounds that queue and not the stream's own buffering.
+        if (pendingAudioMs < 40) {
             nativeEnqueue(handle, audioData, audioData.length);
         }
         else {
-            LimeLog.info("Too much pending audio data: " + MoonBridge.getPendingAudioDuration() + " ms");
+            droppedFrames++;
         }
     }
 
@@ -97,6 +98,12 @@ public class NativeAAudioRenderer implements AudioRenderer {
     /** {@inheritDoc} Stops and closes the stream and frees the native context. Idempotent. */
     @Override
     public void cleanup() {
+        if (droppedFrames != 0) {
+            LimeLog.warning("AAudio renderer dropped " + droppedFrames +
+                    " frames to bound the decode queue depth");
+            droppedFrames = 0;
+        }
+
         if (handle != 0) {
             nativeCleanup(handle);
             handle = 0;

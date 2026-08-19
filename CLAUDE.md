@@ -98,9 +98,14 @@ hang too, which sent a day of debugging at the network, the host, the CPU and th
 the decoder. If a number cannot be trusted, delete it rather than leaving it on screen.
 
 **When benchmarking, do not trust overlay numbers.** Harvest the end-of-stream summary
-(`globalVideoStats`) instead, so the measurement cost is not attributed to the change. On this
-hardware the overlay also forces GPU composition, so it changes frame timing as well as measuring
-it — compare overlay-on with overlay-on.
+(`globalVideoStats`) instead, so the measurement cost is not attributed to the change. The overlay
+still perturbs what it measures — it adds a second layer to the composition pass, and its
+formatting costs the decode thread — so compare overlay-on with overlay-on.
+
+It does **not**, however, force GPU composition. That claim stood here until it was measured, and
+it is wrong: the Shield's Tegra composer routes every layer through a scratch buffer whatever is
+on screen, so there is no per-frame plane to be knocked off. `HARDWARE_TESTING.md` section 14 has
+the dumps. Do not reason about hardware overlay planes on this box without re-reading it.
 
 ---
 

@@ -13,6 +13,20 @@ import com.limelight.nvstream.jni.MoonBridge;
  * AudioTrack remains the default and is used unchanged unless the user has explicitly opted into
  * AAudio, every precondition holds, and the stream actually opens. If any of that fails we fall
  * straight back, so enabling the option can degrade to today's behaviour but never below it.
+ *
+ * <p>That choice is remade only when the local output is rebuilt: at setup, and each time the
+ * audio comes back from a pad to the TV. Route changes — HDMI replug or mode change, switching to
+ * a soundbar, a Bluetooth device connecting — never reach here at all. They are recovered inside
+ * {@code aaudio_renderer.c}: AAudio reports {@code AAUDIO_ERROR_DISCONNECTED} to its error
+ * callback, which reopens and restarts the stream on a detached thread. None of that involves
+ * this class, and it is unaffected by there being no liveness check here.
+ *
+ * <p>What is deliberately <em>not</em> handled is the case where that native recovery has already
+ * failed. There used to be a poll from {@link #playDecodedAudio} that swapped to AudioTrack for
+ * the rest of the session when it did. That is gone: an unrecoverable stream now stays silent,
+ * and the user turns the setting off if they hit it. Swapping renderers underneath a running
+ * session traded a rare, already-broken case for a JNI round trip on every audio packet, and for
+ * a session that silently stops being the thing the user configured.
  */
 public class LowLatencyAudioRenderer implements AudioRenderer {
 
@@ -20,10 +34,9 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     private final PadAudioSink padAudioSink;
 
     private AudioRenderer renderer;
-    private NativeAAudioRenderer aaudioRenderer;
 
-    // Retained so the local renderer can be rebuilt later: if the AAudio stream dies mid-session,
-    // and every time the audio comes back from a pad to the TV
+    // Retained so the local renderer can be rebuilt later: every time the audio comes back from a
+    // pad to the TV
     private MoonBridge.AudioConfiguration audioConfiguration;
     private int sampleRate;
     private int samplesPerFrame;
@@ -87,10 +100,10 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     }
 
     /**
-     * Builds the local renderer and starts it, setting {@link #renderer} and {@link #aaudioRenderer}.
+     * Builds the local renderer and starts it, setting {@link #renderer}.
      *
-     * <p>Shared by {@link #setup}, by the AAudio-died fallback, and by the return from pad audio,
-     * so all three pick a renderer the same way rather than each rebuilding the choice.
+     * <p>Shared by {@link #setup} and by the return from pad audio, so both pick a renderer the
+     * same way rather than each rebuilding the choice.
      *
      * @return 0 on success, matching {@link #setup}'s contract
      */
@@ -99,7 +112,6 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
             NativeAAudioRenderer candidate = new NativeAAudioRenderer();
             if (candidate.setup(audioConfiguration, sampleRate, samplesPerFrame) == 0) {
                 LimeLog.info("Using native AAudio renderer");
-                aaudioRenderer = candidate;
                 renderer = candidate;
                 return 0;
             }
@@ -133,10 +145,9 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         renderer.stop();
         renderer.cleanup();
 
-        // Both, and before anything can look at them again: the isDead() check below would
-        // otherwise reach a handle that has just been freed.
+        // Cleared before anything can reach it again: the delegation at the end of
+        // playDecodedAudio() would otherwise write into a handle that has just been freed.
         renderer = null;
-        aaudioRenderer = null;
 
         LimeLog.info("Audio moved to a pad; local output closed");
     }
@@ -144,8 +155,8 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     /**
      * {@inheritDoc}
      *
-     * <p>Also where a dead AAudio stream is noticed and swapped out, since this is the only
-     * method called often enough to detect it promptly.
+     * <p>Also where the local output is opened and closed as pads take the audio and give it
+     * back, since this is the only method that runs on the thread those handles belong to.
      */
     @Override
     public void playDecodedAudio(short[] audioData) {
@@ -178,8 +189,8 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
                 LimeLog.info("Audio returned from the pads; local output reopened");
             }
             else {
-                // Same trade as the AAudio-died path below: say so and stay silent rather than
-                // leaving a half-open stream behind.
+                // The same trade the AAudio path makes when its own recovery fails: say so and
+                // stay silent, rather than leaving a half-open stream behind.
                 LimeLog.severe("Unable to reopen local audio output after pad audio");
                 renderer = null;
             }
@@ -192,30 +203,12 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
             return;
         }
 
-        // A route change we couldn't recover from leaves the AAudio stream unusable. Rather than
-        // going permanently silent, drop it and let the rest of the session run on AudioTrack.
-        if (aaudioRenderer != null && aaudioRenderer.isDead()) {
-            LimeLog.warning("AAudio stream died, switching to AudioTrack for the rest of the session");
-            aaudioRenderer.cleanup();
-            aaudioRenderer = null;
-            renderer = null;
-
-            AudioRenderer fallback = new AndroidAudioRenderer();
-            if (fallback.setup(audioConfiguration, sampleRate, samplesPerFrame) != 0) {
-                LimeLog.severe("Unable to start AudioTrack fallback");
-                return;
-            }
-
-            fallback.start();
-            renderer = fallback;
-        }
-
         if (renderer != null) {
             renderer.playDecodedAudio(audioData);
         }
     }
 
-    /** {@inheritDoc} Forwarded to whichever renderer {@link #setup} selected. */
+    /** {@inheritDoc} Forwarded to whichever renderer {@link #openLocalRenderer} selected. */
     @Override
     public void start() {
         if (renderer != null) {
@@ -223,7 +216,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
-    /** {@inheritDoc} Forwarded to whichever renderer is currently active. */
+    /** {@inheritDoc} Forwarded to whichever renderer {@link #openLocalRenderer} selected. */
     @Override
     public void stop() {
         if (renderer != null) {
@@ -231,7 +224,7 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         }
     }
 
-    /** {@inheritDoc} Releases the active renderer, whichever one the session ended up on. */
+    /** {@inheritDoc} Releases the renderer {@link #openLocalRenderer} selected. */
     @Override
     public void cleanup() {
         // Stop the pads first: their sender threads outlive this object otherwise, and a pad left
@@ -242,6 +235,5 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
             renderer.cleanup();
             renderer = null;
         }
-        aaudioRenderer = null;
     }
 }

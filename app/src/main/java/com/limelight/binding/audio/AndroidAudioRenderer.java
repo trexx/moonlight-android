@@ -177,25 +177,39 @@ public class AndroidAudioRenderer implements AudioRenderer {
         return 0;
     }
 
+    // Frames dropped because moonlight-common-c's queue was already too deep. Counted rather than
+    // logged as they happen: audio arrives roughly every 5 ms, so logging per drop meant up to two
+    // hundred string builds a second on the audio path at precisely the moment it was struggling.
+    // The total is reported once at cleanup, which is when it can actually be read.
+    private int droppedFrames;
+
     /**
      * {@inheritDoc}
      *
-     * <p>{@link AudioTrack#write(short[], int, int)} blocks once the track's buffer is full, so
-     * the pending-duration check above it is what keeps a slow or stalled output from turning
-     * into unbounded latency.
+     * <p>{@link AudioTrack#write(short[], int, int)} blocks once the track's buffer is full, and
+     * the check above it bounds how far moonlight-common-c's own decode queue may run ahead when
+     * that happens.
+     *
+     * <p>It does <em>not</em> bound output latency, despite how it reads.
+     * {@link MoonBridge#getPendingAudioDuration()} reports that decode queue, not what is sitting
+     * inside {@link AudioTrack} — and on a device denied the fast path, the track's own buffer is
+     * where the latency actually lives. See {@code HARDWARE_TESTING.md} §3 for the measurement.
      */
-
     @Override
     public void playDecodedAudio(short[] audioData) {
+        // Read once. This is a JNI call and it runs per audio packet, so the old second call in
+        // the drop path cost a round trip purely to build a log message.
+        int pendingAudioMs = MoonBridge.getPendingAudioDuration();
+
         // Only queue up to 40 ms of pending audio data in addition to what AudioTrack is buffering for us.
-        if (MoonBridge.getPendingAudioDuration() < 40) {
+        if (pendingAudioMs < 40) {
             // This will block until the write is completed. That can cause a backlog
-            // of pending audio data, so we do the above check to be able to bound
-            // latency at 40 ms in that situation.
+            // of pending audio data, so we do the above check to bound how deep that
+            // queue is allowed to get.
             track.write(audioData, 0, audioData.length);
         }
         else {
-            LimeLog.info("Too much pending audio data: " + MoonBridge.getPendingAudioDuration() +" ms");
+            droppedFrames++;
         }
     }
 
@@ -217,6 +231,11 @@ public class AndroidAudioRenderer implements AudioRenderer {
      */
     @Override
     public void cleanup() {
+        if (droppedFrames != 0) {
+            LimeLog.warning("AudioTrack renderer dropped " + droppedFrames +
+                    " frames to bound the decode queue depth");
+        }
+
         // Immediately drop all pending data
         track.pause();
         track.flush();
