@@ -3,14 +3,19 @@ package com.limelight.binding.input.driver;
 import com.limelight.nvstream.jni.MoonBridge;
 
 /**
- * One controller paired to an {@link XboxWirelessDongle}.
+ * One GIP controller, whatever it is attached by.
  *
  * <p>Inverted from every other {@link AbstractController}: there is no reader thread and no USB
- * traffic here, because the native {@code xow-driver} owns the wireless link and pushes state in
- * through {@link #updateInput}. This class only translates that into the protocol's units and
- * routes rumble back down.
+ * traffic here, because the native driver owns the link and pushes state in through
+ * {@link #updateInput}. This class only translates that into the protocol's units and routes
+ * rumble, audio and volume back down.
+ *
+ * <p>Named for the protocol rather than the transport because it is genuinely transport-neutral:
+ * it holds a handle to a native {@code Controller}, and whether that sits on the wireless
+ * adapter's radio link or on a cable's interrupt endpoints is settled below it. A cabled pad
+ * produces one of these exactly as the adapter does.
  */
-public class XboxWirelessController extends AbstractController{
+public class GipController extends AbstractController{
     static {
         System.loadLibrary("xow-driver");
     }
@@ -19,13 +24,13 @@ public class XboxWirelessController extends AbstractController{
     private final long handle;
 
     /** @param handle native controller instance supplied by the dongle's driver */
-    public XboxWirelessController(int deviceId, UsbDriverListener listener, int vendorId, int productId, long handle) {
+    public GipController(int deviceId, UsbDriverListener listener, int vendorId, int productId, long handle) {
         super(deviceId, listener, vendorId, productId);
         this.handle = handle;
 
-        // This is an Xbox pad reached over the wireless adapter, so it declares what every other
-        // Xbox pad does. It extends AbstractController rather than AbstractXboxController - there is
-        // no USB endpoint to claim here - which is how it ended up announcing nothing at all: the
+        // An Xbox pad however it is attached, so it declares what every other Xbox pad does. It
+        // extends AbstractController rather than AbstractXboxController because the transport below
+        // owns the endpoints, not this class - which is how it ended up announcing nothing at all: the
         // host was told LI_CTYPE_UNKNOWN with no capabilities and no buttons, so it had no reason to
         // send rumble of either kind.
         this.type = MoonBridge.LI_CTYPE_XBOX;
@@ -140,6 +145,15 @@ public class XboxWirelessController extends AbstractController{
     }
 
     /**
+     * @return true if this pad's audio will stutter until its cable is pulled — it was left
+     *         streaming by a killed process, and no software route clears that state. The menu
+     *         shows it so the fix is an instruction rather than a discovery.
+     */
+    public boolean audioNeedsReplug() {
+        return audioNeedsReplugNative(handle);
+    }
+
+    /**
      * Starts or stops rendering stream audio to this pad's headphone jack.
      *
      * @return true if the pad accepted the change
@@ -171,8 +185,8 @@ public class XboxWirelessController extends AbstractController{
     }
 
     /**
-     * @return audio session counters: packets sent, bytes dropped, packets late, send failures and
-     *         the pad's last requested flow rate. For the performance overlay; reads relaxed
+     * @return audio session counters: packets sent, bytes dropped, packets late, send failures,
+     *         the pad's last requested flow rate, and transport underruns. For the performance overlay; reads relaxed
      *         atomics, so it neither locks nor disturbs the sending path.
      */
     public int[] getAudioStats() {
@@ -198,6 +212,7 @@ public class XboxWirelessController extends AbstractController{
     native boolean setAudioVolumeNative(long handle, int percent);
     native int audioVolumeNative(long handle);
     native boolean hasAudioSupportNative(long handle);
+    native boolean audioNeedsReplugNative(long handle);
     native void queueAudioNative(long handle, short[] samples, int count);
     native void sendRumble(long handle, short lowFreqMotor, short highFreqMotor);
     native void sendrumbleTriggers(long handle, short leftTrigger, short rightTrigger);

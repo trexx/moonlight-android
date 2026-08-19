@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Devices this app declares an interest in, so Android can grant it permission permanently.
+
+    The point is not auto-launching, which is a side effect we tolerate: it is the "use by default
+    for this USB device" checkbox. Android only offers that when a matching intent-filter exists,
+    and without one permission is asked for again on every enumeration - measured here as a dialog
+    on each of six replugs, and nearly three seconds from attach to a claimed device rather than
+    one.
+
+    That matters because unplugging and replugging the pad is a real part of using it: it is the
+    only way to clear the audio state a killed process leaves behind, every software route having
+    been tried and failed (see jni/xow_driver/AUDIO.md). A recovery the user performs by hand should
+    not also cost them a dialog.
+
+    Cabled pads are matched on the GIP signature rather than on product IDs: vendor 0x045e, and the
+    vendor-specific interface 0xff / 0x47 / 0xd0 that MS-GIPUSB 2.2.12 defines and that
+    XboxOneController.canClaimDevice() already tests for. Listing product IDs instead would need
+    this file edited for every pad the driver gains, and the two lists would drift.
+
+    The wireless adapter is matched by product ID, because that is how
+    XboxWirelessDongle.canClaimDevice() matches it - it takes exactly two, and its interface is one
+    vendor-specific descriptor with bulk endpoints rather than the GIP layout above. Keeping each
+    entry in step with the predicate that claims it is what stops this file drifting from the code.
+-->
+<resources>
+    <!-- Cabled Xbox pads: the GIP data interface -->
+    <usb-device vendor-id="1118" class="255" subclass="71" protocol="208" />
+
+    <!-- Xbox Wireless Adapter, older (0x02e6) and newer (0x02fe) -->
+    <usb-device vendor-id="1118" product-id="742" />
+    <usb-device vendor-id="1118" product-id="766" />
+</resources>

@@ -8,6 +8,7 @@
 #include <jni.h>
 #include "dongle/usb.h"
 #include "dongle/dongle.h"
+#include "wired/wired.h"
 
 #include "utils/log.h"
 
@@ -66,7 +67,7 @@ Java_com_limelight_binding_input_driver_XboxWirelessDongle_destroyDriver(JNIEnv 
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_limelight_binding_input_driver_XboxWirelessController_sendRumble(JNIEnv *env, jobject thiz,
+Java_com_limelight_binding_input_driver_GipController_sendRumble(JNIEnv *env, jobject thiz,
                                                                           jlong handle,
                                                                           jshort low_freq_motor,
                                                                           jshort high_freq_motor) {
@@ -75,7 +76,7 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_sendRumble(JNIEnv
 }
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_limelight_binding_input_driver_XboxWirelessController_sendrumbleTriggers(JNIEnv *env,
+Java_com_limelight_binding_input_driver_GipController_sendrumbleTriggers(JNIEnv *env,
                                                                                   jobject thiz,
                                                                                   jlong handle,
                                                                                   jshort left_trigger,
@@ -85,7 +86,7 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_sendrumbleTrigger
 }
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_com_limelight_binding_input_driver_XboxWirelessController_setAudioEnabledNative(JNIEnv *env,
+Java_com_limelight_binding_input_driver_GipController_setAudioEnabledNative(JNIEnv *env,
                                                                                      jobject thiz,
                                                                                      jlong handle,
                                                                                      jboolean enable) {
@@ -95,7 +96,7 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_setAudioEnabledNa
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_com_limelight_binding_input_driver_XboxWirelessController_hasAudioSupportNative(JNIEnv *env,
+Java_com_limelight_binding_input_driver_GipController_hasAudioSupportNative(JNIEnv *env,
                                                                                      jobject thiz,
                                                                                      jlong handle) {
     auto *controller = (Controller *) handle;
@@ -104,7 +105,17 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_hasAudioSupportNa
 
 extern "C"
 JNIEXPORT jboolean JNICALL
-Java_com_limelight_binding_input_driver_XboxWirelessController_setAudioVolumeNative(JNIEnv *env,
+Java_com_limelight_binding_input_driver_GipController_audioNeedsReplugNative(JNIEnv *env,
+                                                                             jobject thiz,
+                                                                             jlong handle) {
+    auto *controller = (Controller *) handle;
+
+    return controller->audioNeedsReplug() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_binding_input_driver_GipController_setAudioVolumeNative(JNIEnv *env,
                                                                                     jobject thiz,
                                                                                     jlong handle,
                                                                                     jint percent) {
@@ -115,7 +126,7 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_setAudioVolumeNat
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_com_limelight_binding_input_driver_XboxWirelessController_audioVolumeNative(JNIEnv *env,
+Java_com_limelight_binding_input_driver_GipController_audioVolumeNative(JNIEnv *env,
                                                                                  jobject thiz,
                                                                                  jlong handle) {
     auto *controller = (Controller *) handle;
@@ -125,27 +136,27 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_audioVolumeNative
 
 extern "C"
 JNIEXPORT jintArray JNICALL
-Java_com_limelight_binding_input_driver_XboxWirelessController_audioStatsNative(JNIEnv *env,
+Java_com_limelight_binding_input_driver_GipController_audioStatsNative(JNIEnv *env,
                                                                                 jobject thiz,
                                                                                 jlong handle) {
     auto *controller = (Controller *) handle;
-    uint32_t stats[5];
+    uint32_t stats[6];
 
     controller->audioStats(stats);
 
-    jintArray out = env->NewIntArray(5);
+    jintArray out = env->NewIntArray(6);
     if (out == nullptr) {
         return nullptr;
     }
 
-    env->SetIntArrayRegion(out, 0, 5, reinterpret_cast<const jint *>(stats));
+    env->SetIntArrayRegion(out, 0, 6, reinterpret_cast<const jint *>(stats));
 
     return out;
 }
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_limelight_binding_input_driver_XboxWirelessController_queueAudioNative(JNIEnv *env,
+Java_com_limelight_binding_input_driver_GipController_queueAudioNative(JNIEnv *env,
                                                                                 jobject thiz,
                                                                                 jlong handle,
                                                                                 jshortArray samples,
@@ -167,7 +178,7 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_queueAudioNative(
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_com_limelight_binding_input_driver_XboxWirelessController_registerNative(JNIEnv *env,
+Java_com_limelight_binding_input_driver_GipController_registerNative(JNIEnv *env,
                                                                               jobject thiz,
                                                                               jlong handle) {
     JavaVM *jvm = nullptr;
@@ -181,4 +192,52 @@ Java_com_limelight_binding_input_driver_XboxWirelessController_registerNative(JN
 
     auto *controller = (Controller *) handle;
     controller->registerJavaContext(jvm, env, env->NewGlobalRef(thiz));
+}
+/*
+ * A cabled GIP pad. Separate entry points from the dongle's because the two share nothing at the
+ * transport level - one cable is one device, with no pairing, no client slots and no firmware to
+ * load - while everything above GipDevice is common.
+ */
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_com_limelight_binding_input_driver_XboxWiredGipController_createWiredDriver(JNIEnv *env,
+                                                                                 jclass clazz,
+                                                                                 jint fd) {
+    JavaVM *jvm = nullptr;
+
+    if (env->GetJavaVM(&jvm) != JNI_OK) {
+        return 0;
+    }
+
+    return (jlong) new WiredController(fd, jvm);
+}
+
+extern "C"
+JNIEXPORT jboolean JNICALL
+Java_com_limelight_binding_input_driver_XboxWiredGipController_startWiredDriver(JNIEnv *env,
+                                                                                jclass clazz,
+                                                                                jlong handle) {
+    auto *wired = (WiredController *) handle;
+
+    return wired->start() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C"
+JNIEXPORT jlong JNICALL
+Java_com_limelight_binding_input_driver_XboxWiredGipController_wiredControllerHandle(JNIEnv *env,
+                                                                                     jclass clazz,
+                                                                                     jlong handle) {
+    auto *wired = (WiredController *) handle;
+
+    // The GIP device beneath, so rumble and audio reuse GipController's entry points
+    // rather than being duplicated for the cable.
+    return (jlong) wired->controller();
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_com_limelight_binding_input_driver_XboxWiredGipController_destroyWiredDriver(JNIEnv *env,
+                                                                                  jclass clazz,
+                                                                                  jlong handle) {
+    delete (WiredController *) handle;
 }

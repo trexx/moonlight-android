@@ -102,6 +102,12 @@
             android:summary="@string/summary_checkbox_usb_bind_all"
             android:defaultValue="false" />
         <CheckBoxPreference
+            android:key="checkbox_wired_pad_audio"
+            android:dependency="checkbox_usb_bind_all"
+            android:title="@string/title_checkbox_wired_pad_audio"
+            android:summary="@string/summary_checkbox_wired_pad_audio"
+            android:defaultValue="false" />
+        <CheckBoxPreference
             android:key="checkbox_mouse_emulation"
             android:title="@string/title_checkbox_mouse_emulation"
             android:summary="@string/summary_checkbox_mouse_emulation"

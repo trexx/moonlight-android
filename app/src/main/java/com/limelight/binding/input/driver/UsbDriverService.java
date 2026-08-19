@@ -29,6 +29,7 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.binding.audio.PadAudioSink;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 
 /**
@@ -61,6 +62,25 @@ public class UsbDriverService extends Service implements UsbDriverListener {
     private final UsbDriverBinder binder = new UsbDriverBinder();
 
     private final ArrayList<AbstractController> controllers = new ArrayList<>();
+
+    /*
+     * Which USB devices we have already taken, by device name.
+     *
+     * handleUsbDeviceState() is reached from both the attach broadcast and the startup
+     * enumeration, and nothing stopped the same device being claimed twice. A second claim builds
+     * a second controller for one pad: it appears twice in the game menu, and the loser of the
+     * race for the audio interface refuses audio while the winner accepts it.
+     */
+    private final HashMap<String, AbstractController> claimedDevices = new HashMap<>();
+
+    /**
+     * The same, for dongles.
+     *
+     * They are claimed on a branch that returns before {@link #claimedDevices} is written, so
+     * without this a detached dongle cannot be found by the name the broadcast carries. Kept as a
+     * parallel map rather than a different scheme, so the detach handler looks both up the same way.
+     */
+    private final HashMap<String, XboxWirelessDongle> claimedDongles = new HashMap<>();
 
     // Client callback, null when nothing is bound
     private UsbDriverListener listener;
@@ -103,13 +123,14 @@ public class UsbDriverService extends Service implements UsbDriverListener {
     public void deviceRemoved(AbstractController controller) {
         // Remove the the controller from our list (if not removed already)
         controllers.remove(controller);
+        claimedDevices.values().remove(controller);
 
         // A pad taking stream audio must leave the sink before its native driver instance is
         // destroyed, or the audio thread keeps queueing into a freed handle. This is the only
         // place a removal is known - the audio renderer is not on the listener chain - so the
         // coupling to the audio package is deliberate and lives here rather than being invented
         // somewhere with less claim to know.
-        if (padAudioSink != null && controller instanceof XboxWirelessController wireless) {
+        if (padAudioSink != null && controller instanceof GipController wireless) {
             padAudioSink.disable(wireless);
         }
 
@@ -154,6 +175,10 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                         handleUsbDeviceState(device);
                     }
                 }, 1000);
+            }
+            // The device going away, which until now nothing noticed at all
+            else if (action.equals(UsbManager.ACTION_USB_DEVICE_DETACHED)) {
+                handleUsbDeviceDetached(intent.getParcelableExtra(UsbManager.EXTRA_DEVICE));
             }
             // Subsequent permission dialog completion intent
             else if (action.equals(ACTION_USB_PERMISSION)) {
@@ -209,14 +234,28 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
 
         /**
-         * @return every controller currently paired through an adapter, in pairing order, which
-         *         is what the in-game menu lists so the user can pick which pads get audio
+         * @return every GIP controller we are driving, whatever it is attached by: pads paired
+         *         through an adapter in pairing order, then any on a cable. This is what the
+         *         in-game menu lists so the user can pick which pads get audio.
+         *
+         * <p>Cabled pads belong here as much as wireless ones — a {@link XboxWiredGipController}
+         * is a {@link GipController} with an isochronous transport under it, and its headphone
+         * jack works the same way. Listing only the adapter's pads is what made the audio menu
+         * entry invisible with a cable plugged in and no adapter pad paired.
          */
-        public List<XboxWirelessController> getWirelessControllers() {
-            List<XboxWirelessController> found = new ArrayList<>();
+        public List<GipController> getGipControllers() {
+            List<GipController> found = new ArrayList<>();
+
             for (XboxWirelessDongle dongle : xboxWirelessDongles) {
                 found.addAll(dongle.getControllers());
             }
+
+            for (AbstractController controller : controllers) {
+                if (controller instanceof GipController gip) {
+                    found.add(gip);
+                }
+            }
+
             return found;
         }
 
@@ -308,6 +347,53 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /**
+     * Releases whatever we had claimed on a device that has just gone away.
+     *
+     * <p>Nothing did this before. A cabled pad's read thread exits on the first failed transfer and
+     * tells no one, and {@code stop()} was reachable only from the service shutting down — so an
+     * unplug left a stale entry in {@link #claimedDevices}, a controller still holding its number,
+     * and a native driver alive on a dead file descriptor. With audio enabled that driver's libusb
+     * thread went on resubmitting isochronous transfers to that descriptor, which is the "USB stack
+     * cycling once a second" that made re-enumeration look unworkable.
+     *
+     * <p>Everything downstream already exists: {@code stop()} tears the driver down and calls
+     * {@code notifyDeviceRemoved()}, and {@link #deviceRemoved} drops the controller from both
+     * lists and takes it out of {@link PadAudioSink}.
+     */
+    private void handleUsbDeviceDetached(UsbDevice device) {
+        if (device == null) {
+            return;
+        }
+
+        String name = device.getDeviceName();
+        final AbstractController controller = claimedDevices.get(name);
+        final XboxWirelessDongle dongle = claimedDongles.remove(name);
+
+        if (controller == null && dongle == null) {
+            // Not one of ours; the broadcast fires for every device on the bus
+            return;
+        }
+
+        LimeLog.info("USB device detached: " + name);
+
+        /*
+         * Off the main thread, for the same reason Game.togglePadAudio() is: stopping a cabled pad
+         * joins its read thread, which can be sitting in a transfer with a 500 ms timeout, and the
+         * audio event thread behind it. That is far too long to hold a broadcast receiver.
+         */
+        new Thread(() -> {
+            if (controller != null) {
+                controller.stop();
+            }
+
+            if (dongle != null) {
+                dongle.stop();
+                xboxWirelessDongles.remove(dongle);
+            }
+        }).start();
+    }
+
     private void handleUsbDeviceState(UsbDevice device) {
         // Are we able to operate it?
         if (shouldClaimDevice(device, prefConfig.bindAllUsb)) {
@@ -339,6 +425,11 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                 return;
             }
 
+            // Already ours, so leave it alone rather than building a second controller for it
+            if (claimedDevices.containsKey(device.getDeviceName())) {
+                return;
+            }
+
             // Open the device
             UsbDeviceConnection connection = usbManager.openDevice(device);
             if (connection == null) {
@@ -353,10 +444,48 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                     return;
                 }
                 xboxWirelessDongles.add(dongle);
+                claimedDongles.put(device.getDeviceName(), dongle);
                 return;
             }
 
             AbstractController controller;
+
+            /*
+             * Which driver goes on a cabled Xbox pad, not whether to take it - that is already
+             * settled above, by the same "override native Xbox gamepad support" preference that
+             * has always decided it. Both drivers match the same hardware and both replace
+             * Android's; they differ in what they implement.
+             *
+             * XboxOneController sends canned init packets and parses two message types, with no
+             * metadata, no device-state machine and no security handshake. MS-GIPUSB 2.2.1.4 makes
+             * that handshake the gate on the audio sub-device, so headphone audio is unreachable
+             * from it however much isochronous plumbing were added beneath. The GIP driver is a
+             * superset and should eventually replace it outright - but it is unproven, so it is
+             * opt-in until it has been run against real pads.
+             */
+            /*
+             * A pad left streaming by a killed process plays degraded until the cable is pulled,
+             * and nothing here recovers it. Re-enumerating - what unplugging does, and what xone
+             * does at every probe - was tried and withdrawn: it left the pad unclaimed and input
+             * dead. Read HARDWARE_TESTING.md before reaching for it again.
+             */
+
+            if (prefConfig.wiredPadAudio && XboxWiredGipController.canClaimDevice(device)) {
+                controller = XboxWiredGipController.create(device, connection,
+                                                           nextDeviceId++, this);
+
+                // create() releases the interface but leaves the connection open on failure, which
+                // is exactly what the fallback needs - so fall back rather than giving up, and the
+                // user loses audio rather than their controller.
+                if (controller != null) {
+                    controllers.add(controller);
+                    claimedDevices.put(device.getDeviceName(), controller);
+                    controller.start();
+                    return;
+                }
+
+                LimeLog.warning("Falling back to the standard driver for this cabled pad");
+            }
 
             if (XboxOneController.canClaimDevice(device)) {
                 controller = new XboxOneController(device, connection, nextDeviceId++, this);
@@ -383,6 +512,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
             // Add this controller to the list
             controllers.add(controller);
+            claimedDevices.put(device.getDeviceName(), controller);
         }
     }
 
@@ -495,6 +625,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         // Register for USB attach broadcasts and permission completions
         IntentFilter filter = new IntentFilter();
         filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         filter.addAction(ACTION_USB_PERMISSION);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED);
@@ -535,6 +666,8 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             // Stop and remove the dongle
             xboxWirelessDongles.remove(0).stop();
         }
+
+        claimedDongles.clear();
 
         // Stop all controllers
         while (controllers.size() > 0) {

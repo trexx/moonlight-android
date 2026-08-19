@@ -38,7 +38,7 @@ public abstract class AbstractXboxController extends AbstractController {
 
     /**
      * The buttons every Xbox generation exposes, advertised to the host so it knows what this pad
-     * can send. Shared with {@link XboxWirelessController}, which reaches the same hardware through
+     * can send. Shared with {@link GipController}, which reaches the same hardware through
      * the wireless adapter's native driver rather than this class.
      */
     static final int XBOX_BUTTON_FLAGS =

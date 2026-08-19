@@ -517,6 +517,37 @@ That discipline is what eventually pointed at the handshake instead of at the se
    link unencrypted. The key-programming step in the plan was therefore never built, which also
    avoided its main risk — a wrong key silences the pad entirely, input included.
 
+## The host does not send silence, and that is why the cushion has to rebuild
+
+Measured on the Shield, 2026-08-19, against Turk-PC:
+
+```
+Received first audio packet after 11500 ms      (PC idle)
+Received first audio packet after 100 ms        (music playing)
+```
+
+**The host sends no audio packets at all when there is no sound** — not silent packets, nothing.
+So the supply to the pad is inherently bursty, and the ring running dry is normal operation rather
+than a fault. Any design here has to survive it.
+
+That is what makes one-shot priming untenable, and the numbers show it plainly. Three sessions,
+same pad, same box:
+
+| Session | Supplied | Drained | Prime events |
+|---|---|---|---|
+| Old build, fresh, audio playing | 181 kB/s (94%) | 943 pkt/s | 1 |
+| Old build, relaunch, mostly-idle PC | **43 kB/s (23%)** | 226 pkt/s | 6 |
+| New build, relaunch, audio playing | **192 kB/s (100%)** | 999.6 pkt/s | 2 |
+
+The 23% session was not a fault: the PC was quiet for most of it, so that is simply how much audio
+existed. The fault was what the old build did with it — the first dry spell latched the transport
+into "primed against an empty ring" permanently, and every packet after that was padded with
+silence. A quiet stretch therefore did not cost a quiet stretch; it cost the rest of the session.
+
+Read the supply figure before blaming anything: `bytes queued` divided by the time audio was
+enabled, against 192000 B/s. Below that, the host was silent and the pad is reproducing what it was
+given.
+
 ## Known limitations
 
 - **No rate adaptation, which is the anti-pop mechanism.** Each upstream Audio Capture message
@@ -541,11 +572,14 @@ That discipline is what eventually pointed at the handshake instead of at the se
   so a device that ever disagrees will be visible rather than silently mismatched.
 - **Stereo 48 kHz only.** Samples are forwarded verbatim with no downmix, so a surround stream
   disables the feature rather than sending something wrong.
-- **Wireless adapter only.** A pad on a USB cable still cannot carry audio. `XboxOneController`
-  drives cabled pads through `UsbDeviceConnection`, and **Android exposes no isochronous API at
-  all** — the wired audio endpoints are isochronous (interface 1 alt 1, 228 B at 1 ms, per §2.2.12
-  and confirmed by a descriptor scan). It is the wrong API rather than a missing feature; libusb
-  does isochronous and is already vendored. See "Audio over a cable" above.
+- **A pad left streaming by a killed process is heard until the cable is pulled.** See
+  "Audio over a cable" below; it is understood rather than mysterious, and exiting cleanly avoids
+  it. What survives is the previous run's stream, heard as repeating noise the moment a new stream
+  starts, before audio has been enabled at all.
+
+  Degraded playback across sessions used to be listed here as well, and that part was ours: the
+  ring's cushion was primed once and never rebuilt. It is fixed, and the two are worth keeping
+  apart — this one needs the cable pulled, that one did not.
 
   A pad whose sub-device declares no usable format is still refused with a message saying so,
   rather than moving the stream's audio off the TV into silence.
@@ -561,6 +595,213 @@ That discipline is what eventually pointed at the handshake instead of at the se
 - **No microphone.** There is no mic support anywhere in this client, so the capture direction is
   negotiated but never read.
 
+## Audio over a cable, as it was actually built
+
+Working on hardware: an Xbox One pad on a USB cable plays the stream's audio through its headphone
+jack, over the same GIP stack, handshake and volume control as the adapter.
+
+**Interface 0 cannot carry it.** 64 bytes every 4 ms is 16 KB/s against the 192 KB/s that 48 kHz
+stereo needs, so §2.2.12's isochronous endpoints are the only path with the bandwidth — settled by
+arithmetic, not experiment. But interface 0 must still be ours, because the audio sub-device only
+exists after the security handshake and the handshake runs there. Leaving input to Android and
+claiming only interface 1 is therefore not an option.
+
+**Each isochronous packet is one GIP message carrying one millisecond**: 192 bytes of samples behind
+a 6-byte header, 198 inside the endpoint's 228. The bus consumes exactly one packet per frame, so
+that is fixed rather than chosen.
+
+Five things were got wrong and are worth not repeating:
+
+- **Packets are packed contiguously by their declared length**, not at a fixed stride. Writing each
+  message at the maximum stride while declaring a shorter length makes every packet after the first
+  read from the wrong offset. It is heard as noise, and then as the device leaving the bus.
+- **The bus pulls; the host does not push.** Submitting only when samples happen to be ready leaves
+  the endpoint unfed whenever the host's clock is the slower of the two, and a packet never
+  submitted is not a packet that failed — the per-packet status reports nothing. Transfers now stay
+  in flight and are refilled from the ring on completion.
+- **A pull needs a cushion.** Draining the ring to empty on every completion means any millisecond
+  the host is late becomes silence, and the ring never recovers. Real audio interleaved with silence
+  does not sound like a dropout; it sounds slowed down. Silence is sent deliberately until a
+  cushion accumulates.
+- **The cushion has to be rebuilt, not just built.** Priming was a start-up step, done once when the
+  transport came up, and the cushion only ever shrinks after that: a shortfall is padded with
+  silence and nothing puts the missing milliseconds back. So one late millisecond left the rest of
+  the session playing from a ring hovering at empty.
+
+  It bites hardest between sessions, which is how it was found — audio gapped and slightly slowed
+  on every session after the first, cleanly reproducible by disconnecting and reconnecting.
+  Disabling audio deliberately leaves the stream up carrying silence, so the ring is simply not fed
+  and drains flat; re-enabling takes the "resuming into the running stream" path, which never
+  re-enters the transport and so never re-primes. Every session after the first therefore ran with
+  no cushion at all, from its first sample.
+
+  **It is a regression, and the commit that introduced it is identifiable.** "Stop cycling the audio
+  interface on every session" measured three degrading sessions in one process with healthy numbers
+  throughout — 192.2 bytes queued per packet sent, zero underruns, the ring never dry — and
+  concluded the pipeline was exonerated. That was true of the code as it stood: every session still
+  went through `enableAudio()`, so every session re-primed. The commit immediately after it,
+  "Configure the pad's audio once, as the spec and xone both do", added both early returns — the
+  disable that leaves the stream up and the enable that resumes into it — and from that point no
+  session but the first ever primed. The measurement was never repeated afterwards, so it went on
+  being cited for code it no longer described.
+
+  Worth keeping as the shape of the mistake rather than the mistake itself: an exoneration is only
+  good for the code it was measured on, and this one outlived it by one commit.
+
+  `submitAudioTransfer()` now re-arms whenever it finds the ring completely empty, so a collapse
+  costs one prefill of deliberate silence and then plays with a cushion again. The transport's
+  counters are reset on the resume path too — they were not, so a resumed session inherited the
+  previous one's totals plus a gap counted for every millisecond audio had been off, which would
+  have made this unreadable in the very summary that should show it.
+- **`handlePacket()` is not reentrant.** It owns the chunk reassembly buffer and the sequence
+  counters and is only ever entered from the interrupt read thread. Reading the capture endpoint
+  through it puts the libusb event thread inside it as well, a thousand times a second, and
+  corrupts its state — the crash lands somewhere unrelated. The capture path decodes the flow rate
+  itself.
+
+**Rate adaptation is implemented, and is what §3.2.5.1.5 calls "the mechanism GIP devices use to
+eliminate pops and clicks".** The device asks for 188, 192 or 196 bytes per millisecond in the flow
+field of its Audio Capture messages, which arrive on the isochronous IN endpoint. Nothing read that
+endpoint at first, so the flow rate logged as zero and a fixed 192 went out regardless. The samples
+themselves are discarded; this client has no microphone.
+
+**The device is configured once and never renegotiated.** This is the rule to keep. §2.2.11 has
+audio "flow continually even if the data represents only silence", and xone configures at
+`gip_headset_probe()` and never again for the life of the client — neither ever asks a device to be
+reconfigured. Doing it per session degraded the pad a step each time, first session clean and each
+one after it worse, while our own side measured perfect throughout: 192.2 bytes supplied per packet
+sent, 999 packets a second, zero underruns. Enabling and disabling now only decides whether the ring
+is fed.
+
+### The one limitation, and why it stays
+
+A pad left streaming by a process that was *killed* plays degraded until the cable is pulled.
+
+§2.2.11 keeps a started audio device streaming until it is powered off, disconnected, or told to
+stop — and Android closes the USB connection before any teardown of ours runs, so the stop fails
+with `NO_DEVICE`. A new process cannot undo it either. All of these were tried on hardware and none
+worked:
+
+**What separates a good session from a bad one is one packet.** A clean session opens with the
+sub-device announcing itself; a stuttering one goes straight to metadata with no announce. Five
+sessions on the Shield, and the correlation is exact - announce present, audio clean; announce
+absent, audio stutters - while our own counters read 100% supply, bus-rate drain and no underruns
+in both. §2.2.1 has a device send Hello only while in Arrival, so a sub-device left Active by a
+killed process never announces, and everything we then send is addressed to the previous run's
+stream. `Audio device N offers ... announced yes|no` is logged at discovery, so a session that will
+stutter says so before anyone listens to it.
+
+**A sub-device RESET does not bring it back, and this is now tested rather than assumed.** §3.1.1
+has a device reinitialise "as it does on power up" on RESET and then "send GIP Hello's at 500 ms
+intervals until the host responds", which is precisely the announce we are missing. This pad
+answers with silence: no hello, ever, and therefore no audio device for the rest of the session.
+Driving setup from the hello turned stuttering audio into "no headset detected", and was reverted.
+
+| Attempt | Result |
+|---|---|
+| Set Device State: STOP on discovery and on teardown | No effect |
+| Set Device State: RESET to the audio sub-device | No effect |
+| RESET, then waiting for the hello §3.1.1 promises | **No hello, ever - loses audio entirely** |
+| Adopting the retained configuration: bare START, no renegotiation | **Accepted in 6 ms, still stutters** |
+| Proposing the other advertised format first | Ran, no effect - and caused the pitch shift |
+| Set Device State: RESET to the primary device | Pad leaves the USB bus, permission prompt loop |
+| `libusb_reset_device()` re-enumeration, at probe | Pad unclaimed, **input dead**, USB stack cycling |
+| `libusb_reset_device()` again, with teardown and re-claim in place | **Pad goes silent for good** |
+
+**The USB reset is settled, and it is not a way out.** It was retried properly: the service now
+handles `ACTION_USB_DEVICE_DETACHED` (verified over six replug cycles), permission survives
+re-enumeration, and the pad is re-claimed directly rather than waiting on a broadcast. It still
+fails, and the log says exactly how:
+
+```
+Wired GIP: resetting the pad
+Wired GIP: the pad stayed on the bus; re-claiming it
+Wired: device opened
+Wired: controller started
+No metadata after 500 ms; starting the controller anyway     <- and then nothing, for 63 s
+```
+
+Two things to take from that. **`USBDEVFS_RESET` does not re-enumerate** when the descriptors are
+unchanged - it resets the port and restores the device in place, only reporting `NOT_FOUND` and
+re-enumerating when they differ. So no detach or attach broadcast ever arrives and nothing picks the
+pad back up on its own; *that* is what "left the pad unclaimed and input dead" meant the first time,
+not any missing teardown. And **the pad does not survive the port reset**: it stays on the bus,
+opens, accepts a claim, and then answers nothing at all - no metadata, no hello, no input - until
+the cable is physically pulled.
+
+§3.1.1 says "USB Reset and USB Suspend MUST be handled by all GIP states". This pad does not handle
+it. Pulling the cable and a `USBDEVFS_RESET` are not equivalent on this hardware, and no amount of
+teardown around the reset changes that.
+
+**Do not try this a fourth time.** The remaining difference between a cable pull and everything
+available in software is the physical disconnect, and Android exposes no way to produce one.
+
+**This is a dead end at the protocol level, and the last row of evidence is the strongest.** Adopting
+the stale configuration works exactly as designed - the device accepts a bare START, reports its
+volume six milliseconds later, and streams - and the two sessions then measure *identically*:
+
+| | Fresh (`announced yes`) | Adopted (`announced no`) |
+|---|---|---|
+| Supplied | 192055 B/s (100.0%) | 192000 B/s (100.0%) |
+| Drained | 999.6 packets/s | 999.9 packets/s |
+| Dropped / late / failures / underruns | 0 / 0 / 0 / 0 | 0 / 0 / 0 / 0 |
+| Flow rate | 192 | 192 |
+
+One sounds right and one stutters. Every message GIP defines for changing a sub-device's state has
+now been tried on hardware, the device reports itself satisfied throughout - a flow rate of 192 is
+it asking for exactly what we send - and delivery is provably perfect. What differs is that the
+pad's audio hardware has not been power-cycled, and nothing in the protocol power-cycles it.
+
+**Unplugging the cable is the fix, and it is the only one.** Treat that as the answer rather than as
+a workaround waiting to be replaced, and spend effort on making it *visible* to the user - the
+`announced no` line predicts the fault before anyone listens - rather than on a seventh way to ask
+the device to reset itself.
+
+**The impairment itself was eventually measured, which is where the case closes.** The session
+summary's flow-rate dynamics separate the two worlds cleanly: a fresh pad nudges its rate once
+every ~300 ms (3.4-3.9 changes/s across runs - textbook ~50 ppm clock-drift dither), while a stale
+pad slams the same 188-196 band twelve times a second, every second, for the whole session,
+through delivery our counters score as perfect. Its buffer controller is in a sustained
+oscillation, and the audible stutter - with its slight perceived pitch drop - is its own fill
+bouncing off a rail: silence interleaved at the DAC, on the far side of the cable this time.
+
+Two host-side levers were tested against that oscillation and neither moved it at all: holding the
+isochronous stream closed until the volume message (matching xone and the Windows capture; kept as
+correct), and halving the in-flight queue from 24 ms to 12 ms (kept for the latency; the change
+rate stayed at 12/s exactly). An oscillation indifferent to actuation delay is internal, full
+stop. USB reset kills the pad outright, and every GIP state message is in the table above.
+
+So the driver detects the condition instead - `audioNeedsReplug()`, true when the sub-device
+answered metadata without ever announcing - and the pad audio menu says "replug the pad" on that
+controller's row. The fault is the pad's; the fix that ships is making its one real remedy an
+instruction rather than a discovery.
+| Proposing the device's other format first, so the real one is a change | Confirmed to run, no effect - **and withdrawn**, see below |
+| Set Device State: RESET to the primary device | Takes the pad off the USB bus; permission prompt loop |
+| `libusb_reset_device()` to re-enumerate, as xone does at probe | Pad left unclaimed, **input dead**, USB stack cycling |
+
+The last is the important one. Re-enumeration is what pulling the cable does and what xone does on
+every probe, but through a wrapped descriptor on Android it is not equivalent, and it cost input.
+`XboxWiredGipController.resetIfPreviousSessionUnclean()` is kept unused as the record of that.
+
+Exiting cleanly — disabling audio, or disconnecting from the menu — avoids the whole thing.
+
+**The alternate-format proposal is withdrawn.** It was the third row of that table: propose the
+device's *second* advertised pair on discovery so that the real one registers as a change rather
+than a repeat. It did not fix the fault, was recorded as such, and was left in the code anyway —
+which quietly made it a renegotiation on every connect, against the one rule this file establishes
+from hardware: configure once, never again.
+
+What made it worth removing rather than merely tidying is what the two pairs are. This pad
+advertises `09 10` and `09 09`, and §3.2.5.1.2 gives `0x09` as **24 kHz mono** against `0x10`'s
+**48 kHz stereo**. So every startup retuned the render path to 24 kHz mono and back to 48 kHz
+stereo a few seconds later, with §2.2.11 requiring the device to reconfigure its audio hardware
+before it answers each one. A render pipeline left anywhere between those two plays gapped and an
+octave low — which is the reported symptom, arrived at from the wrong direction.
+
+That is a mechanism, not a proof: the fault also appears on the leftover-stream path, and both were
+in play at once. It is removed because the specification says not to do it and because it was known
+not to help, which is enough on its own.
+
 ## Still to measure
 
 Throughput and stream health are answered above. What is not:
@@ -574,5 +815,9 @@ Throughput and stream health are answered above. What is not:
 - **Audible quality over a long session.** 179 late packets in 102 s did not produce anything
   audible, but no one has listened for pops across, say, an hour. If they appear, rate adaptation
   is the mechanism the protocol provides and is the first thing to implement.
+- **Whether re-priming ever thrashes.** An empty ring now costs a full prefill of deliberate
+  silence rather than one padded millisecond, which is the right trade for a collapse and the wrong
+  one for a stream that merely runs close to empty. Nothing measured says this hardware does, and
+  the underrun counter is where it would show.
 
 `HARDWARE_TESTING.md` §10 has the checks for all three.

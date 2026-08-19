@@ -99,6 +99,33 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+        <!-- Exists only so Android will offer to remember USB permission: the "use by default for
+             this USB device" checkbox appears only for an app declaring a matching intent-filter,
+             and without it permission is asked for again on every enumeration. That is fatal to
+             re-enumerating a pad deliberately, which is the only recovery for the audio state a
+             killed process leaves behind. See UsbAttachTrampoline and jni/xow_driver/AUDIO.md.
+
+             Android launches this activity when a matching device is attached, so it must not be a
+             screen: NoDisplay, its own task affinity and singleInstance keep it out of the Game
+             task, so a pad re-enumerating mid-stream cannot pull the user out of the game. -->
+        <activity
+            android:name=".UsbAttachTrampoline"
+            android:exported="true"
+            android:noHistory="true"
+            android:excludeFromRecents="true"
+            android:resizeableActivity="false"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:theme="@android:style/Theme.NoDisplay">
+
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter" />
+        </activity>
         <!-- Small hack to support launcher shortcuts without relaunching over and over again when the back button is pressed -->
         <activity
             android:name=".ShortcutTrampoline"

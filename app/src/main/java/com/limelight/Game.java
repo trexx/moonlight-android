@@ -13,7 +13,8 @@ import com.limelight.binding.input.touch.AbsoluteTouchContext;
 import com.limelight.binding.input.touch.RelativeTouchContext;
 import com.limelight.binding.input.touch.TrackpadContext;
 import com.limelight.binding.input.driver.UsbDriverService;
-import com.limelight.binding.input.driver.XboxWirelessController;
+import com.limelight.binding.input.driver.GipController;
+import com.limelight.binding.input.driver.XboxWiredGipController;
 import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.video.CrashListener;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
@@ -199,6 +200,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // frame, and mutated from the game menu. Empty until the user asks for it, so the audio path
     // is unchanged for anyone who never opens that menu.
     private final PadAudioSink padAudioSink = new PadAudioSink();
+
+    // Whether any pad took audio during this stream, for labelling the end-of-stream summary. Set
+    // rather than cleared, because the question is what the stream contained, not how it ended.
+    private volatile boolean padAudioUsedThisStream;
     private ServiceConnection usbDriverServiceConnection = new ServiceConnection() {
         @Override
         public void onServiceConnected(ComponentName componentName, IBinder iBinder) {
@@ -939,6 +944,18 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             int videoFormat = decoderRenderer.getActiveVideoFormat();
 
             displayedFailureDialog = true;
+
+            /*
+             * Before stopConnection(), which tears the renderer down.
+             *
+             * Labelled from whether a pad took audio at any point, not from whether one is taking
+             * it now: disconnecting removes the pad from the sink before this runs, so asking the
+             * sink labelled every run "off" - including a run with ninety seconds of pad audio in
+             * it.
+             */
+            decoderRenderer.logStreamSummary(padAudioUsedThisStream ? "pad audio on"
+                                                                    : "pad audio off");
+
             stopConnection();
 
             if (prefConfig.enableLatencyToast) {
@@ -2323,14 +2340,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     /**
-     * @return the pads paired through the adapter, in pairing order, or empty if the driver is not
+     * @return every GIP pad we are driving - adapter or cable - or empty if the driver is not
      *         bound. The game menu lists these so the user can send audio to one.
      */
-    public List<XboxWirelessController> getWirelessControllers() {
+    public List<GipController> getGipControllers() {
         if (usbDriverBinder == null) {
             return Collections.emptyList();
         }
-        return usbDriverBinder.getWirelessControllers();
+        return usbDriverBinder.getGipControllers();
     }
 
     /** @return which pads are currently taking the stream's audio */
@@ -2343,7 +2360,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      * is either the two-pad bandwidth limit or a pad with no audio endpoint at all, and the toast
      * distinguishes them rather than leaving the user to wonder why the menu did nothing.
      */
-    public void togglePadAudio(XboxWirelessController controller) {
+    public void togglePadAudio(GipController controller) {
         final boolean enabling = !padAudioSink.isEnabled(controller);
 
         // Off the main thread, for the same reason setDonglePairingMode() is: both ends of this
@@ -2357,6 +2374,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             final int message;
 
             if (succeeded) {
+                if (enabling) {
+                    padAudioUsedThisStream = true;
+                }
+
                 message = enabling ? R.string.toast_pad_audio_enabled
                                    : R.string.toast_pad_audio_disabled;
             }
@@ -2386,7 +2407,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     /** Disabling always succeeds; wrapped so the toggle above can treat both directions alike. */
-    private boolean disablePadAudio(XboxWirelessController controller) {
+    private boolean disablePadAudio(GipController controller) {
         padAudioSink.disable(controller);
         return true;
     }

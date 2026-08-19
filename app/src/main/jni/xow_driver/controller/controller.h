@@ -30,6 +30,54 @@
 #include <vector>
 
 /*
+ * A transport that carries audio itself rather than through GIP messages on the main link.
+ *
+ * The adapter needs none of this: its audio is ordinary GIP messages down the same radio link as
+ * everything else, so Controller sends them and this stays null. A cabled pad cannot - MS-GIPUSB
+ * 2.2.12 puts its audio on isochronous endpoints on a separate interface, and interface 0's 64
+ * bytes every 4 ms is 16 KB/s against the 192 KB/s that 48 kHz stereo needs. It is not a
+ * preference, it is the only path with the bandwidth.
+ */
+class GipAudioTransport
+{
+public:
+    virtual ~GipAudioTransport() = default;
+
+    /* Brings up whatever the transport needs before samples can flow. Sends nothing. */
+    virtual bool enableAudio() = 0;
+    virtual void disableAudio() = 0;
+
+    /*
+     * Puts the first transfers on the wire, in both directions.
+     *
+     * Split from enableAudio() because the two happen at different points of 2.2.11: the transport
+     * is brought up before Set Device State: START, but nothing may be *sent* until the device has
+     * reported its volume. Both references hold that line - xone submits its first URBs in
+     * gip_headset_register(), which is gated on the volume (or a capture packet) having arrived,
+     * and the Windows capture starts render data 31 ms after the volume message. Feeding
+     * isochronous render data to a device that is still Idle is a state no reference
+     * implementation ever puts it in.
+     */
+    virtual bool startStreaming() = 0;
+
+    /* @return whether the buffer was accepted for sending */
+    virtual bool sendAudio(const uint8_t *samples, size_t length) = 0;
+
+    /* Packets the transport could not place, which is a gap in the audio. */
+    virtual uint32_t underruns() const = 0;
+
+    /*
+     * Zeroes those counters for a new session.
+     *
+     * Needed because a transport is brought up once per connection and then left running across
+     * sessions, so nothing else would ever clear them. Without it a resumed session inherits the
+     * previous one's total plus everything counted while audio was off - and audio being off is
+     * counted as a gap every millisecond, since the ring is deliberately not fed.
+     */
+    virtual void resetStats() = 0;
+};
+
+/*
  * Forwards gamepad events to virtual input device
  * Passes force feedback effects to gamepad
  */
@@ -63,11 +111,131 @@ public:
     bool supportsAudioOut() const;
 
     /*
-     * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
-     * dropped, packets late by more than the cadence, send failures, and the pad's last requested
-     * flow rate. Reads relaxed atomics, so it costs nothing on the sending path and needs no lock.
+     * Whether this pad's audio will stutter until its cable is pulled.
+     *
+     * True when the audio sub-device answered its metadata without ever announcing: it was left
+     * Active by a killed process, its buffer controller oscillates - measured at 12 flow-rate
+     * changes a second against a healthy 3.4, unchanged by anything the host does - and only a
+     * real USB disconnect rebuilds that state. Every software route is tried and tabulated in
+     * AUDIO.md; this exists so the menu can say "replug it" instead of the user discovering the
+     * stutter by ear.
      */
-    void audioStats(uint32_t out[5]) const;
+    bool audioNeedsReplug() const
+    {
+        return audioDeviceId != 0 && !audioDeviceAnnounced.load();
+    }
+
+    /*
+     * Starts initialisation without waiting for an announce, for a transport whose device will
+     * never send one.
+     *
+     * MS-GIPUSB 2.2.1 has a device Hello only while in the Arrival state, and a cabled pad has
+     * already been taken through Arrival by Android's own driver before we claim it - which is why
+     * it works without us. Everything here hangs off the announce, so on a cable it has to be
+     * started by hand instead.
+     *
+     * Idempotent, and shares the guard with the announce path so the two cannot both build the
+     * input state.
+     */
+    void begin();
+
+    /*
+     * Bytes per audio packet, which sets the cadence with it: the ring paces itself by waiting for
+     * one packet's worth of samples, so the size is the clock.
+     *
+     * The wireless adapter carries one 8 ms GIP message of 1536 bytes. A cabled pad is a different
+     * shape entirely - MS-GIPUSB 2.2.12 puts its audio on an isochronous endpoint at 228 bytes
+     * every 1 ms - so this belongs to the transport rather than being a constant here.
+     *
+     * Must be set before audio is enabled; changing it under a running sender is not supported and
+     * there is no reason to, since a transport does not change mid-session.
+     */
+    void setAudioPacketBytes(size_t bytes);
+
+    /*
+     * Routes audio through a transport that carries it outside the GIP link.
+     *
+     * Null - the wireless case - keeps the existing behaviour exactly: one GIP audio message per
+     * buffer, down the same link as everything else. Set before audio is enabled.
+     */
+    void setAudioTransport(GipAudioTransport *transport);
+
+    /*
+     * The device's requested render size, reported by a transport that reads its capture endpoint
+     * itself rather than through handlePacket().
+     *
+     * handlePacket() is not reentrant - it owns chunk reassembly state and sequence counters - and
+     * a transport with its own receive path runs on its own thread, so it must not go through it.
+     */
+    void audioFlowRateReported(uint16_t flowRate);
+
+    /*
+     * Lets a transport supply the JavaVM before any Java object exists.
+     *
+     * registerJavaContext() is called from the GipController constructor, which cannot run until
+     * the transport has produced a native handle - but initialisation starts before that, and the
+     * metadata timeout path needs a JVM to reach the handshake's crypto.
+     */
+    void setJavaVM(JavaVM *vm);
+
+    /*
+     * Whether to power the device down when this object goes away. True for a pad on the adapter,
+     * which nothing else drives; false for a cabled one, which Android takes straight back.
+     */
+    void setPowerOffOnTeardown(bool powerOff) { powerOffOnTeardown = powerOff; }
+
+    /*
+     * Writes one audio message for the audio sub-device into a caller-supplied buffer.
+     *
+     * For a transport that packetises audio itself and so needs several small messages rather than
+     * one large one. The buffer needs room for the samples plus a header.
+     *
+     * @return bytes written
+     */
+    size_t encodeAudioFragment(const uint8_t *samples, size_t length, uint8_t *out);
+
+    /*
+     * Takes up to length bytes of audio, filling any shortfall with silence.
+     *
+     * For a transport clocked by something other than the host's audio - isochronous is paced by
+     * the USB bus at exactly one packet per frame, and nothing makes the two agree. Pushing when
+     * samples happen to be ready leaves the endpoint unfed whenever the host's clock is the slower
+     * of the two, which is audible as a hole every few hundred packets and is not something a
+     * deeper queue fixes: a sustained deficit drains any queue eventually.
+     *
+     * So the bus pulls instead, and asks for exactly what it is about to send. Silence is the right
+     * shortfall because the endpoint is going to transmit that millisecond whatever we do; the only
+     * choice is whether it carries our samples or a gap.
+     *
+     * @return bytes of real audio, which is less than length when silence was inserted
+     */
+    size_t drainAudio(uint8_t *out, size_t length);
+
+    /*
+     * @return bytes of audio waiting to be sent, for a transport deciding whether it has built up
+     *         enough of a cushion to start consuming.
+     */
+    size_t audioBuffered();
+
+    /*
+     * @return bytes of audio the device wants in each 1 ms render message.
+     *
+     * MS-GIPUSB 3.2.5.1.5: the device modulates this by one sample per channel per millisecond
+     * according to its own buffering, and calls it "the mechanism GIP devices use to eliminate
+     * pops and clicks in audio". For 48 kHz stereo it sits at 188, 192 or 196.
+     *
+     * Falls back to the nominal rate until the device has asked for something, so a transport that
+     * cannot hear the request still sends a sensible size.
+     */
+    size_t audioRenderBytes() const;
+
+    /*
+     * Snapshot of the audio session's counters, for the performance overlay: packets sent, bytes
+     * dropped, packets late by more than the cadence, send failures, the pad's last requested flow
+     * rate, and transport underruns. Reads relaxed atomics, so it costs nothing on the sending
+     * path and needs no lock.
+     */
+    void audioStats(uint32_t out[6]) const;
 
     /*
      * Sets the headphone volume, 0 - 100.
@@ -105,6 +273,21 @@ private:
     void inputReceived(const InputData *input) override;
     void identifyReceived(uint8_t id, const IdentifyData *identify,
                           const uint8_t *payload, size_t length) override;
+    void authCompleted(const uint8_t *sessionKey, size_t length) override;
+
+    /*
+     * Asks each possible sub-device for its metadata, rather than waiting to be told they exist.
+     *
+     * MS-GIPUSB 2.2.1.4 enumerates sub-devices after the handshake and 2.2.11 has the audio one
+     * announce itself 500-1000 ms after "the primary device initializes" - but that is a moment,
+     * not a state, and it has already passed for any device we attach to rather than start. A
+     * cabled pad is always in that position: Android initialised it long before we claimed it.
+     *
+     * A metadata request is how the host learns about a device in the first place, so asking is
+     * simply doing without an announce what the announce would have prompted. Sub-devices that do
+     * not exist stay silent.
+     */
+    void probeSubDevices();
 
     void updateButtonStatus(const InputData *input);
 
@@ -113,7 +296,7 @@ private:
     std::vector<uint8_t> audioFormats;
 
     /* Device initialization */
-    void initInput(const AnnounceData *announce);
+    void initInput();
 
     /*
      * Moves the device from Idle to Active and finishes setup. Idempotent: whichever of the
@@ -123,6 +306,9 @@ private:
 
     // Set once the device has been told to start, so it is told exactly once
     std::atomic<bool> deviceStarted{false};
+
+    // Set once the input state and rumble thread exist, so a repeated Hello cannot rebuild them
+    std::atomic<bool> inputInitialised{false};
 
     /*
      * Waits out the metadata response before starting the device anyway.
@@ -139,6 +325,40 @@ private:
     std::condition_variable startCondition;
     // Guarded by startMutex, so teardown can cut the wait short rather than sleeping it out
     bool stopStartThread = false;
+
+    /*
+     * Runs 2.2.11's initialisation from the STOP onwards: stop the device, propose its first
+     * advertised format, and leave the reply to drive the rest.
+     *
+     * Shared by the two ways in - a freshly announced sub-device, and the fallback when an adopted
+     * one does not report its volume - so there is one implementation of the sequence rather than
+     * two that can drift apart.
+     */
+    bool negotiateAudioFormat();
+
+    /*
+     * Re-sends Set Device State: START until the device reports its volume, then gives up and
+     * renegotiates.
+     *
+     * 2.2.11 asks for exactly this and it was never implemented: "the host sends Set Device State:
+     * START at 500 ms intervals until receipt of the volume message, or until it times out after 3
+     * seconds". START used to be sent once and waited on forever.
+     *
+     * It matters because it is also the safety net under adopting a stale stream. That path sends a
+     * bare START on the assumption the device is still configured from the last process; if that
+     * assumption is wrong the device says nothing, and this is what notices and falls back to the
+     * full sequence instead of leaving the session silent.
+     */
+    void waitForAudioVolume();
+
+    /* Starts (or restarts) that wait. Safe to call whenever START has just been sent. */
+    void startVolumeWait();
+
+    std::thread volumeThread;
+    std::mutex volumeMutex;
+    std::condition_variable volumeCondition;
+    // Guarded by volumeMutex, like stopStartThread above and for the same reason
+    bool stopVolumeThread = false;
 
     /* Rumble buffer consumer */
     void processRumble();
@@ -165,6 +385,22 @@ private:
     std::vector<uint8_t> audioDeviceFormats;
 
     /*
+     * Whether the audio sub-device introduced itself this session.
+     *
+     * This is the difference between a pad that is ours to configure and one still running the last
+     * process's stream. 2.2.1 has a device send Hello only while in Arrival, so a sub-device left
+     * Active by a killed process never announces - its metadata still answers, so setup proceeds
+     * and configures a device that never stopped. Measured on hardware: every session with an
+     * announce played cleanly and every session without one stuttered, across five sessions.
+     *
+     * Diagnostic only, and deliberately so. Acting on it by resetting the sub-device was tried and
+     * reverted: the pad does not announce again afterwards, so it ends the session with no audio
+     * device at all. It is logged at discovery, which makes "this session will stutter" visible
+     * before anyone listens for it.
+     */
+    std::atomic<bool> audioDeviceAnnounced{false};
+
+    /*
      * Where 2.2.11's initialisation sequence has got to. The host cannot simply send a format and
      * start playing: it stops the device, proposes a format, waits for the device to echo the one
      * it adopted, starts it, and waits for the device's volume message before any audio counts as
@@ -188,7 +424,29 @@ private:
     // Bytes awaiting transmission, drained one 8 ms packet at a time. Guarded by audioMutex.
     std::vector<uint8_t> audioBuffer;
     // Last flow rate the pad reported, tracked only to notice it drifting from the packet size
-    uint16_t audioFlowRate = 0;
+    std::atomic<uint16_t> audioFlowRate{0};
+
+    /*
+     * How the flow rate moved across the session: extremes and how often it changed.
+     *
+     * 3.2.5.1.5 has the device modulate the rate by a sample per channel per millisecond to
+     * reconcile its DAC clock with the bus - "the mechanism GIP devices use to eliminate pops and
+     * clicks". A device whose rate never moves over a long session is not adapting, and a stuck
+     * rate with clean delivery is what a desynchronised pad would look like from here. Written
+     * only from the capture path, which is a single thread, and only when the rate changes.
+     */
+    std::atomic<uint16_t> audioFlowMin{0};
+    std::atomic<uint16_t> audioFlowMax{0};
+    std::atomic<uint32_t> audioFlowChanges{0};
+
+    /*
+     * One 8 ms GIP message of 48 kHz 16-bit stereo, which is what the wireless adapter carries and
+     * what every pad tested here has asked for. setAudioPacketBytes() replaces it for a transport
+     * that wants something else.
+     */
+    static const size_t AUDIO_PACKET_BYTES_DEFAULT = 1536;
+
+    size_t audioPacketBytes = AUDIO_PACKET_BYTES_DEFAULT;
 
     /*
      * Audio stream health, following the VideoStats pattern: exact counts accumulated on the
@@ -214,6 +472,24 @@ private:
      * 20% through audio that was audibly perfect.
      */
     std::atomic<uint32_t> audioStarved{0};
+
+    /*
+     * Bytes handed to us by the renderer, against which everything else can be judged.
+     *
+     * Without it the sending side is measured and the supplying side is not, so a ring that is
+     * empty half the time cannot be told apart from a transport consuming too fast - and those
+     * need opposite fixes. 48 kHz stereo is 192000 bytes a second; anything much under that is the
+     * host falling short rather than us over-draining.
+     */
+    std::atomic<uint32_t> audioBytesQueued{0};
+
+    /*
+     * Carries audio when the link itself cannot; null on the adapter, where it can. Not owned -
+     * the transport outlives this object, since it is what constructed it.
+     */
+    GipAudioTransport *audioTransport = nullptr;
+
+    bool powerOffOnTeardown = true;
 
     /*
      * The device's own volume state, as it last reported it (MS-GIPUSB 3.2.5.1.1). Kept because a
