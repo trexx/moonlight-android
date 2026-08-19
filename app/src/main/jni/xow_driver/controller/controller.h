@@ -298,6 +298,40 @@ private:
     // Guarded by startMutex, so teardown can cut the wait short rather than sleeping it out
     bool stopStartThread = false;
 
+    /*
+     * Runs 2.2.11's initialisation from the STOP onwards: stop the device, propose its first
+     * advertised format, and leave the reply to drive the rest.
+     *
+     * Shared by the two ways in - a freshly announced sub-device, and the fallback when an adopted
+     * one does not report its volume - so there is one implementation of the sequence rather than
+     * two that can drift apart.
+     */
+    bool negotiateAudioFormat();
+
+    /*
+     * Re-sends Set Device State: START until the device reports its volume, then gives up and
+     * renegotiates.
+     *
+     * 2.2.11 asks for exactly this and it was never implemented: "the host sends Set Device State:
+     * START at 500 ms intervals until receipt of the volume message, or until it times out after 3
+     * seconds". START used to be sent once and waited on forever.
+     *
+     * It matters because it is also the safety net under adopting a stale stream. That path sends a
+     * bare START on the assumption the device is still configured from the last process; if that
+     * assumption is wrong the device says nothing, and this is what notices and falls back to the
+     * full sequence instead of leaving the session silent.
+     */
+    void waitForAudioVolume();
+
+    /* Starts (or restarts) that wait. Safe to call whenever START has just been sent. */
+    void startVolumeWait();
+
+    std::thread volumeThread;
+    std::mutex volumeMutex;
+    std::condition_variable volumeCondition;
+    // Guarded by volumeMutex, like stopStartThread above and for the same reason
+    bool stopVolumeThread = false;
+
     /* Rumble buffer consumer */
     void processRumble();
     void sendRumble();

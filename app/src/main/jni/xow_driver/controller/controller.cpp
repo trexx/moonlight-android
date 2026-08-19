@@ -82,6 +82,13 @@
 #define AUDIO_FLOW_RATE_TOLERANCE (8 * 2 * 2)
 
 /*
+ * 2.2.11's volume wait, in the units it states it in: "the host sends Set Device State: START at
+ * 500 ms intervals until receipt of the volume message, or until it times out after 3 seconds".
+ */
+#define AUDIO_VOLUME_INTERVAL_MS 500
+#define AUDIO_VOLUME_ATTEMPTS 6
+
+/*
  * One cadence plus a whole audio frame. Past this the host has failed to supply, which is what a
  * gap sounds like; short of it the sender is simply waiting, which is how it paces itself.
  *
@@ -129,6 +136,19 @@ Controller::~Controller()
     if (rumbleThread.joinable())
     {
         rumbleThread.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(volumeMutex);
+
+        stopVolumeThread = true;
+    }
+
+    volumeCondition.notify_one();
+
+    if (volumeThread.joinable())
+    {
+        volumeThread.join();
     }
 
     // Stops and joins the audio thread if it is running. Must happen before the JNI teardown
@@ -971,29 +991,6 @@ bool Controller::setAudioEnabled(bool enable)
          * START, wait for the volume. That is also what the Windows capture does.
          */
 
-        /*
-         * 2.2.11's sequence, and the order is the point: stop the device, propose a format, and
-         * wait. The host does not choose a format - it takes the first pair the device advertised,
-         * capture then render. Sending a format and streaming immediately, which is what this did
-         * before, skips three steps the device is waiting on.
-         */
-        if (!setDeviceState(audioDeviceId, STATE_STOP))
-        {
-            Log::error("Failed to stop the audio device");
-
-            return false;
-        }
-
-        auto in = static_cast<AudioFormat>(audioDeviceFormats[0]);
-        auto out = static_cast<AudioFormat>(audioDeviceFormats[1]);
-
-        if (!setAudioFormat(audioDeviceId, in, out))
-        {
-            Log::error("Failed to propose an audio format");
-
-            return false;
-        }
-
         {
             std::lock_guard<std::mutex> lock(audioMutex);
 
@@ -1006,17 +1003,74 @@ bool Controller::setAudioEnabled(bool enable)
         audioBytesDropped = 0;
         audioSendFailures = 0;
         audioStarved = 0;
-        audioState = AUDIO_AWAITING_FORMAT;
         audioEnabled = true;
 
-        Log::info("Audio: proposed format %02x/%02x to device %u, awaiting its reply",
-                  in, out, audioDeviceId);
+        /*
+         * A sub-device that never announced is still configured from the last process, and adopting
+         * that configuration is the whole point of this branch.
+         *
+         * 2.2.1 has a device send Hello only while in Arrival, so one left Active by a killed
+         * process never announces. Nothing gets it back there: STOP does not move it, RESET
+         * silences it for good, and re-enumerating costs input - all three tried on hardware, only
+         * unplugging the cable works. What it *is*, though, is a device we configured ourselves
+         * last session, to the same 09/10 we would propose now, and which discovery has since put
+         * back in Idle with that format retained.
+         *
+         * So renegotiating asks it to change to what it already is, which is the one thing 2.2.11
+         * and xone agree a host must not do - "once started, audio data flows continually", and
+         * xone configures at gip_headset_probe() and never again. Every stuttering session measured
+         * here did exactly that, while our own side reported 100% supply, bus-rate drain and no
+         * underruns. So this sends START and nothing else, and lets the volume message start it.
+         *
+         * If the assumption is wrong the device simply says nothing, and waitForAudioVolume() falls
+         * back to the full sequence - which is today's behaviour, three seconds later.
+         */
+        if (!audioDeviceAnnounced.load())
+        {
+            audioState = AUDIO_AWAITING_VOLUME;
+
+            Log::info("Audio: device %u never announced; adopting its configuration",
+                      audioDeviceId);
+
+            if (!setDeviceState(audioDeviceId, STATE_START))
+            {
+                Log::error("Failed to start the adopted audio device");
+            }
+
+            startVolumeWait();
+
+            return true;
+        }
+
+        if (!negotiateAudioFormat())
+        {
+            audioEnabled = false;
+
+            return false;
+        }
 
         // Sending begins once the device has echoed the format and reported its volume
         return true;
     }
 
     audioEnabled = false;
+
+    /*
+     * Stood down first: a wait still running would re-send START, and on the paused path below
+     * would eventually renegotiate a device nobody is feeding.
+     */
+    {
+        std::lock_guard<std::mutex> lock(volumeMutex);
+
+        stopVolumeThread = true;
+    }
+
+    volumeCondition.notify_one();
+
+    if (volumeThread.joinable())
+    {
+        volumeThread.join();
+    }
 
     /*
      * The stream stays up and carries silence, for the same reason it is configured only once. The
@@ -1096,6 +1150,131 @@ bool Controller::setAudioEnabled(bool enable)
     return true;
 }
 
+bool Controller::negotiateAudioFormat()
+{
+    /*
+     * 2.2.11's sequence, and the order is the point: stop the device, propose a format, and wait.
+     * The host does not choose a format - it takes the first pair the device advertised, capture
+     * then render. Sending a format and streaming immediately, which is what this did before, skips
+     * three steps the device is waiting on.
+     */
+    if (!setDeviceState(audioDeviceId, STATE_STOP))
+    {
+        Log::error("Failed to stop the audio device");
+
+        return false;
+    }
+
+    auto in = static_cast<AudioFormat>(audioDeviceFormats[0]);
+    auto out = static_cast<AudioFormat>(audioDeviceFormats[1]);
+
+    if (!setAudioFormat(audioDeviceId, in, out))
+    {
+        Log::error("Failed to propose an audio format");
+
+        return false;
+    }
+
+    audioState = AUDIO_AWAITING_FORMAT;
+
+    Log::info("Audio: proposed format %02x/%02x to device %u, awaiting its reply",
+              in, out, audioDeviceId);
+
+    return true;
+}
+
+void Controller::startVolumeWait()
+{
+    /*
+     * One waiter at a time. The previous one has already finished if the state moved on, and
+     * joining it here is what makes that true before a second is created.
+     */
+    {
+        std::lock_guard<std::mutex> lock(volumeMutex);
+
+        stopVolumeThread = true;
+    }
+
+    volumeCondition.notify_one();
+
+    if (volumeThread.joinable())
+    {
+        volumeThread.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(volumeMutex);
+
+        stopVolumeThread = false;
+    }
+
+    volumeThread = std::thread(&Controller::waitForAudioVolume, this);
+}
+
+void Controller::waitForAudioVolume()
+{
+    /*
+     * 2.2.11: "The host sends Set Device State: START at 500 ms intervals until receipt of the
+     * volume message, or until it times out after 3 seconds." START was sent once and waited on
+     * forever, so a lost START or a device that never answered left audio enabled and silent with
+     * nothing to say why.
+     *
+     * Attached for the whole wait rather than per iteration, like the read thread: nothing here
+     * calls into Java, but setDeviceState() can reach code that does, and the attach/detach pair is
+     * the expensive part.
+     */
+    JNIEnv *env = nullptr;
+    bool attached = jvm != nullptr && jvm->AttachCurrentThread(&env, nullptr) == JNI_OK;
+
+    // Six intervals of 500 ms is the specification's three seconds, counted in the units it gives.
+    for (int attempt = 0; attempt < AUDIO_VOLUME_ATTEMPTS; attempt++)
+    {
+        std::unique_lock<std::mutex> lock(volumeMutex);
+
+        volumeCondition.wait_for(lock, std::chrono::milliseconds(AUDIO_VOLUME_INTERVAL_MS),
+                                 [this] {
+                                     return stopVolumeThread
+                                         || audioState != AUDIO_AWAITING_VOLUME;
+                                 });
+
+        if (stopVolumeThread || audioState != AUDIO_AWAITING_VOLUME)
+        {
+            if (attached)
+            {
+                jvm->DetachCurrentThread();
+            }
+
+            return;
+        }
+
+        lock.unlock();
+
+        // Resent rather than merely waited on, which is the half that was missing
+        if (!setDeviceState(audioDeviceId, STATE_START))
+        {
+            Log::error("Failed to re-send start to the audio device");
+        }
+    }
+
+    /*
+     * Three seconds with no volume message. On a device we adopted, that is the adoption being
+     * wrong - it was not configured the way we assumed - so fall back to configuring it properly,
+     * which is what every session did before adopting existed.
+     */
+    Log::info("Audio: no volume after %d ms; renegotiating the format",
+              AUDIO_VOLUME_ATTEMPTS * AUDIO_VOLUME_INTERVAL_MS);
+
+    if (!negotiateAudioFormat())
+    {
+        Log::error("Failed to renegotiate the audio format");
+    }
+
+    if (attached)
+    {
+        jvm->DetachCurrentThread();
+    }
+}
+
 /*
  * Drives the rest of 2.2.11's sequence, which is answer-driven rather than timed.
  *
@@ -1138,6 +1317,10 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
         {
             Log::error("Failed to start the audio device");
         }
+
+        // 2.2.11 has the host repeat START until the volume arrives, on this path as much as on
+        // the adopted one, so both wait the same way rather than only the new one being covered.
+        startVolumeWait();
 
         return;
     }
@@ -1197,6 +1380,10 @@ void Controller::audioControlReceived(uint8_t id, const uint8_t *data, size_t le
 
         audioState = AUDIO_STREAMING;
         stopAudioThread = false;
+
+        // Ends the START retry now rather than on its next tick; the predicate reads audioState,
+        // which has just changed, so this only saves the wait rather than deciding anything.
+        volumeCondition.notify_one();
 
         /*
          * Only where we are the clock. A transport that carries audio itself is paced by its own
