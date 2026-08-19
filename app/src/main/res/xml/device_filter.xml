@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Devices this app declares an interest in, so Android can grant it permission permanently.
+
+    The point is not auto-launching, which is a side effect we tolerate: it is the "use by default
+    for this USB device" checkbox. Android only offers that when a matching intent-filter exists,
+    and without it permission is asked for again on every enumeration - measured here as a dialog on
+    each of six replugs. Anything that re-enumerates a pad deliberately, rather than a user pulling
+    a cable, is unusable until that stops.
+
+    Matched on the GIP signature rather than on product IDs: vendor 0x045e, and the vendor-specific
+    interface 0xff / 0x47 / 0xd0 that MS-GIPUSB 2.2.12 defines and that
+    XboxOneController.canClaimDevice() already tests for. Listing product IDs instead would need
+    this file edited for every pad the driver gains, and the two lists would drift.
+-->
+<resources>
+    <usb-device vendor-id="1118" class="255" subclass="71" protocol="208" />
+</resources>
