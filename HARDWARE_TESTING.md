@@ -868,12 +868,11 @@ open** — the feature works but has not been shown to be worth using.
       The perceived pitch drop in stale sessions fits the same mechanism: the pad's own buffer
       inserting silence as its controller oscillates is what "audio interleaved with silence
       sounds slowed down" describes, this time on the far side of the cable.
-- [ ] **The stale-pad rows in the pad audio menu.** With a pad left streaming by a killed process,
-      the menu must read "replug the pad" on that controller's row - before audio is enabled and
-      while it is on - and go back to plain On/Off after the cable is pulled and the pad
-      re-announces. This is the close-out of the whole investigation: the fault is the pad's own,
-      unreachable from the host, and the menu turning a mystery stutter into an instruction is the
-      fix that ships.
+- [x] **The stale-pad rows in the pad audio menu.** *Verified on the Shield, 2026-08-19.* With a
+      pad left streaming by a killed process the row carries the replug hint, and reconnecting the
+      cable clears it back to plain On/Off. This is the close-out of the whole investigation: the
+      fault is the pad's own, unreachable from the host, and the menu turning a mystery stutter
+      into an instruction is the fix that ships.
 - [ ] **The re-prime recovers a real silence gap.** The check the fix actually needs, and the one
       run 2 did not exercise - it had continuous audio, so the ring never collapsed. Play audio,
       let the PC go **fully silent for a minute**, then play audio again. It must come back clean.
