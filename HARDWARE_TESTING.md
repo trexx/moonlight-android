@@ -840,22 +840,30 @@ open** — the feature works but has not been shown to be worth using.
 
       The menu action for it is reverted. It bricked the controller until a replug, which is a worse
       fault than the stutter it was meant to fix. **Do not try a fourth time**; see `AUDIO.md`.
-- [ ] **Holding the isochronous stream until the volume message cures the relaunch stutter.** The
-      last wire-level divergence from both references: xone submits its first URBs only once the
-      volume (or a capture packet) has arrived, and the Windows capture starts render 31 ms after
-      the volume - while this driver sprayed GIP silence onto the render endpoint from the moment
-      the transport came up, before the sub-device had been stopped, configured or started. A fresh
-      pad tolerates that; a stale one is exactly where undefined input goes wrong.
+- [!] **Holding the isochronous stream until the volume message did not cure the relaunch
+      stutter.** *Measured 2026-08-19.* The gating works as designed - `awaiting the device` at
+      enable, `Wired: streaming` only after the volume - and the stale session stutters exactly as
+      before. Kept anyway: it matches both references and sends strictly less to a device in a
+      state the spec never defines, which is the same standard the adopt change was kept on.
+- [x] **The pad's rate adaptation moves - and on a stale pad it thrashes.** *Measured 2026-08-19,
+      the first time this fault has been visible from our side:*
 
-      Same reproduction as ever: fresh session (control), then kill, relaunch, reconnect, enable.
-      Expect `Wired: audio ready ... awaiting the device` at enable and `Wired: streaming` only
-      after `device reported volume`. The ears decide, as always.
-- [ ] **Whether the pad's rate adaptation moves.** The session summary now ends
-      `flow rate 192 (188-196, N changes)`. 3.2.5.1.5 has the device modulate by a sample per
-      channel per millisecond to reconcile its DAC clock with the bus. Compare fresh against stale:
-      a stale session whose rate never changes (`192-192, 0 changes`) over minutes, against a fresh
-      one that wanders, is a pad whose clock recovery is stuck - which would explain a stutter that
-      delivery counters cannot see, and would mean the impairment is measurable at last.
+      | | Fresh (clean) | Stale (stutters) |
+      |---|---|---|
+      | Flow range | 188-196 | 188-196 |
+      | Changes | 261 / 76 s = **3.4/s** | 693 / 58 s = **12/s** |
+
+      Fresh is textbook drift-dither: one +/-4-byte nudge every ~300 ms, which is what ~50 ppm of
+      clock offset needs. Stale is a sustained oscillation at 3.5x that rate for the whole session,
+      through delivery our counters score as perfect. The pad's buffer controller is in a limit
+      cycle, and the stutter is its fill bouncing off a rail.
+- [ ] **Halving the isochronous queue (24 ms -> 12 ms) calms the loop.** The queue is the actuation
+      delay of that controller: a flow request takes the whole queue to reach the wire, and a
+      controller commanding its maximum 4 bytes/ms against 24 ms of delay overshoots its own buffer
+      by ~96 bytes per swing. Halving the depth halves the overshoot. Judge it by both the ears and
+      the change rate in the summary: a stale session dropping from ~12 changes/s toward fresh's
+      ~3.4/s is the loop settling even before it becomes audible. If the rate stays ~12/s at half
+      the delay, the oscillation is internal to the pad and no queue size will fix it.
 - [ ] **The re-prime recovers a real silence gap.** The check the fix actually needs, and the one
       run 2 did not exercise - it had continuous audio, so the ring never collapsed. Play audio,
       let the PC go **fully silent for a minute**, then play audio again. It must come back clean.

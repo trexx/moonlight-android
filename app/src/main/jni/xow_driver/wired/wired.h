@@ -127,12 +127,22 @@ private:
      * choice again rather than a safety one - audio sits here for the whole queue before it is
      * heard, and nothing is gained by holding more of it.
      *
-     * The depth covers the round trip from a completion callback to the resubmission it triggers,
-     * and nothing more. It was briefly raised to xone's 12 x 8 while chasing degradation that
-     * turned out to be rate adaptation - depth cannot explain a first session that sounds right
+     * The depth needs to cover the round trip from a completion callback to the resubmission it
+     * triggers, and nothing more - but it is also the actuation delay of the pad's rate-adaptation
+     * loop, and that is what sized it down from six transfers. A flow-rate request takes the whole
+     * queue to reach the wire, so at 24 ms of depth a controller commanding its maximum correction
+     * of 4 bytes/ms overshoots its own buffer by ~96 bytes before the first corrected packet
+     * arrives. A pad at equilibrium never commands hard corrections and does not care; one adopted
+     * mid-stream starts displaced, slams the rails, and 3.2.5.1.5's band gives it no way to ask
+     * faster - measured as the flow rate changing 12 times a second for a whole stuttering session
+     * against 3.4 in a clean one, both wandering 188-196. Halving the queue halves the overshoot.
+     *
+     * Twelve packets is still triple the completion-to-resubmit round trip, which is sub-millisecond
+     * on this hardware. It was briefly raised to xone's 12 x 8 while chasing degradation that
+     * turned out to be the one-shot prime - depth cannot explain a first session that sounds right
      * and a second that does not, since it never changes.
      */
-    static const int AUDIO_TRANSFERS = 6;
+    static const int AUDIO_TRANSFERS = 3;
     static const int AUDIO_PACKETS_PER_TRANSFER = 4;
 
     // One millisecond of 48 kHz 16-bit stereo, and the GIP message that carries it
