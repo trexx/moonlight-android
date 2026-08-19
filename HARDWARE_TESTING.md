@@ -995,32 +995,84 @@ host, and nothing logs. So these need checking rather than assuming.
 
 ## 14. Overlay composition
 
-The performance and notification overlays used a translucent background (`#80000000`) over the
-SurfaceView. A translucent layer above the video forces the hardware composer to blend, which on
-this hardware means falling back to GPU (client) composition for the whole frame — so the
-overlay changed the frame timing it exists to measure. They are now opaque.
+**Closed, negative, and reverted.** The overlays were briefly made opaque black (`#FF000000`) on
+the theory that their translucent background forced the hardware composer to blend, costing the
+video its own plane and making the performance overlay change the frame timing it exists to
+measure. Measured on the Shield TV, the theory is wrong twice over. Both overlays are back to
+`#80000000`. **Do not retry this** — the reasons it failed are not device-specific bad luck.
 
-**This is a hypothesis to confirm, not a fix to assume.** Whether the composer keeps the video
-on its own plane is device-dependent.
+### What was measured
 
-With the stream running and the performance overlay **up**:
+Shield TV at 4K, streaming at 4K, release build with the opaque change installed and confirmed
+present in the APK (`aapt2 dump xmltree` showed `android:background=#ff000000` on both TextViews).
+The comparison apps each set their own refresh rate, so the output mode is given per state below.
 
 ```bash
-adb shell dumpsys SurfaceFlinger | grep -iE "composition|client|device"
+adb shell dumpsys SurfaceFlinger    # the vendor "h/w composer state:" block is the part that matters
 ```
 
-- [ ] **Homatics Box R 4K:** the stream layer composites `DEVICE`, not `CLIENT`, with the
-      overlay visible. Compare against the same command with the overlay hidden.
-- [ ] **Shield TV:** same check.
-- [ ] **The measurement moves.** Harvest `globalVideoStats` from the end-of-stream summary,
-      overlay-on before and overlay-on after. If composition changed, frame timing with the
-      overlay up should now be closer to overlay-off than it was.
-- [ ] **Still legible over a bright scene.** Opaque black is a harder edge than the translucent
-      box was.
+| State on screen | Output mode | Nvidia HWC 2.0 composition |
+|---|---|---|
+| Launcher, no video | 4K @ 59.94 | `1 layers in a scratch buffer` |
+| Our stream, overlay **off** | 4K @ 60 | `1 layers in a scratch buffer` |
+| Our stream, overlay **on** | 4K @ 60 | `2 layers in a scratch buffer` |
+| YouTube TV, 4K video | 4K @ 59.94 | `2 layers in a scratch buffer` |
+| Kodi, 4K video | 4K @ 23.976 | `3 layers in a scratch buffer` |
 
-> **If composition does not change on either box, revert it.** The readability cost is real and
-> is not worth paying for a change that bought nothing. That outcome is a valid result, not a
-> failed test — record it here so the idea is not retried blind.
+In all five, `Compositor: draw_arrays` and every physical display window is idle except the one
+holding the scratch buffer:
+
+```
+Window 0 (phys 0 caps 1f5): unused
+Window 1 (phys 2 caps 1d5): unused
+Window 2 (phys 3 caps 0):   unused
+Window 3 (phys 1 caps 469 blend 0x100 xform 0x0 z=3): scratch containing N layers
+```
+
+### Why it cannot work
+
+**1. A child View's background alpha never reaches the compositor.** Layer opacity comes from the
+*window's* pixel format, not from a `TextView`'s background. `Game`'s window has to stay
+translucent so the `SurfaceView` can show through it — that is what the layer's
+`transparentRegionHint` is for — so the layer stays `blend=PREMULTIPLIED`, `isOpaque=false`,
+RGBA_8888 no matter what colour goes in the layout. `#80000000` and `#FF000000` are identical to
+the composer. The only lever that would change it, `getWindow().setFormat(PixelFormat.OPAQUE)`,
+would black out the stream.
+
+**2. There is no hardware plane to lose.** The Tegra composer puts everything through a scratch
+buffer regardless — including Google's own 4K video app, and including the launcher with no video
+at all. It is unconditional policy at this display configuration, not something our surface
+provokes.
+
+That second point also disposes of the obvious follow-up, that our decoder hands back a buffer the
+display windows cannot scan out. Three different Tegra video formats were observed across the
+three apps — ours `0x16b`, YouTube's `0x146`, Kodi's `0x18b` — and all three land in the same
+scratch buffer. Kodi is the strongest of the comparisons: it drove the display into a 23.976 Hz
+mode to match its content and put *three* layers up (video, its 1080p UI window, and a second
+720p SurfaceView upscaled to 4K), and still got no plane.
+
+### What this corrects elsewhere
+
+`CLAUDE.md` claimed the overlay "forces GPU composition" on this hardware. It does not — the
+composition pass happens with the overlay down, with the app backgrounded, and in other apps. That
+sentence has been corrected. The overlay does still perturb what it measures, by adding a second
+layer to the pass and by costing the decode thread its formatting work, so *compare overlay-on
+with overlay-on* still stands; the reason given for it was wrong.
+
+Our stream is also the leanest of the three on layer count: one layer with the overlay down, where
+YouTube pays two permanently and Kodi three.
+
+### Not tested, and deliberately not chased
+
+- [ ] **Homatics Box R 4K.** Its Amlogic composer could behave differently. Left unrun because the
+      mechanism in point 1 above is platform-independent — the change could not work there either,
+      whatever its composer does with planes.
+- [ ] **Whether shallower HDMI signalling frees the display windows.** The link runs
+      `Rec.2020, 12-bit YUV422` with `[Dynamically switching Rec.709 on]` in every state above, and
+      a shallower mode might let the composer scan out directly. Refresh rate is already ruled out
+      — three of them appear in the table (60, 59.94 and 23.976 Hz) and all composite the same way
+      — so only the colour depth and colorspace are untested. Not worth chasing: trading output
+      quality for one composition pass is a bad deal, and no third-party app gets a plane either.
 
 ---
 

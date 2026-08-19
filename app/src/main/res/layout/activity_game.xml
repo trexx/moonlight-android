@@ -23,16 +23,18 @@
     </com.limelight.ui.StreamView>
 
     <!--
-      Opaque black, not the translucent #80000000 it used to be. A translucent layer above the
-      SurfaceView forces the hardware composer to blend, which on this hardware means falling back
-      to GPU (client) composition for the whole frame - so the overlay changed the frame timing it
-      exists to measure. Opaque lets the composer keep the video on its own plane and place this as
-      a separate one.
+      Translucent, and deliberately so. These were briefly opaque black on the theory that a
+      translucent layer above the SurfaceView forces the composer to blend, costing the video its
+      own hardware plane. Measured on the Shield, that theory is wrong twice over, so do not retry
+      it - HARDWARE_TESTING.md section 14 carries the dumps.
 
-      Whether that actually happens is device-dependent, so it is a check rather than an assumption:
-      HARDWARE_TESTING.md section 14 has the dumpsys SurfaceFlinger command and the pass condition.
-      If composition does not change on either box, revert this - legibility over a bright scene is
-      worse with a hard black box, and that is not worth paying for nothing.
+      A child View's background alpha never reaches the compositor. Layer opacity comes from the
+      window's pixel format, and Game's window has to stay translucent for the SurfaceView to show
+      through it, so this layer is PREMULTIPLIED and isOpaque=false whatever colour goes here.
+
+      And there is no hardware plane to lose: the Tegra composer puts every layer through a scratch
+      buffer regardless - launcher, our stream, and YouTube and Kodi playing 4K alike - leaving
+      three of its four display windows unused in all of them.
     -->
     <TextView
         android:id="@+id/performanceOverlay"
@@ -43,7 +45,7 @@
         android:layout_gravity="start"
         android:textAppearance="?android:attr/textAppearanceSmall"
         android:gravity="start"
-        android:background="#FF000000"
+        android:background="#80000000"
         android:preferKeepClear="true"
         android:visibility="gone" />
 
@@ -56,7 +58,7 @@
         android:layout_gravity="end"
         android:textAppearance="?android:attr/textAppearanceLarge"
         android:gravity="end"
-        android:background="#FF000000"
+        android:background="#80000000"
         android:preferKeepClear="true"
         android:visibility="gone" />
 
