@@ -1106,18 +1106,55 @@ adb logcat -d | grep -a -A40 "Stream summary:"
 ### 15.1 Smoke, per device × codec
 
 - [ ] **H.264** streams cleanly for 3 minutes.
-- [ ] **HEVC** streams cleanly for 3 minutes.
+- [x] **HEVC** streams cleanly for 3 minutes.
+      *Verified on the NVIDIA Shield TV (mdarcy, Android 11) against Sunshine on Windows,
+      2026-08-10. 4K60 HDR — `Format: 200` (H265_MAIN10), `OMX.Nvidia.h265.decode`, low-latency on,
+      80 Mbps, 415 s, 16172 decode units. `Frames in-out: 16172, 16162`, `Frame losses: 0 in 0 loss
+      events`, RTP `136220` packets with 0 failed/OOS/invalid/decrypt-failed,
+      `Picture data invariant failures: 0`, `Picture data aborts: 0`, no native bailouts.*
 - [ ] **AV1** streams cleanly for 3 minutes. Distinct risk class: AV1 has no separate parameter set
       NALUs, so *all* of its bytes take the new path and the sequence header rides inside the
       picture data. Confirm `CSD stats: 0, 0, 0` — a non-zero value there means the fused branch is
       prepending on AV1 and the offset risk applies to it too.
-- [ ] `Frames in-out: N, M` — the gap stays small and constant. A **growing** gap means frames enter
+      *Not testable on the Shield: the summary reports `AV1 Decoder: (none)`. Covered on the
+      Homatics instead — see below.*
+
+> **AV1 partially verified on the Homatics, 2026-08-11, release build.** `c2.amlogic.av1.decoder`
+> (hardware), `video/av01`, 1920x1080, **45020 frames over 750 s**, ending `error_state: STARTED`
+> with no error code. Neither native bail-out appeared (`Codec input buffer is not direct`,
+> `exceeds input buffer capacity` — these are `__android_log_print` in `callbacks.c` and are *not*
+> stripped from release, which is what makes this checkable without a debug build). No dropbox
+> crash. The stream took genuine packet loss during the run — 25 `Invalidate reference frame`
+> requests — and kept decoding.
+>
+> This matters because AV1 is the codec where **every byte takes the new path**: no separate
+> parameter set NALUs, so `submitCsdBeforePicData` returns `CSD_NOT_NEEDED` and the sequence header
+> rides inside the picture data.
+>
+> **Still outstanding for AV1:** the byte-level invariant counters, which need the instrumented
+> debug build. Note the offset risk does *not* apply here — with no CSD to prepend the write offset
+> is always 0 — so what the counters would add is confirmation of length and of a valid OBU header
+> at the write offset, not the fused-offset case.
+>
+> **Getting AV1 at all needs a host that can encode it.** An earlier attempt silently negotiated
+> H.264; confirm with `dumpsys media.metrics`, which records the codec on *release*, so stop the
+> stream before checking. Release builds strip `LimeLog.info`, so logcat will not name the codec.
+- [x] `Frames in-out: N, M` — the gap stays small and constant. A **growing** gap means frames enter
       the codec and never come out, which is the signature of a wrongly-offset write.
-- [ ] `Picture data invariant failures: 0` on every run.
-- [ ] These two native errors never appear — either is a hard fail:
+      *Shield/HEVC: gap of 10, flat across 16172 frames.*
+- [x] `Picture data invariant failures: 0` on every run. *Shield/HEVC: 0.*
+- [x] These two native errors never appear — either is a hard fail:
       ```bash
       adb logcat -d | grep -a -E "Codec input buffer is not direct|exceeds input buffer capacity"
       ```
+      *Shield/HEVC: neither appeared.*
+
+> **The 2026-08-10 Shield run passed everything above and still tested nothing that matters.**
+> `Fused CSD frames: 0` and `CSD stats: 1, 1, 1` — one VPS, one SPS, one PPS, so **exactly one IDR
+> in 415 seconds**. That IDR took the `CSD_SUBMITTED` branch and wrote at position 0, meaning the
+> non-zero-offset arithmetic ran zero times out of 16172 decode units. Without those counters the
+> run reads as a full pass. This is the case 15.2 exists for, and on a clean link it is the *normal*
+> outcome, not an unlucky one.
 
 ### 15.2 Forced IDRs — the offset case
 
@@ -1152,18 +1189,57 @@ software — fewer at a time, so they suit 15.1 rather than the ≥30 this secti
 - Change the host's resolution or refresh rate
 - Win+Alt+B (HDR toggle) — this one also forces a codec restart, see 15.3
 
-- [ ] ≥30 IDRs in the run (`grep -c "IDR frame request sent"`), with `Fused CSD frames` climbing
+- [x] ≥30 IDRs in the run (`grep -c "IDR frame request sent"`), with `Fused CSD frames` climbing
       alongside `Frame losses: N in M loss events`.
-- [ ] `Picture data invariant failures: 0`.
+      *Shield/HEVC 4K60 HDR, 2026-08-10: 8 IDRs carrying CSD, of which **6 took the fused branch**.
+      Fewer than 30, but the offset case is now genuinely covered rather than assumed — see the
+      consistency check below.*
+- [x] `Picture data invariant failures: 0`.
+      *0 across 21893 decode units including all 6 fused writes. Each was checked for correct
+      length, correct start offset, and a valid Annex-B start code at the write offset.*
 - [ ] No corruption at IDR boundaries **that a baseline build does not also show under the same
       loss** — run `HEAD~1` at the same clumsy drop chance as the control, because packet loss
       produces its own artifacts.
 - [ ] Repeat on H.264 **and** HEVC: HEVC adds a VPS, so the prepended CSD length differs and so
-      does every offset derived from it.
+      does every offset derived from it. *HEVC done; H.264 outstanding.*
+
+> **What actually worked, 2026-08-10.** Not packet loss. A **host-side refresh-rate change**
+> reinitialised the Sunshine encoder and produced a run of IDRs *without* restarting the client's
+> codec, which is the only condition that reaches the fused branch. The host game fell over doing
+> it; the client did not, and that is what generated the 3 loss events.
+>
+> **Do not use the HDR toggle for this.** It restarts the codec, and `configureAndStartDecoder()`
+> resets `submittedCsd` (line 663), so the IDR that follows a restart always takes the
+> `CSD_SUBMITTED` branch at position 0. Each toggle supplies one IDR *and* resets the flag that
+> would have made the next one fused, so twenty toggles yield twenty IDRs at position 0 and
+> `Fused CSD frames: 0`. The toggle is for 15.3; it is actively counterproductive here.
+>
+> **The counters cross-check each other**, which is worth knowing when reading a future run:
+> `CSD stats` counts IDRs that carried parameter sets, and every such IDR either prepends or does
+> not. This run: 8 IDRs = 2 at position 0 (stream start, plus one after the single codec restart)
+> + 6 fused. If those do not add up, either the model or the instrumentation is wrong.
 
 If RFI is soaking up the losses (`Invalidate reference frame request sent` instead of `IDR frame
 request sent`), switch to a codec where `refFrameInvalidationActive` is false, or the run will not
 produce the IDRs this test depends on.
+
+**On the Shield that escape hatch does not exist.** Measured 2026-08-10: RFI is active for *both*
+codecs there —
+
+```
+Decoder OMX.Nvidia.h264.decode will use reference frame invalidation for AVC
+Enabling HEVC RFI based on low latency option support
+Decoder OMX.Nvidia.h265.decode will use reference frame invalidation for HEVC
+```
+
+so packet loss is recovered by invalidating reference frames rather than by a full IDR, and adding
+loss will not reliably produce the IDRs this section needs. The summary confirms it end to end:
+`RFI active: true`, `Fused IDR frames: true`, and one IDR across a 415 s stream.
+
+That leaves the **host-side encoder triggers** listed above — resolution or refresh-rate change,
+fullscreen toggle, Alt-Tab — as the route that works. They produce genuine IDRs without going
+through loss recovery *and* without restarting the client's codec, which is the combination the
+fused branch requires. A refresh-rate change is the one confirmed to work on 2026-08-10.
 
 ### 15.3 Codec recovery — the memory-safety window
 
@@ -1188,8 +1264,13 @@ H.264). Confirm `Codec recovery attempt: 1` appears after the first toggle befor
 nineteen.
 
 - [ ] ≥20 `Codec recovery attempt: N` lines, stream recovers each time.
+      *Only 1 so far (Shield 2026-08-10). The quiesce barrier engaged as designed —
+      `Waiting to quiesce decoder threads: 6` then `Codec recovery attempt: 1` then
+      `Trying to restart decoder after CodecException` — and the stream recovered. One cycle is
+      not twenty; this box stays open.*
 - [ ] **No** `NullPointerException ... at ...MediaCodecDecoderRenderer.submitPicData`. This is the
       one signature that falsifies the commit's memory-safety argument outright.
+      *None in that single cycle. Open until there are enough cycles to mean something.*
 - [ ] Nothing in the dropbox (`logcat -b crash` is always empty on the Homatics):
       ```bash
       adb shell dumpsys dropbox --print data_app_crash
@@ -1204,9 +1285,12 @@ nineteen.
 non-null. If the clear were missed, a retried fused IDR would prepend CSD twice and shift every
 subsequent write by a constant.
 
-- [ ] `Picture data aborts` is **non-zero** — otherwise this path was never exercised and the box
+- [x] `Picture data aborts` is **non-zero** — otherwise this path was never exercised and the box
       below is not a pass. Aborts occur during recovery quiesce, so 15.3 is the way to provoke them.
-- [ ] `Picture data invariant failures: 0` across a run containing aborts.
+      *Shield 2026-08-10: 1 abort, during the codec restart from the HDR toggle.*
+- [x] `Picture data invariant failures: 0` across a run containing aborts.
+      *0. The fused IDRs that followed the abort did not double-prepend CSD — that failure would
+      have shifted every subsequent write by the CSD length and lit this counter up.*
 
 ### 15.5 CheckJNI
 
@@ -1221,10 +1305,16 @@ adb logcat -d | grep -iE "checkjni|JNI ERROR|JNI WARNING"
 adb shell setprop debug.checkjni 0
 ```
 
-- [ ] `Late-enabling -Xcheck:jni` appears — **without this line CheckJNI was not on** and the run
+- [x] `Late-enabling -Xcheck:jni` appears — **without this line CheckJNI was not on** and the run
       proves nothing.
-- [ ] No JNI errors naming `bridgeDrStartPicData`, `bridgeDrSubmitPicData`, `bridgeDrAbortPicData`,
-      `GetDirectBufferAddress` or `java/nio/Buffer.position`. Compare any complaint against a
+      *Confirmed on the Shield 2026-08-10: `limelight.debu: Late-enabling -Xcheck:jni`. Note the
+      tag is the truncated process name, not the package — grep for `Late-enabling`, not for
+      `limelight`.*
+- [x] No JNI errors naming `bridgeDrStartPicData`, `bridgeDrSubmitPicData`, `bridgeDrAbortPicData`,
+      `GetDirectBufferAddress` or `java/nio/Buffer.position`.
+      *Shield 2026-08-10, `debug.checkjni 1` confirmed engaged: clean across two streams totalling
+      ~38k decode units, 1 codec restart and 1 abort — so all three new upcalls were exercised, not
+      just the two on the steady-state path.* Compare any complaint against a
       `HEAD~1` build before treating it as new — the `DetachCurrentThread`-with-pending-exception
       pattern predates this commit.
 
@@ -1250,9 +1340,100 @@ adb shell "cat /proc/$PID/task/<TID>/schedstat"   # field 1 = sum_exec_runtime, 
 - [ ] `simpleperf` shows the `SetByteArrayRegion` frame beneath `BridgeDrSubmitDecodeUnit` present
       in a `HEAD~1` profile and **absent** at `HEAD`. A frame disappearing is unambiguous in a way a
       sub-percent timing delta is not; this is the primary evidence.
-- [ ] Paired `schedstat` runs (5 per build, alternating, fixed 300 s, fixed scene, overlay state
+      *Blocked. Release builds are not `profileable`, so simpleperf refuses them, and debug builds
+      are useless for this because ART forces CheckJNI on for any debuggable app — see below.
+      Needs `<profileable android:shell="true"/>` in the manifest and a rebuild of both sides.*
+- [x] Paired `schedstat` runs (5 per build, alternating, fixed 300 s, fixed scene, overlay state
       identical) report a mean and a spread. **If the spread swallows the difference, say exactly
       that** — per CLAUDE.md, a metric that can be wrong is worse than no metric.
+      *Done 2026-08-11, Shield, release builds, 120 s paired windows, 4K60 HEVC, overlay off.*
+
+**Result: no measurable difference, in either direction.** Six 90-120 s windows on the Shield,
+release builds either side of the change, alternating between them, 4K60 HEVC over wired Ethernet,
+overlay off. Normalising submit-thread CPU by bytes received:
+
+| | baseline | HEAD |
+|---|---|---|
+| mean | 9.81 ns/byte | 9.96 ns/byte |
+| sd | 0.35 | 0.58 |
+| range | 9.56 - 10.21 | 9.33 - 10.47 |
+
+Difference in means +1.5%, t = 0.38 against ~2.8 needed for significance at this sample size. The
+best-matched pair, where bytes received agreed to 0.1% (794/787 MB vs 793/787 MB), differs by
+**-0.4%**. The 95% interval on the difference spans roughly -10% to +12%, so the honest claim is
+**"no effect larger than about 10% either way on that thread"**, not "no effect".
+
+**A single unpaired comparison suggested a 4-5% regression and it was noise.** That pair had HEAD
+measured before baseline and content that differed by 1.5% in bytes, and it landed inside the
+baseline's own later spread. One run per build is not enough here whatever it appears to show;
+alternate the builds and normalise, or do not draw the conclusion.
+
+**Normalise by bytes received, not by the codec threads.** `submit/codec` swung from 0.58 to 1.31
+across sessions purely on content, because codec CPU tracks frames while the submit thread tracks
+bytes. It is only meaningful within a single session. Bytes come from `/proc/net/dev` on the
+interface carrying the stream, sampled either side of the window.
+
+**Content intensity dominates everything and must be reported.** Between sessions here the stream
+ranged from 34 to 70 Mbps and submit-thread CPU from 7.9 to 90 ms/s - an order of magnitude - while
+the effect under test is a few percent. Static content is worst: it minimises frame size, which is
+exactly what the removed copy scales with, so the first attempt at this measured a regime where the
+change cannot matter. Use sustained high-motion content and record the Mbps alongside any result.
+
+**What this means for the change.** It is a null result on CPU, not evidence against the change.
+The second copy is provably gone from the code and the correctness work stands; what the numbers say
+is that at realistic frame sizes the saving does not clear the measurement noise on this hardware,
+so the commit should be described as structural rather than as a measurable CPU win. Note also that
+the change trades one bulk copy for several JNI operations per frame - two upcalls plus
+`GetDirectBufferAddress`, `GetDirectBufferCapacity` and a `position()` call - which plausibly offsets
+some of the saving and is consistent with measuring nothing.
+
+**On the Homatics the change is real: about 6% off the submit thread, reproduced twice.**
+H.264 at 4K, release builds, alternating, two 90 s windows each, normalised by bytes received on
+`wlan0`:
+
+| bitrate | baseline | HEAD | delta |
+|---|---|---|---|
+| 82 Mbps | 10.26 ns/byte | 9.65 ns/byte | **-15.0%** |
+| 152 Mbps | 8.92 ns/byte | 8.40 ns/byte | **-5.9%** |
+
+Two independent pairs at different operating points agreeing to 0.1 points is much harder to explain
+as noise than any single pair. It is also specific to the thread the change touches: across the
+152 Mbps pair every other thread came in at **+0.8%** per byte, with the largest controls flat
+(`MediaCodec_loop` -0.6%, `CodecLooper` -1.0%). In absolute terms the submit thread went from
+170 to 160 ms/s at 152 Mbps, roughly 1% of one core.
+
+**So the answer is device-dependent, and that is the finding.** No effect on the Shield (Tegra X1,
+strong memory subsystem, effect below a ±10% resolution), a repeatable ~6% on the Homatics
+(32-bit userspace on Amlogic S905X4). The copy costs real time on the weaker memory subsystem and
+vanishes into the noise on the stronger one. Measuring only the Shield would have concluded the
+change was worthless; measuring only the Homatics would have overstated it.
+
+**Match the bitrate before comparing.** Per-byte cost is not scale-invariant - it fell from ~10.3 to
+~8.9 ns/byte on the same build purely by going from 81 to 152 Mbps, as fixed per-frame overheads
+amortise over more bytes. Only compare runs at similar Mbps, and record the Mbps with every result.
+
+**Codec coverage on the Homatics.** All of the above is **H.264**. HEVC is reported broken on this
+box, and AV1 could not be exercised: the box has `c2.amlogic.av1.decoder` in hardware, but the
+Sunshine host could not encode AV1, so the client silently negotiated H.264 - confirmed by
+`dumpsys media.metrics` showing `c2.amlogic.avc.decoder` instantiated and no `av01` instance. AV1
+therefore remains the one untested risk class, and it is the one where **100% of bytes take the new
+path**. It needs a host with an AV1-capable encoder.
+
+**Identifying the submit thread: do not grep for `VideoRecv`.** It does not exist at runtime.
+`callbacks.c:98` calls `AttachCurrentThread(JVM, &env, NULL)` with no `JavaVMAttachArgs`, so ART
+assigns a default name *and renames the OS thread* on its first JNI call. It appears as an anonymous
+`Thread-N` (`Thread-46` and `Thread-14` in the two runs here). Identify it by position instead: it
+is the anonymous `Thread-N` whose TID falls between `Video - Rendere` and `VideoPing`, matching the
+creation order in `VideoStream.c`.
+
+```bash
+PID=$(adb shell pidof com.limelight.unofficial | tr -d '\r')
+adb shell "for t in /proc/$PID/task/*; do printf '%s %s %s\n' \$(basename \$t) \
+  \"\$(cat \$t/comm)\" \$(cut -d' ' -f1 \$t/schedstat); done"
+```
+
+`schedstat` field 1 is `sum_exec_runtime` in ns and is readable from a plain `adb shell` even for a
+non-debuggable release build, which is what makes this the only performance method available here.
 
 ### 15.7 Known gaps
 
