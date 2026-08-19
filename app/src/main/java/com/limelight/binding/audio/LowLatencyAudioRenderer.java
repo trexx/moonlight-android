@@ -22,10 +22,19 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     private AudioRenderer renderer;
     private NativeAAudioRenderer aaudioRenderer;
 
-    // Retained so we can build an AudioTrack renderer later if the AAudio stream dies mid-session
+    // Retained so the local renderer can be rebuilt later: if the AAudio stream dies mid-session,
+    // and every time the audio comes back from a pad to the TV
     private MoonBridge.AudioConfiguration audioConfiguration;
     private int sampleRate;
     private int samplesPerFrame;
+
+    /*
+     * Whether pads had the audio last time a buffer arrived.
+     *
+     * Touched only by the audio decode thread, inside playDecodedAudio(), which is what makes it
+     * safe without locking - see the routing note there.
+     */
+    private boolean padsHadAudio;
 
     /**
      * @param enableAAudio user opt-in. AAudio is never used without it, since the AudioTrack
@@ -74,6 +83,18 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         // selection that would send surround audio to a stereo device.
         padAudioSink.setStreamFormat(audioConfiguration.channelCount, sampleRate);
 
+        return openLocalRenderer();
+    }
+
+    /**
+     * Builds the local renderer and starts it, setting {@link #renderer} and {@link #aaudioRenderer}.
+     *
+     * <p>Shared by {@link #setup}, by the AAudio-died fallback, and by the return from pad audio,
+     * so all three pick a renderer the same way rather than each rebuilding the choice.
+     *
+     * @return 0 on success, matching {@link #setup}'s contract
+     */
+    private int openLocalRenderer() {
         if (shouldTryAAudio(audioConfiguration)) {
             NativeAAudioRenderer candidate = new NativeAAudioRenderer();
             if (candidate.setup(audioConfiguration, sampleRate, samplesPerFrame) == 0) {
@@ -87,8 +108,37 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
             candidate.cleanup();
         }
 
-        renderer = new AndroidAudioRenderer();
-        return renderer.setup(audioConfiguration, sampleRate, samplesPerFrame);
+        AudioRenderer fallback = new AndroidAudioRenderer();
+        int result = fallback.setup(audioConfiguration, sampleRate, samplesPerFrame);
+
+        if (result == 0) {
+            renderer = fallback;
+        }
+
+        return result;
+    }
+
+    /**
+     * Closes the local renderer, because a pad has taken the audio.
+     *
+     * <p>The TV output was previously left open and unfed for the whole session, its callback
+     * emitting silence sixty times a second for nobody, and reporting ring-buffer overruns when the
+     * audio came back to it. Closing it means the stream is genuinely released rather than idling.
+     */
+    private void closeLocalRenderer() {
+        if (renderer == null) {
+            return;
+        }
+
+        renderer.stop();
+        renderer.cleanup();
+
+        // Both, and before anything can look at them again: the isDead() check below would
+        // otherwise reach a handle that has just been freed.
+        renderer = null;
+        aaudioRenderer = null;
+
+        LimeLog.info("Audio moved to a pad; local output closed");
     }
 
     /**
@@ -102,7 +152,40 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         // Pads take the audio instead of the TV, not as well as it - the point is private
         // listening. A single volatile read, and the empty case is the overwhelmingly common one.
         GipController[] pads = padAudioSink.getTargets();
-        if (pads.length > 0) {
+        boolean padsActive = pads.length > 0;
+
+        /*
+         * The local renderer is opened and closed here, on this thread, rather than from
+         * PadAudioSink where the routing actually changes.
+         *
+         * The sink's enable() and disable() run on the UI thread from the game menu, so closing the
+         * renderer there would race a buffer already inside playDecodedAudio() into a freed native
+         * handle. Every lifecycle call therefore happens on the audio decode thread, gated on the
+         * same volatile read that routes the samples, which needs no lock at all.
+         *
+         * The cost on the common path is one boolean comparison per buffer - roughly two hundred a
+         * second at the 5 ms Opus frames this negotiates, and nowhere near the frame path.
+         */
+        if (padsActive != padsHadAudio) {
+            padsHadAudio = padsActive;
+
+            if (padsActive) {
+                closeLocalRenderer();
+            }
+            else if (openLocalRenderer() == 0) {
+                renderer.start();
+
+                LimeLog.info("Audio returned from the pads; local output reopened");
+            }
+            else {
+                // Same trade as the AAudio-died path below: say so and stay silent rather than
+                // leaving a half-open stream behind.
+                LimeLog.severe("Unable to reopen local audio output after pad audio");
+                renderer = null;
+            }
+        }
+
+        if (padsActive) {
             for (GipController pad : pads) {
                 pad.queueAudio(audioData, audioData.length);
             }
@@ -115,11 +198,11 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
             LimeLog.warning("AAudio stream died, switching to AudioTrack for the rest of the session");
             aaudioRenderer.cleanup();
             aaudioRenderer = null;
+            renderer = null;
 
             AudioRenderer fallback = new AndroidAudioRenderer();
             if (fallback.setup(audioConfiguration, sampleRate, samplesPerFrame) != 0) {
                 LimeLog.severe("Unable to start AudioTrack fallback");
-                renderer = null;
                 return;
             }
 
