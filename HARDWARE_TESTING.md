@@ -118,8 +118,21 @@ pad. Test both configurations — the second block is the regression check.
       specifies m/s²; that was fixed during the port and this is the check that confirms it.
 - [ ] Motion is usable in practice — e.g. motion aiming in an emulator such as Cemu, Yuzu or
       Ryujinx.
-- [ ] Unplug and replug mid-stream: the controller comes back, and the app does not leak the
-      USB interface or crash.
+- [ ] **Unplug and replug mid-stream: the controller comes back, and the app does not leak the
+      USB interface or crash.** Expect this to have *failed* before the detach handling landed -
+      nothing noticed a cabled pad going away at all, so the claim, the controller number and the
+      native driver all survived the unplug.
+
+      - Unplug mid-stream with audio off. `USB device detached` must appear, then
+        `Removed controller: N` and `Controller number N is now available`. Replug: input works.
+      - Unplug mid-stream with **pad audio on**. The same, plus `Wired: device is gone; stopping
+        audio` and no repeating USB errors after it, and the stream's audio returns to the TV.
+      - **Repeat three or four times in one stream.** This is the leak check: controller numbers
+        must not climb, and `Wired: device opened` must appear once per replug.
+      - Unplug between streams, and with the app backgrounded.
+      - Unplug the **dongle** mid-stream with a pad paired to it, for the parallel map.
+      - `adb shell dumpsys dropbox --print data_app_crash` stays empty throughout. Tearing the
+        driver down from its own read thread would be a self-join, and it would land here.
 - [ ] **Buttons, sticks and motion all still work after the read-loop buffer was hoisted.**
       The USB read now reuses one ByteBuffer instead of allocating per read. handleRead()
       only uses absolute get(int), so nothing should carry between reads — but this landed
