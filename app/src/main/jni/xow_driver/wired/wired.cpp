@@ -141,6 +141,23 @@ void WiredController::readPackets()
         // Negative is a real failure - the cable is gone, or the interface was taken away
         if (transferred < 0)
         {
+            Log::info("Wired: device is gone; stopping audio");
+
+            /*
+             * Stopped here rather than left to teardown, because teardown may be a while coming and
+             * the audio transfers do not stop on their own.
+             *
+             * Every completion resubmits, so once the device is gone the event thread spins
+             * resubmitting to a dead handle - which is what "the USB stack cycling its connection
+             * once a second" was, and why re-enumeration looked unworkable when it was tried.
+             *
+             * Safe from this thread: disableAudio() joins the libusb event thread, which is not
+             * this one. Tearing the *controller* down from here would be a self-join - the
+             * destructor joins this thread - so that stays with the Java side, which learns about
+             * the detach from the broadcast.
+             */
+            disableAudio();
+
             break;
         }
 

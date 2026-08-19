@@ -73,6 +73,15 @@ public class UsbDriverService extends Service implements UsbDriverListener {
      */
     private final HashMap<String, AbstractController> claimedDevices = new HashMap<>();
 
+    /**
+     * The same, for dongles.
+     *
+     * They are claimed on a branch that returns before {@link #claimedDevices} is written, so
+     * without this a detached dongle cannot be found by the name the broadcast carries. Kept as a
+     * parallel map rather than a different scheme, so the detach handler looks both up the same way.
+     */
+    private final HashMap<String, XboxWirelessDongle> claimedDongles = new HashMap<>();
+
     // Client callback, null when nothing is bound
     private UsbDriverListener listener;
     // Monotonic ID handed to each new controller; never reused within a process
@@ -166,6 +175,10 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                         handleUsbDeviceState(device);
                     }
                 }, 1000);
+            }
+            // The device going away, which until now nothing noticed at all
+            else if (action.equals(UsbManager.ACTION_USB_DEVICE_DETACHED)) {
+                handleUsbDeviceDetached(intent.getParcelableExtra(UsbManager.EXTRA_DEVICE));
             }
             // Subsequent permission dialog completion intent
             else if (action.equals(ACTION_USB_PERMISSION)) {
@@ -334,6 +347,53 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /**
+     * Releases whatever we had claimed on a device that has just gone away.
+     *
+     * <p>Nothing did this before. A cabled pad's read thread exits on the first failed transfer and
+     * tells no one, and {@code stop()} was reachable only from the service shutting down — so an
+     * unplug left a stale entry in {@link #claimedDevices}, a controller still holding its number,
+     * and a native driver alive on a dead file descriptor. With audio enabled that driver's libusb
+     * thread went on resubmitting isochronous transfers to that descriptor, which is the "USB stack
+     * cycling once a second" that made re-enumeration look unworkable.
+     *
+     * <p>Everything downstream already exists: {@code stop()} tears the driver down and calls
+     * {@code notifyDeviceRemoved()}, and {@link #deviceRemoved} drops the controller from both
+     * lists and takes it out of {@link PadAudioSink}.
+     */
+    private void handleUsbDeviceDetached(UsbDevice device) {
+        if (device == null) {
+            return;
+        }
+
+        String name = device.getDeviceName();
+        final AbstractController controller = claimedDevices.get(name);
+        final XboxWirelessDongle dongle = claimedDongles.remove(name);
+
+        if (controller == null && dongle == null) {
+            // Not one of ours; the broadcast fires for every device on the bus
+            return;
+        }
+
+        LimeLog.info("USB device detached: " + name);
+
+        /*
+         * Off the main thread, for the same reason Game.togglePadAudio() is: stopping a cabled pad
+         * joins its read thread, which can be sitting in a transfer with a 500 ms timeout, and the
+         * audio event thread behind it. That is far too long to hold a broadcast receiver.
+         */
+        new Thread(() -> {
+            if (controller != null) {
+                controller.stop();
+            }
+
+            if (dongle != null) {
+                dongle.stop();
+                xboxWirelessDongles.remove(dongle);
+            }
+        }).start();
+    }
+
     private void handleUsbDeviceState(UsbDevice device) {
         // Are we able to operate it?
         if (shouldClaimDevice(device, prefConfig.bindAllUsb)) {
@@ -384,6 +444,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
                     return;
                 }
                 xboxWirelessDongles.add(dongle);
+                claimedDongles.put(device.getDeviceName(), dongle);
                 return;
             }
 
@@ -564,6 +625,7 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         // Register for USB attach broadcasts and permission completions
         IntentFilter filter = new IntentFilter();
         filter.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        filter.addAction(UsbManager.ACTION_USB_DEVICE_DETACHED);
         filter.addAction(ACTION_USB_PERMISSION);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED);
@@ -604,6 +666,8 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             // Stop and remove the dongle
             xboxWirelessDongles.remove(0).stop();
         }
+
+        claimedDongles.clear();
 
         // Stop all controllers
         while (controllers.size() > 0) {
