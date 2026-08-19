@@ -130,6 +130,8 @@
     <string name="game_menu_pad_audio_off">Off</string>
     <string name="game_menu_pad_audio_unavailable">Off (two controllers already)</string>
     <string name="game_menu_pad_audio_unsupported">Unavailable (no headset detected)</string>
+    <string name="game_menu_pad_audio_on_stale">On — replug the pad to fix stuttering</string>
+    <string name="game_menu_pad_audio_off_stale">Off — replug the pad first, or audio will stutter</string>
     <string name="game_menu_pad_audio_volume">Headphone volume: %1$d%%</string>
     <string name="game_menu_pad_audio_volume_title">Headphone volume</string>
     <string name="game_menu_pad_audio_volume_entry">%1$d%%</string>

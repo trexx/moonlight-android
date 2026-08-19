@@ -111,6 +111,21 @@ public:
     bool supportsAudioOut() const;
 
     /*
+     * Whether this pad's audio will stutter until its cable is pulled.
+     *
+     * True when the audio sub-device answered its metadata without ever announcing: it was left
+     * Active by a killed process, its buffer controller oscillates - measured at 12 flow-rate
+     * changes a second against a healthy 3.4, unchanged by anything the host does - and only a
+     * real USB disconnect rebuilds that state. Every software route is tried and tabulated in
+     * AUDIO.md; this exists so the menu can say "replug it" instead of the user discovering the
+     * stutter by ear.
+     */
+    bool audioNeedsReplug() const
+    {
+        return audioDeviceId != 0 && !audioDeviceAnnounced.load();
+    }
+
+    /*
      * Starts initialisation without waiting for an announce, for a transport whose device will
      * never send one.
      *

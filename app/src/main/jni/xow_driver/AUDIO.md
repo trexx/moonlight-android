@@ -756,6 +756,25 @@ pad's audio hardware has not been power-cycled, and nothing in the protocol powe
 a workaround waiting to be replaced, and spend effort on making it *visible* to the user - the
 `announced no` line predicts the fault before anyone listens - rather than on a seventh way to ask
 the device to reset itself.
+
+**The impairment itself was eventually measured, which is where the case closes.** The session
+summary's flow-rate dynamics separate the two worlds cleanly: a fresh pad nudges its rate once
+every ~300 ms (3.4-3.9 changes/s across runs - textbook ~50 ppm clock-drift dither), while a stale
+pad slams the same 188-196 band twelve times a second, every second, for the whole session,
+through delivery our counters score as perfect. Its buffer controller is in a sustained
+oscillation, and the audible stutter - with its slight perceived pitch drop - is its own fill
+bouncing off a rail: silence interleaved at the DAC, on the far side of the cable this time.
+
+Two host-side levers were tested against that oscillation and neither moved it at all: holding the
+isochronous stream closed until the volume message (matching xone and the Windows capture; kept as
+correct), and halving the in-flight queue from 24 ms to 12 ms (kept for the latency; the change
+rate stayed at 12/s exactly). An oscillation indifferent to actuation delay is internal, full
+stop. USB reset kills the pad outright, and every GIP state message is in the table above.
+
+So the driver detects the condition instead - `audioNeedsReplug()`, true when the sub-device
+answered metadata without ever announcing - and the pad audio menu says "replug the pad" on that
+controller's row. The fault is the pad's; the fix that ships is making its one real remedy an
+instruction rather than a discovery.
 | Proposing the device's other format first, so the real one is a change | Confirmed to run, no effect - **and withdrawn**, see below |
 | Set Device State: RESET to the primary device | Takes the pad off the USB bus; permission prompt loop |
 | `libusb_reset_device()` to re-enumerate, as xone does at probe | Pad left unclaimed, **input dead**, USB stack cycling |

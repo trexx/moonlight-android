@@ -145,6 +145,15 @@ public class GipController extends AbstractController{
     }
 
     /**
+     * @return true if this pad's audio will stutter until its cable is pulled — it was left
+     *         streaming by a killed process, and no software route clears that state. The menu
+     *         shows it so the fix is an instruction rather than a discovery.
+     */
+    public boolean audioNeedsReplug() {
+        return audioNeedsReplugNative(handle);
+    }
+
+    /**
      * Starts or stops rendering stream audio to this pad's headphone jack.
      *
      * @return true if the pad accepted the change
@@ -203,6 +212,7 @@ public class GipController extends AbstractController{
     native boolean setAudioVolumeNative(long handle, int percent);
     native int audioVolumeNative(long handle);
     native boolean hasAudioSupportNative(long handle);
+    native boolean audioNeedsReplugNative(long handle);
     native void queueAudioNative(long handle, short[] samples, int count);
     native void sendRumble(long handle, short lowFreqMotor, short highFreqMotor);
     native void sendrumbleTriggers(long handle, short leftTrigger, short rightTrigger);

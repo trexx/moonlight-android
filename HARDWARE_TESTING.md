@@ -857,13 +857,23 @@ open** — the feature works but has not been shown to be worth using.
       clock offset needs. Stale is a sustained oscillation at 3.5x that rate for the whole session,
       through delivery our counters score as perfect. The pad's buffer controller is in a limit
       cycle, and the stutter is its fill bouncing off a rail.
-- [ ] **Halving the isochronous queue (24 ms -> 12 ms) calms the loop.** The queue is the actuation
-      delay of that controller: a flow request takes the whole queue to reach the wire, and a
-      controller commanding its maximum 4 bytes/ms against 24 ms of delay overshoots its own buffer
-      by ~96 bytes per swing. Halving the depth halves the overshoot. Judge it by both the ears and
-      the change rate in the summary: a stale session dropping from ~12 changes/s toward fresh's
-      ~3.4/s is the loop settling even before it becomes audible. If the rate stays ~12/s at half
-      the delay, the oscillation is internal to the pad and no queue size will fix it.
+- [!] **Halving the isochronous queue did not calm the loop, which settles the mechanism.**
+      *Measured 2026-08-19.* At 12 ms of queue the stale session ran 1067 flow changes in 88 s -
+      12.1/s, identical to 12.0/s at 24 ms - while the fresh control stayed at 3.85/s. The
+      oscillation is completely insensitive to host-side actuation delay: it is internal to the
+      pad, its period is the pad's own, and no queue size will fix it. The queue stays at three
+      transfers for the 12 ms of pad-audio latency it saves, with delivery measured clean at that
+      depth (0-1 underruns per session); it is not a stutter fix and must not be read as one.
+
+      The perceived pitch drop in stale sessions fits the same mechanism: the pad's own buffer
+      inserting silence as its controller oscillates is what "audio interleaved with silence
+      sounds slowed down" describes, this time on the far side of the cable.
+- [ ] **The stale-pad rows in the pad audio menu.** With a pad left streaming by a killed process,
+      the menu must read "replug the pad" on that controller's row - before audio is enabled and
+      while it is on - and go back to plain On/Off after the cable is pulled and the pad
+      re-announces. This is the close-out of the whole investigation: the fault is the pad's own,
+      unreachable from the host, and the menu turning a mystery stutter into an instruction is the
+      fix that ships.
 - [ ] **The re-prime recovers a real silence gap.** The check the fix actually needs, and the one
       run 2 did not exercise - it had continuous audio, so the ring never collapsed. Play audio,
       let the PC go **fully silent for a minute**, then play audio again. It must come back clean.

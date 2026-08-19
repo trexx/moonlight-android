@@ -171,10 +171,20 @@ public class GameMenu {
         int number = 1;
         for (GipController controller : controllers) {
             boolean enabled = sink.isEnabled(controller);
+
+            /*
+             * A pad left streaming by a killed process stutters until its cable is pulled, and
+             * nothing sent over GIP or USB clears it - the attempts are tabulated in AUDIO.md.
+             * The driver can see the condition before a note is played (the sub-device answers
+             * metadata without ever announcing), so the row says what to do about it rather than
+             * leaving the stutter to be discovered by ear and blamed on the stream.
+             */
+            boolean stale = controller.audioNeedsReplug();
             String state;
 
             if (enabled) {
-                state = getString(R.string.game_menu_pad_audio_on);
+                state = getString(stale ? R.string.game_menu_pad_audio_on_stale
+                                        : R.string.game_menu_pad_audio_on);
             }
             else if (!sink.isSupportedBy(controller)) {
                 /*
@@ -190,7 +200,8 @@ public class GameMenu {
                 state = getString(R.string.game_menu_pad_audio_unsupported);
             }
             else if (sink.canEnableMore()) {
-                state = getString(R.string.game_menu_pad_audio_off);
+                state = getString(stale ? R.string.game_menu_pad_audio_off_stale
+                                        : R.string.game_menu_pad_audio_off);
             }
             else {
                 state = getString(R.string.game_menu_pad_audio_unavailable);
