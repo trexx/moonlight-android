@@ -728,6 +728,21 @@ open** — the feature works but has not been shown to be worth using.
 
       Expect a few milliseconds of silence at the start of each session, and after any gap: that is
       the cushion being rebuilt, and it is deliberate.
+- [x] **The ring collapses after a relaunch and not on a fresh session.** *Measured on the Shield,
+      2026-08-19, cabled Xbox One pad.* A fresh session primed once and never again in 60 s, and
+      summarised as 56208 packets sent, 128 bytes dropped, 2 late, 0 send failures, 1 underrun,
+      flow rate 192 - healthy. The session after a kill-and-relaunch re-primed six times in four
+      minutes, 20-80 s apart, on identical host supply. So the ring genuinely runs dry after a
+      relaunch, which the old build could not show: priming was a one-shot latch, so a collapse was
+      silent and permanent instead of logged and recovered.
+
+      Each `Wired: audio buffer primed, streaming` after the first is one collapse. Counting them is
+      now the cheapest read on this fault.
+- [ ] **Whether the flow rate explains it.** The collapse rate implies a supply deficit of roughly
+      0.1 bytes per millisecond - about 0.05%, the size of a clock drift rather than a fault. What
+      the pad is actually asking for is in the session summary and on the overlay; a rate parked at
+      196 rather than moving between 188, 192 and 196 would mean it wants more than a 48 kHz source
+      can supply, and no cushion fixes that.
 - [ ] **The re-prime does not thrash on a healthy stream.** Untested trade-off, and the risk the
       fix carries. A completely empty ring now costs a full prefill of deliberate silence, where
       before it cost one padded millisecond, so a stream that empties the ring *often* would chop

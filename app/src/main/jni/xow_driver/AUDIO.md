@@ -655,7 +655,7 @@ worked:
 |---|---|
 | Set Device State: STOP on discovery and on teardown | No effect |
 | Set Device State: RESET to the audio sub-device | No effect |
-| Proposing the device's other format first, so the real one is a change | Confirmed to run, no effect |
+| Proposing the device's other format first, so the real one is a change | Confirmed to run, no effect - **and withdrawn**, see below |
 | Set Device State: RESET to the primary device | Takes the pad off the USB bus; permission prompt loop |
 | `libusb_reset_device()` to re-enumerate, as xone does at probe | Pad left unclaimed, **input dead**, USB stack cycling |
 
@@ -664,6 +664,23 @@ every probe, but through a wrapped descriptor on Android it is not equivalent, a
 `XboxWiredGipController.resetIfPreviousSessionUnclean()` is kept unused as the record of that.
 
 Exiting cleanly — disabling audio, or disconnecting from the menu — avoids the whole thing.
+
+**The alternate-format proposal is withdrawn.** It was the third row of that table: propose the
+device's *second* advertised pair on discovery so that the real one registers as a change rather
+than a repeat. It did not fix the fault, was recorded as such, and was left in the code anyway —
+which quietly made it a renegotiation on every connect, against the one rule this file establishes
+from hardware: configure once, never again.
+
+What made it worth removing rather than merely tidying is what the two pairs are. This pad
+advertises `09 10` and `09 09`, and §3.2.5.1.2 gives `0x09` as **24 kHz mono** against `0x10`'s
+**48 kHz stereo**. So every startup retuned the render path to 24 kHz mono and back to 48 kHz
+stereo a few seconds later, with §2.2.11 requiring the device to reconfigure its audio hardware
+before it answers each one. A render pipeline left anywhere between those two plays gapped and an
+octave low — which is the reported symptom, arrived at from the wrong direction.
+
+That is a mechanism, not a proof: the fault also appears on the leftover-stream path, and both were
+in play at once. It is removed because the specification says not to do it and because it was known
+not to help, which is enough on its own.
 
 ## Still to measure
 

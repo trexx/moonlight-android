@@ -632,39 +632,23 @@ void Controller::identifyReceived(uint8_t id, const IdentifyData *identify,
         }
 
         /*
-         * Then propose a configuration we do not want, so that the one we do want is a change.
+         * Nothing else is sent here, and in particular the device is not configured.
          *
-         * 2.2.11 has a started device stream "until the host requests a new audio configuration",
-         * and a previous run may have left it configured exactly as we are about to configure it -
-         * in which case re-sending the same format asks for nothing new and the device may keep the
-         * pipeline it already has. That pipeline is the one that plays stretched and gapped, and
-         * neither STOP nor RESET has shifted it; only unplugging the pad has.
+         * A previous version proposed the device's *second* advertised pair at this point, so that
+         * the real one would register as a change rather than a repeat. It was a hypothesis against
+         * the leftover-stream fault, it was recorded as having no effect on that fault, and it was
+         * left in place - which made it a per-startup renegotiation, the one thing 2.2.11 and xone
+         * agree must not happen. "Doing it per session degraded the pad a step each time" is this
+         * file's own hardest-won rule; this was doing it per startup.
          *
-         * The device's own second advertised pair is used rather than an invented one, so this is
-         * always a format it declared support for. If it has only one pair there is nothing to
-         * alternate with and this does nothing.
+         * On the pad here the two pairs are 09/10 and 09/09, and 3.2.5.1.2 gives 0x09 as 24 kHz
+         * mono against 0x10's 48 kHz stereo. So it was retuning the render path to 24 kHz mono and
+         * back on every connect, seconds apart, and 2.2.11 has the device reconfigure its audio
+         * hardware before it answers. A render pipeline left anywhere between those two is heard
+         * exactly as the reported fault: gapped, and pitched down.
          *
-         * A hypothesis, and a cheap one: two control messages at startup, against a fault that
-         * otherwise needs the cable pulled.
+         * The format is proposed once, in setAudioEnabled(), and never again.
          */
-        if (audioDeviceFormats.size() >= METADATA_AUDIO_FORMAT_LENGTH * 2)
-        {
-            auto otherIn = static_cast<AudioFormat>(audioDeviceFormats[2]);
-            auto otherOut = static_cast<AudioFormat>(audioDeviceFormats[3]);
-
-            if (!setAudioFormat(audioDeviceId, otherIn, otherOut))
-            {
-                Log::error("Failed to propose the alternate format on discovery");
-            }
-
-            Log::info("Audio: proposed %02x/%02x on discovery, so the real format is a change",
-                      audioDeviceFormats[2], audioDeviceFormats[3]);
-
-            if (!setDeviceState(audioDeviceId, STATE_STOP))
-            {
-                Log::error("Failed to re-silence the audio device on discovery");
-            }
-        }
     }
 
     // The metadata exchange is done, so the device is in Idle and can be started. Wakes the
