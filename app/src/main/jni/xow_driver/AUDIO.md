@@ -517,6 +517,37 @@ That discipline is what eventually pointed at the handshake instead of at the se
    link unencrypted. The key-programming step in the plan was therefore never built, which also
    avoided its main risk — a wrong key silences the pad entirely, input included.
 
+## The host does not send silence, and that is why the cushion has to rebuild
+
+Measured on the Shield, 2026-08-19, against Turk-PC:
+
+```
+Received first audio packet after 11500 ms      (PC idle)
+Received first audio packet after 100 ms        (music playing)
+```
+
+**The host sends no audio packets at all when there is no sound** — not silent packets, nothing.
+So the supply to the pad is inherently bursty, and the ring running dry is normal operation rather
+than a fault. Any design here has to survive it.
+
+That is what makes one-shot priming untenable, and the numbers show it plainly. Three sessions,
+same pad, same box:
+
+| Session | Supplied | Drained | Prime events |
+|---|---|---|---|
+| Old build, fresh, audio playing | 181 kB/s (94%) | 943 pkt/s | 1 |
+| Old build, relaunch, mostly-idle PC | **43 kB/s (23%)** | 226 pkt/s | 6 |
+| New build, relaunch, audio playing | **192 kB/s (100%)** | 999.6 pkt/s | 2 |
+
+The 23% session was not a fault: the PC was quiet for most of it, so that is simply how much audio
+existed. The fault was what the old build did with it — the first dry spell latched the transport
+into "primed against an empty ring" permanently, and every packet after that was padded with
+silence. A quiet stretch therefore did not cost a quiet stretch; it cost the rest of the session.
+
+Read the supply figure before blaming anything: `bytes queued` divided by the time audio was
+enabled, against 192000 B/s. Below that, the host was silent and the pad is reproducing what it was
+given.
+
 ## Known limitations
 
 - **No rate adaptation, which is the anti-pop mechanism.** Each upstream Audio Capture message

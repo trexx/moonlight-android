@@ -738,6 +738,21 @@ open** — the feature works but has not been shown to be worth using.
 
       Each `Wired: audio buffer primed, streaming` after the first is one collapse. Counting them is
       now the cheapest read on this fault.
+- [x] **It is not the flow rate, and it is not the pad.** *Measured 2026-08-19.* The pad asked for
+      192 bytes per millisecond in every session and never once asked for more, dropped nothing and
+      failed no sends, and everything queued was drained. What differed was supply: 94% of 48 kHz
+      stereo on a healthy session against 23% on the bad one.
+
+      **The host sends no audio at all when the PC is silent** - `Received first audio packet after
+      11500 ms` with the PC idle, against `100 ms` with music playing. So a dry ring is normal, and
+      the old build's one-shot prime turned the first dry spell into permanent degradation.
+
+      Divide `bytes queued` by the time audio was enabled and compare against 192000 B/s before
+      blaming the pad for anything.
+- [ ] **The re-prime recovers a real silence gap.** The check the fix actually needs, and the one
+      run 2 did not exercise - it had continuous audio, so the ring never collapsed. Play audio,
+      let the PC go **fully silent for a minute**, then play audio again. It must come back clean.
+      Each recovery logs one `Wired: audio buffer primed, streaming`.
 - [ ] **Whether the flow rate explains it.** The collapse rate implies a supply deficit of roughly
       0.1 bytes per millisecond - about 0.05%, the size of a clock drift rather than a fault. What
       the pad is actually asking for is in the session summary and on the overlay; a rate parked at
