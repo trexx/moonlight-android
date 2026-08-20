@@ -8,23 +8,42 @@ import java.util.Locale;
 import java.util.Random;
 
 import com.limelight.LimeLog;
+import com.limelight.preferences.PreferenceConfiguration;
 
 import android.content.Context;
 
 /**
- * This client's persistent unique ID, generated once and stored thereafter.
+ * The client ID sent to hosts, and the persistent per-install ID it can be set to.
  *
- * <p>Hosts key their pairing records on it, so a client that regenerates this ID appears as a new
- * client and loses access to every host it was paired with.
+ * <p>By default every Moonlight client reports {@link #SHARED_UNIQUE_ID}, so that any of them can
+ * quit a session another started. The "send a unique client ID" preference swaps that for this
+ * install's own ID, which lets a host tell clients apart for its own session management at the
+ * cost of that shared control.
+ *
+ * <p>The per-install ID is generated and stored whichever way the preference is set, so enabling
+ * it later produces the same stable value rather than a fresh one. While it <em>is</em> enabled, a
+ * host keys its records on it, and regenerating it would look like a new client.
  */
 public class IdentityManager {
     private static final String UNIQUE_ID_FILE_NAME = "uniqueid";
     private static final int UID_SIZE_IN_BYTES = 8;
 
+    /**
+     * The ID every Moonlight client reports unless told otherwise.
+     *
+     * <p>Deliberately not unique: hosts that use it for session management then treat all
+     * Moonlight clients as one, which is what allows a session started on one device to be quit
+     * from another.
+     */
+    public static final String SHARED_UNIQUE_ID = "0123456789ABCDEF";
+
+    private final Context context;
     private String uniqueId;
 
     /** Loads the stored client ID, generating one on first run. */
     public IdentityManager(Context c) {
+        context = c.getApplicationContext();
+
         uniqueId = loadUniqueId(c);
         if (uniqueId == null) {
             uniqueId = generateNewUniqueId(c);
@@ -33,8 +52,21 @@ public class IdentityManager {
         LimeLog.info("UID is now: "+uniqueId);
     }
 
-    /** @return the stable client ID, generating and storing one on first use */
+    /**
+     * @return the ID to report to hosts: this install's own if the user has asked for a unique
+     *         client ID, otherwise {@link #SHARED_UNIQUE_ID}
+     */
     public String getUniqueId() {
+        // Read per call rather than cached at construction. This object is created once in
+        // ComputerManagerService.onCreate() and lives as long as the service, so a cached value
+        // would leave the preference apparently doing nothing until the process restarted.
+        // SharedPreferences is an in-memory map after its first load, and every caller of this is
+        // about to make an HTTP request.
+        return PreferenceConfiguration.sendRealClientId(context) ? uniqueId : SHARED_UNIQUE_ID;
+    }
+
+    /** @return this install's own ID, whether or not it is currently being sent to hosts */
+    public String getPersistentUniqueId() {
         return uniqueId;
     }
 

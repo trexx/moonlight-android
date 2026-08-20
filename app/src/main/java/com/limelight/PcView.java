@@ -652,8 +652,8 @@ public class PcView extends Activity implements AdapterFragmentCallbacks {
 
             case MANAGEMENT_PAGE_ID:
                 if (computer.details.activeAddress != null) {
-                    String url = "https://" + computer.details.activeAddress.address + ":" +
-                            (computer.details.activeAddress.port + 1);
+                    String url = "https://" + computer.details.activeAddress.address() + ":" +
+                            (computer.details.activeAddress.port() + 1);
                     try {
                         startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
                     } catch (ActivityNotFoundException e) {

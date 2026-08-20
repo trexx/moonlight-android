@@ -190,6 +190,14 @@ it is switched on.
 - [ ] Under load — packet loss, decoder pressure — audio does not stutter. Two independent
       reports of unplayable stuttering exist against the implementation this replaces, so it
       is worth deliberately stressing.
+- [ ] **Continuous audio off: behaviour is unchanged.** *(Audio settings, off by default.)* The
+      launch request must carry `continuousAudio=0` and the Sunshine log must not report the
+      request. This is the check that matters — the default path stays exactly as it was.
+- [ ] **Continuous audio on: the stream stays open through silence.** A **Windows** host then
+      encodes silence rather than sending nothing while nothing is playing. Leave the host silent
+      for 30 s, then resume audio: no gap, glitch or resync on the first sound back, and
+      `Client requested continuous audio` in the Sunshine log from the connect. Linux and macOS
+      hosts parse the flag and ignore it, so unchanged behaviour there is expected, not a failure.
 
 > **Measured, and the Homatics is an affected device.** This file previously said the latency
 > win was unconfirmed because no device on hand showed the symptom. That was an assumption, and
@@ -249,6 +257,11 @@ Small changes, but each touches a path that is easy to break silently.
 - [ ] **Gamepad gyro still reaches the host** on a pad that has one (DualSense/DualShock). The
       device-IMU fallback and its axis-swizzle are gone; a real pad reports in its own frame
       and needs no correction.
+- [ ] **`isExternal()` now trusts the platform.** The hardcoded overrides for Shield *Portable*,
+      Tinker Board, Archos Gamepad 2, XPERIA Play and the Logitech G Cloud are gone, and that
+      answer feeds two things. On the **Shield TV**: the remote's Back button must still leave the
+      stream (`shouldIgnoreBack()`), and a paired controller must still report battery to the host
+      (`LI_CCAP_BATTERY_STATE`). Check with the TV remote alone, and with a pad also connected.
 - [ ] **The settings screen renders** with `checkbox_enable_pip`, `checkbox_vibrate_fallback`,
       `seekbar_vibrate_fallback_strength` and `checkbox_gamepad_motion_fallback` all removed —
       a dangling preference key would crash it or leave a dead row.
@@ -1447,6 +1460,153 @@ non-debuggable release build, which is what makes this the only performance meth
 
 ---
 
+## 16. Loss recovery (carried patches 0003–0005)
+
+All three need deliberate packet loss to mean anything. Stream over Wi-Fi at a distance, or
+shape the link — the point is to force the FEC queue to give up on whole frames, not merely
+to drop the odd packet.
+
+### IDR request on FEC-detected loss (patch 0003)
+
+This only reaches the patched branch on a client streaming **without** reference frame
+invalidation, which means an **Amlogic box** — the Shield TV keeps RFI and never takes it.
+Confirm which side you are on first: absence of `will use reference frame invalidation for
+HEVC` in logcat for the chosen decoder is the check.
+
+- [ ] **`Reached consecutive drop limit` stops appearing** on ordinary loss. That line was
+      the old recovery mechanism firing, 120 frames after the loss; seeing it now means the
+      patch is not doing its job. This is the single most diagnostic line for the fix.
+- [ ] **Recovery is roughly a frame interval plus a round trip**, not the 2 s at 60 FPS / 4 s
+      at 30 FPS it was. Time it against a moving scene rather than a menu.
+- [ ] **`Waiting for IDR frame` is followed promptly by a recovered picture**, rather than
+      repeating while the video stays frozen.
+- [ ] **No regression on the Shield TV.** RFI is on there, so the RFI request path is what
+      should still run — `Sending RFI request for unrecoverable frame` — and behaviour should
+      be identical to before the patch.
+- [ ] **Fire TV Cube keeps its fast path.** `Enabling HEVC RFI on confirmed-safe Amlogic
+      device` must still appear, since that device is the exception to the Amlogic rule and
+      should therefore also *not* take the new branch.
+
+### Atomics (patch 0004)
+
+No behaviour change is expected; this is a regression check on the teardown path, which the
+patch touches on every connection.
+
+- [ ] **Connect and disconnect ten times in a row** without a hang or crash.
+- [ ] **Background the app mid-stream** (Home, or a PiP transition) and return. `onStop()` is
+      one of three entry points into the interrupt path and fires on ordinary backgrounding.
+- [ ] **Disconnect during the handshake**, before the stream starts — this is the case where
+      `interruptConnection()` races a `startConnection()` that holds the monitor.
+- [ ] Verify on **armeabi-v7a**, not only arm64. 32-bit codegen is where this would show.
+
+### Intra refresh (patch 0005)
+
+Needs **Sunshine on an NVIDIA GPU**; AMD and Intel hosts parse the attribute and ignore it.
+
+- [ ] **Default off is unchanged.** With the setting off, the stream behaves exactly as
+      before. This is the one that matters — the feature is opt-in precisely so the default
+      path stays untouched.
+- [ ] **Toggling it on starts a stream at all**, and the host log shows intra refresh enabled.
+- [ ] **Watch static and low-complexity scenes** — menus, pause screens, a stationary camera —
+      for shimmer or creeping corruption. This is the known failure mode reported by the Xbox
+      client, and the reason the setting is experimental.
+- [ ] **Recovery after loss is smoother**, without the bitrate spike and visible hitch a
+      keyframe produces. If it is not, the feature is not earning the risk.
+- [ ] **An AMD or Intel Sunshine host still streams normally** with the setting on.
+
+---
+
+## 17. Fractional refresh rates under "cap FPS" pacing
+
+The client used to request `roundedRefreshRate - 1` whenever cap-FPS pacing met a display at or
+below the requested rate — 59 fps on a 59.94 Hz panel. It also sent the panel's exact rate as
+`clientRefreshRateX100`, which Sunshine can turn into a precise 30000/1001 encode. It never got
+the chance: Sunshine discards that value when it differs from the requested rate by more than 1%
+(`src/rtsp.cpp`), and 59.94 against 59 is 1.6% out. The host fell back to integer 59 every time.
+
+The client now asks for 60 on such a display and lets the exact rate through the guard, so the
+stream should land on 59.94 rather than a whole frame below it.
+
+**Take the numbers from the end-of-stream summary, not the overlay.** On this hardware the overlay
+forces GPU composition, so it changes the frame timing it is measuring. Compare overlay-off runs.
+
+- [ ] **Set each box to a 59.94 Hz output mode** and confirm the client logs
+      `Fractional display rate 59.94; requesting 60`. If it logs nothing, the display is reporting
+      a whole 60.000 and this section cannot be tested on it — record that and move on.
+- [ ] **Stream at 60 fps with frame pacing set to "cap FPS"** for several minutes of steady
+      motion, and record from `globalVideoStats`: frames received, frames rendered, and the
+      dropped/discarded counts.
+- [ ] **Compare against the same run on the previous build.** The pass condition is that the slow
+      periodic drop or duplicate — roughly one per 17 seconds at 59 fps against 59.94 Hz — is gone,
+      with no new stutter in its place.
+- [ ] **The Sunshine host log retains the rate.** It should not log the value being discarded, and
+      the encoder should report 59.94 rather than 59.
+- [ ] **A whole-number display is unchanged.** At a true 60.000 Hz the client must still request
+      59 — that path is deliberately untouched, and it is the one that protects against queueing.
+- [ ] **A non-Sunshine host still behaves.** This is the risk case: if the host ignores
+      `clientRefreshRateX100`, the client is now asking for 60 on a 59.94 Hz panel, which is
+      exactly the over-rate condition cap-FPS pacing exists to avoid.
+
+Reading `LimeLog` output on the Homatics needs `adb shell setprop persist.log.tag '""'` first, and
+`adb shell setprop persist.log.tag S` afterwards to restore the shipped value.
+
+---
+
+## 18. Client unique ID
+
+The `uniqueid` query parameter rides on **every** HTTP request — pair, unpair, serverinfo,
+applist, launch, resume, cancel — so this is not just a launch-path change. The default is
+unchanged, which makes the first block the check that actually matters.
+
+### 18.1 Setting off (default) — regression check
+
+- [ ] The wire value is still `0123456789ABCDEF`. Nothing about pairing, browsing, launching,
+      resuming or quitting differs from a pre-change build.
+
+### 18.2 Setting on
+
+- [ ] `adb shell run-as com.limelight.debug cat files/uniqueid` gives this install's ID, and the
+      wire value now matches it.
+- [ ] **Already-paired host:** launch, resume and quit without re-pairing. Sunshine identifies
+      paired clients by certificate, so this should hold — confirming it is the point.
+- [ ] **Fresh pair:** unpair, pair again, stream. Exercises `uniqueid` on the pairing endpoints.
+- [ ] **Toggle takes effect without restarting the app.** The preference is read per call for this
+      reason. Two paths legitimately lag: box art keeps the ID captured when `AppGridAdapter` was
+      built, and a running stream keeps the one it launched with. Everything else should switch
+      immediately.
+- [ ] **Two Moonlight clients, if available:** start a session from the other client and try to
+      quit it from this one. Expected to fail now. **Record what actually happens** — this is the
+      cost of the setting, and the summary string should describe real behaviour rather than a
+      prediction.
+- [ ] **Turn it back off** and confirm shared-ID behaviour returns against the same host with no
+      re-pairing. A setting that cannot be reversed safely is worse than no setting.
+
+---
+
+## 19. YUV 4:4:4 decoder profile survey
+
+Not a feature test — the experiment that decides whether 4:4:4 negotiation is worth writing at
+all. Debug builds now log every decoder's raw profile and level integers at decoder construction.
+
+Raw integers because Android exposes no constant for HEVC RExt 4:4:4 or AV1 High 4:4:4, so there
+is nothing to match `profileLevels` against from the SDK.
+
+- [ ] **Shield TV:** capture the `Decoder capabilities:` logcat block and record the
+      `video/hevc` and `video/av01` profile integers below.
+- [ ] **Homatics Box R 4K:** same.
+- [ ] Compare against the Codec2/OMX values for HEVC RExt 4:4:4 and AV1 High 4:4:4.
+
+| Device | `video/hevc` profiles | `video/av01` profiles | Any 4:4:4? |
+|---|---|---|---|
+| Shield TV | *(fill in)* | | |
+| Homatics Box R 4K | *(fill in)* | | |
+
+If neither reports a 4:4:4 profile — the expected result — record that and leave 4:4:4 deferred.
+H.264 High 4:4:4 alone is 8-bit and effectively unsupported by Android hardware decoders, so it
+does not change the answer on its own.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -1469,3 +1629,7 @@ non-debuggable release build, which is what makes this the only performance meth
 | §11 Steam type | A Valve Steam Controller, and a HORIPAD for Steam for the negative case |
 | §12 both items | A USB-driven pad *and* an Android-enumerated pad, connected together |
 | §13 motion | A pad with a gyro (Switch Pro, DualSense, DualShock 4) + a host game that requests it |
+| §16 intra refresh | Sunshine host on an NVIDIA GPU |
+| §17 refresh rate | A display or output mode that reports a fractional rate (59.94, 29.97, 23.976) |
+| §18.2 two-client check | A second Moonlight client against the same host |
+| §19 | Both target devices; the survey differs per SoC |

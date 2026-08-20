@@ -62,6 +62,7 @@ public class MoonBridge {
     public static final int CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC = 2;
     public static final int CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC = 4;
     public static final int CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1 = 0x40;
+    public static final int CAPABILITY_INTRA_REFRESH = 0x80;
 
     public static final int DR_OK = 0;
     public static final int DR_NEED_IDR = -1;
@@ -99,25 +100,14 @@ public class MoonBridge {
 
     public static final int LI_ERR_UNSUPPORTED = -5501;
 
-    public static final byte LI_TOUCH_EVENT_HOVER       = 0x00;
+    // Only the event types a controller touchpad can produce. Limelight.h also defines HOVER,
+    // BUTTON_ONLY and HOVER_LEAVE, which belong to the screen-touch and pen paths this fork does
+    // not have — neither supported device has a touchscreen or accepts a stylus.
     public static final byte LI_TOUCH_EVENT_DOWN        = 0x01;
     public static final byte LI_TOUCH_EVENT_UP          = 0x02;
     public static final byte LI_TOUCH_EVENT_MOVE        = 0x03;
     public static final byte LI_TOUCH_EVENT_CANCEL      = 0x04;
-    public static final byte LI_TOUCH_EVENT_BUTTON_ONLY = 0x05;
-    public static final byte LI_TOUCH_EVENT_HOVER_LEAVE = 0x06;
     public static final byte LI_TOUCH_EVENT_CANCEL_ALL  = 0x07;
-
-    public static final byte LI_TOOL_TYPE_UNKNOWN = 0x00;
-    public static final byte LI_TOOL_TYPE_PEN = 0x01;
-    public static final byte LI_TOOL_TYPE_ERASER = 0x02;
-
-    public static final byte LI_PEN_BUTTON_PRIMARY = 0x01;
-    public static final byte LI_PEN_BUTTON_SECONDARY = 0x02;
-    public static final byte LI_PEN_BUTTON_TERTIARY = 0x04;
-
-    public static final byte LI_TILT_UNKNOWN = (byte)0xFF;
-    public static final short LI_ROT_UNKNOWN = (short)0xFFFF;
 
     public static final byte LI_CTYPE_UNKNOWN  = 0x00;
     public static final byte LI_CTYPE_XBOX     = 0x01;
@@ -175,19 +165,26 @@ public class MoonBridge {
         return slices << 24;
     }
 
-    public static class AudioConfiguration {
-        public final int channelCount;
-        public final int channelMask;
+    /**
+     * The negotiated audio format: how many channels, and which speakers they map to.
+     *
+     * <p>A record because it is exactly a pair of values compared by content. The hand-written
+     * {@code equals}/{@code hashCode} it replaces both delegated to {@link #toInt()}, which is a
+     * lossless function of the two components for any value in range — so the generated pair
+     * computes the same answer without the code.
+     */
+    public record AudioConfiguration(int channelCount, int channelMask) {
 
-        public AudioConfiguration(int channelCount, int channelMask) {
-            this.channelCount = channelCount;
-            this.channelMask = channelMask;
-        }
-
-        // Creates an AudioConfiguration from the integer value returned by moonlight-common-c
-        // See CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION() and CHANNEL_MASK_FROM_AUDIO_CONFIGURATION()
-        // in Limelight.h
-        private AudioConfiguration(int audioConfiguration) {
+        /**
+         * Decodes the integer form moonlight-common-c uses. See
+         * {@code CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION()} and
+         * {@code CHANNEL_MASK_FROM_AUDIO_CONFIGURATION()} in Limelight.h.
+         *
+         * <p>A factory rather than an extra constructor: the magic byte has to be checked before
+         * the components are derived, and a delegating constructor cannot run anything ahead of
+         * its {@code this(...)} call.
+         */
+        private static AudioConfiguration fromNative(int audioConfiguration) {
             // Check the magic byte before decoding to make sure we got something that's actually
             // a MAKE_AUDIO_CONFIGURATION()-based value and not something else like an older version
             // hardcoded AUDIO_CONFIGURATION value from an earlier version of moonlight-common-c.
@@ -195,28 +192,13 @@ public class MoonBridge {
                 throw new IllegalArgumentException("Audio configuration has invalid magic byte!");
             }
 
-            this.channelCount = (audioConfiguration >> 8) & 0xFF;
-            this.channelMask = (audioConfiguration >> 16) & 0xFFFF;
+            return new AudioConfiguration((audioConfiguration >> 8) & 0xFF,
+                    (audioConfiguration >> 16) & 0xFFFF);
         }
 
         // See SURROUNDAUDIOINFO_FROM_AUDIO_CONFIGURATION() in Limelight.h
         public int getSurroundAudioInfo() {
             return channelMask << 16 | channelCount;
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (obj instanceof AudioConfiguration) {
-                AudioConfiguration that = (AudioConfiguration)obj;
-                return this.toInt() == that.toInt();
-            }
-
-            return false;
-        }
-
-        @Override
-        public int hashCode() {
-            return toInt();
         }
 
         // Returns the integer value expected by moonlight-common-c
@@ -313,7 +295,7 @@ public class MoonBridge {
     /** Callback from native: set up audio output for the negotiated configuration. */
     public static int bridgeArInit(int audioConfiguration, int sampleRate, int samplesPerFrame) {
         if (audioRenderer != null) {
-            return audioRenderer.setup(new AudioConfiguration(audioConfiguration), sampleRate, samplesPerFrame);
+            return audioRenderer.setup(AudioConfiguration.fromNative(audioConfiguration), sampleRate, samplesPerFrame);
         }
         else {
             return -1;
@@ -477,13 +459,6 @@ public class MoonBridge {
                                     byte leftTrigger, byte rightTrigger,
                                     short leftStickX, short leftStickY,
                                     short rightStickX, short rightStickY);
-
-    public static native int sendTouchEvent(byte eventType, int pointerId, float x, float y, float pressure,
-                                            float contactAreaMajor, float contactAreaMinor, short rotation);
-
-    public static native int sendPenEvent(byte eventType, byte toolType, byte penButtons, float x, float y,
-                                          float pressure, float contactAreaMajor, float contactAreaMinor,
-                                          short rotation, byte tilt);
 
     public static native int sendControllerArrivalEvent(byte controllerNumber, short activeGamepadMask, byte type, int supportedButtonFlags, short capabilities);
 

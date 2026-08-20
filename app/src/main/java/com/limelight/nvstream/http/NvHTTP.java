@@ -107,8 +107,8 @@ public class NvHTTP {
             tmf.init((KeyStore) null);
 
             for (TrustManager tm : tmf.getTrustManagers()) {
-                if (tm instanceof X509TrustManager) {
-                    return (X509TrustManager) tm;
+                if (tm instanceof X509TrustManager x509) {
+                    return x509;
                 }
             }
         } catch (NoSuchAlgorithmException e) {
@@ -221,9 +221,11 @@ public class NvHTTP {
      * @param cryptoProvider supplies this client's own certificate and key
      */
     public NvHTTP(ComputerDetails.AddressTuple address, int httpsPort, String uniqueId, X509Certificate serverCert, LimelightCryptoProvider cryptoProvider) throws IOException {
-        // Use the same UID for all Moonlight clients so we can quit games
-        // started by other Moonlight clients.
-        this.uniqueId = "0123456789ABCDEF";
+        // Whether this is a per-install ID or the value shared by all Moonlight clients is
+        // IdentityManager's decision, not ours - see the preference it reads. This class used to
+        // overwrite the parameter with the shared value unconditionally, which made the argument
+        // a lie and left the caller no way to choose.
+        this.uniqueId = uniqueId;
 
         this.serverCert = serverCert;
 
@@ -236,18 +238,18 @@ public class NvHTTP {
             // in IPv6 form, because InetAddress.getByName() will return an Inet4Address
             // for what OkHTTP thinks is an IPv6 address. Normalize it into IPv4 form
             // to avoid triggering this bug.
-            String addressString = address.address;
+            String addressString = address.address();
             if (addressString.contains(":") && addressString.contains(".")) {
                 InetAddress addr = InetAddress.getByName(addressString);
-                if (addr instanceof Inet4Address) {
-                    addressString = ((Inet4Address)addr).getHostAddress();
+                if (addr instanceof Inet4Address v4) {
+                    addressString = v4.getHostAddress();
                 }
             }
 
             this.baseUrlHttp = new HttpUrl.Builder()
                     .scheme("http")
                     .host(addressString)
-                    .port(address.port)
+                    .port(address.port())
                     .build();
         } catch (IllegalArgumentException e) {
             // Encapsulate IllegalArgumentException into IOException for callers to handle more easily
@@ -665,6 +667,19 @@ public class NvHTTP {
                 }
                 break;
             case (XmlPullParser.TEXT):
+                // Text can legitimately appear outside any <App> - most obviously the whitespace
+                // between elements in an indented document, which the parser reports as TEXT just
+                // like real content. Skip it rather than assuming an app is already open:
+                // getLast() on the empty list throws NoSuchElementException, which is neither of
+                // the exceptions callers of this method handle, so it would reach them as a crash.
+                //
+                // This is not hypothetical for cached data either. AppView and ShortcutTrampoline
+                // both re-parse rawAppList from disk, so one badly formatted response would keep
+                // crashing on that host until the cache was cleared.
+                if (appList.isEmpty() || currentTag.isEmpty()) {
+                    break;
+                }
+
                 NvApp app = appList.getLast();
                 if (currentTag.peek().equals("AppTitle")) {
                     app.setAppName(xpp.getText());
@@ -773,6 +788,11 @@ public class NvHTTP {
     /**
      * Launches or resumes an app.
      *
+     * <p>Only parameters Sunshine actually parses are sent. GFE read a wider set — the HDR
+     * capability descriptor, {@code additionalStates}, {@code remoteControllersBitmap} and
+     * {@code gcpersist} among them — and Sunshine has no parser for any of it, so sending it
+     * only made the request harder to read against {@code src/nvhttp.cpp}.
+     *
      * @param verb "launch" for a new session or "resume" for one already running
      * @return true if the host started it
      */
@@ -783,15 +803,18 @@ public class NvHTTP {
         String xmlStr = openHttpConnectionToString(httpClientLongConnectNoReadTimeout, getHttpsUrl(true), verb,
             "appid=" + appId +
             "&mode=" + context.negotiatedWidth + "x" + context.negotiatedHeight + "x" + fps +
-            "&additionalStates=1&sops=" + (enableSops ? 1 : 0) +
+            "&sops=" + (enableSops ? 1 : 0) +
             "&rikey="+bytesToHex(context.riKey.getEncoded()) +
             "&rikeyid="+context.riKeyId +
-            (!enableHdr ? "" : "&hdrMode=1&clientHdrCapVersion=0&clientHdrCapSupportedFlagsInUint32=0&clientHdrCapMetaDataId=NV_STATIC_METADATA_TYPE_1&clientHdrCapDisplayData=0x0x0x0x0x0x0x0x0x0x0") +
+            (!enableHdr ? "" : "&hdrMode=1") +
             "&localAudioPlayMode=" + (context.streamConfig.getPlayLocalAudio() ? 1 : 0) +
             "&surroundAudioInfo=" + context.streamConfig.getAudioConfiguration().getSurroundAudioInfo() +
-            "&remoteControllersBitmap=" + context.streamConfig.getAttachedGamepadMask() +
+            // Ask the host to keep encoding silence rather than stalling the audio stream when
+            // nothing is playing. Without it an idle host simply stops sending, which is
+            // indistinguishable from a broken stream and makes every renderer underrun counter
+            // ambiguous. Sunshine implements this on WASAPI only; other backends ignore it.
+            "&continuousAudio=" + (context.streamConfig.getContinuousAudio() ? 1 : 0) +
             "&gcmap=" + context.streamConfig.getAttachedGamepadMask() +
-            "&gcpersist="+(context.streamConfig.getPersistGamepadsAfterDisconnect() ? 1 : 0) +
             MoonBridge.getLaunchUrlQueryParameters());
         if ((verb.equals("launch") && !getXmlString(xmlStr, "gamesession", true).equals("0") ||
                 (verb.equals("resume") && !getXmlString(xmlStr, "resume", true).equals("0")))) {

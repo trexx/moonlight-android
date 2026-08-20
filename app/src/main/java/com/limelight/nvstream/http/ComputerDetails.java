@@ -1,7 +1,6 @@
 package com.limelight.nvstream.http;
 
 import java.security.cert.X509Certificate;
-import java.util.Objects;
 
 
 /**
@@ -19,12 +18,15 @@ public class ComputerDetails {
         ONLINE, OFFLINE, UNKNOWN
     }
 
-    /** One address and port a host may be reachable at. */
-    public static class AddressTuple {
-        public String address;
-        public int port;
-
-        public AddressTuple(String address, int port) {
+    /**
+     * One address and port a host may be reachable at.
+     *
+     * <p>A record because it is exactly a pair of values compared by content — the polling service
+     * de-duplicates addresses through a {@code HashSet} of these. The generated {@code equals} and
+     * {@code hashCode} match what was written by hand before.
+     */
+    public record AddressTuple(String address, int port) {
+        public AddressTuple {
             if (address == null) {
                 throw new IllegalArgumentException("Address cannot be null");
             }
@@ -36,26 +38,10 @@ public class ComputerDetails {
             if (address.startsWith("[") && address.endsWith("]")) {
                 address = address.substring(1, address.length() - 1);
             }
-
-            this.address = address;
-            this.port = port;
         }
 
+        /** @return the form a URL wants, which brackets an IPv6 address and nothing else */
         @Override
-        public int hashCode() {
-            return Objects.hash(address, port);
-        }
-
-        @Override
-        public boolean equals(Object obj) {
-            if (!(obj instanceof AddressTuple)) {
-                return false;
-            }
-
-            AddressTuple that = (AddressTuple) obj;
-            return address.equals(that.address) && port == that.port;
-        }
-
         public String toString() {
             if (address.contains(":")) {
                 // IPv6
@@ -108,7 +94,7 @@ public class ComputerDetails {
             this.activeAddress = details.activeAddress;
         }
         // We can get IPv4 loopback addresses with GS IPv6 Forwarder
-        if (details.localAddress != null && !details.localAddress.address.startsWith("127.")) {
+        if (details.localAddress != null && !details.localAddress.address().startsWith("127.")) {
             this.localAddress = details.localAddress;
         }
         if (details.manualAddress != null) {

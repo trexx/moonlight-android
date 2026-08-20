@@ -1,0 +1,48 @@
+Request an IDR frame when the FEC queue reports a loss without RFI
+
+Carried from upstream https://github.com/moonlight-stream/moonlight-common-c/pull/147
+(open as of 2026-08-12). Drop this patch and bump the submodule once it merges.
+
+Without it, a frame the video FEC queue declares unrecoverable freezes the picture for
+CONSECUTIVE_DROP_LIMIT frames - 120, so 2 seconds at 60 FPS and 4 at 30 - on any client
+running without reference frame invalidation. This fork is exactly such a client on the
+Homatics Box R 4K: decoderSupportsRefFrameInvalidationHevc() withholds RFI from
+unconfirmed Amlogic decoders because they artifact and hang after packet loss, so the
+Amlogic boxes take this path on every stream while the Shield TV never does.
+
+The trace through the pinned tree, all in src/VideoDepacketizer.c:
+
+  :80        strictIdrFrameWait = !isReferenceFrameInvalidationEnabled(), so true for us
+  :103-113   dropFrameState() therefore always sets waitingForIdrFrame
+  :1132      notifyFrameLost() only acts inside "if (!waitingForIdrFrame)", never taken
+  :821       waitingForNextSuccessfulFrame is set only on processRtpPayload()'s frame-gap
+             path, never on the FEC queue path that called notifyFrameLost()
+  :1086      the next fully received frame requests an IDR only if that flag is set
+  :119-129   so nothing recovers the stream until the consecutive drop limit trips
+
+notifyFrameLost() exists specifically to speed recovery up ("This lets us avoid having to
+wait until the next received frame"). In the non-RFI case it was an order of magnitude
+slower than the frame-gap path it was meant to improve on.
+
+Setting the flag is safe against the LC_ASSERT(!waitingForNextSuccessfulFrame) at :1102:
+that line is reachable only when both wait flags are clear, and waitingForIdrFrame is
+cleared only at :681-685, which clears waitingForNextSuccessfulFrame in the same block.
+Speculative losses (RtpVideoQueue.c:219) set it too, which is correct - dropFrameState()
+has already run unconditionally by then, so the frame state is gone either way.
+
+diff --git a/src/VideoDepacketizer.c b/src/VideoDepacketizer.c
+index 43f2df92..3e90c904 100644
+--- a/src/VideoDepacketizer.c
++++ b/src/VideoDepacketizer.c
+@@ -1153,6 +1153,11 @@ void notifyFrameLost(unsigned int frameNumber, bool speculative) {
+         // Notify the host that we lost this one
+         connectionDetectedFrameLoss(startFrameNumber, frameNumber);
+     }
++    else {
++        // This loss came from the FEC queue, not processRtpPayload()'s frame gap detection,
++        // so waitingForNextSuccessfulFrame was never set and we'd never request the IDR frame.
++        waitingForNextSuccessfulFrame = true;
++    }
+ }
+
+ // Add an RTP Packet to the queue

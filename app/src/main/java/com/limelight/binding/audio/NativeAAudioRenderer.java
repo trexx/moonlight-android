@@ -37,7 +37,7 @@ public class NativeAAudioRenderer implements AudioRenderer {
         // The channel mask moonlight-common-c computes uses the same bit layout as AAudio's, so
         // it can be handed over untranslated. Passing it is what keeps centre/LFE/rear channels
         // alive on surround configurations.
-        handle = nativeSetup(audioConfiguration.channelCount, audioConfiguration.channelMask,
+        handle = nativeSetup(audioConfiguration.channelCount(), audioConfiguration.channelMask(),
                 sampleRate, samplesPerFrame);
         if (handle == 0) {
             LimeLog.warning("Unable to set up AAudio stream");

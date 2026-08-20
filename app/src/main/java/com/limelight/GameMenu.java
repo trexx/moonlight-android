@@ -25,16 +25,13 @@ public class GameMenu {
     private static final long TEST_GAME_FOCUS_DELAY = 10;
     private static final long KEY_UP_DELAY = 25;
 
-    public static class MenuOption {
-        private final String label;
-        private final boolean withGameFocus;
-        private final Runnable runnable;
-
-        public MenuOption(String label, boolean withGameFocus, Runnable runnable) {
-            this.label = label;
-            this.withGameFocus = withGameFocus;
-            this.runnable = runnable;
-        }
+    /**
+     * One row of the in-stream menu.
+     *
+     * @param withGameFocus run the action only once the game Activity has focus back, for actions
+     *                      that send input to the host
+     */
+    public record MenuOption(String label, boolean withGameFocus, Runnable runnable) {
 
         public MenuOption(String label, Runnable runnable) {
             this(label, false, runnable);
@@ -118,14 +115,14 @@ public class GameMenu {
     }
 
     private void run(MenuOption option) {
-        if (option.runnable == null) {
+        if (option.runnable() == null) {
             return;
         }
 
-        if (option.withGameFocus) {
-            runWithGameFocus(option.runnable);
+        if (option.withGameFocus()) {
+            runWithGameFocus(option.runnable());
         } else {
-            option.runnable.run();
+            option.runnable().run();
         }
     }
 
@@ -137,13 +134,13 @@ public class GameMenu {
                 new ArrayAdapter<>(game, android.R.layout.simple_list_item_1);
 
         for (MenuOption option : options) {
-            actions.add(option.label);
+            actions.add(option.label());
         }
 
         builder.setAdapter(actions, (dialog, which) -> {
             String label = actions.getItem(which);
             for (MenuOption option : options) {
-                if (!label.equals(option.label)) {
+                if (!label.equals(option.label())) {
                     continue;
                 }
 

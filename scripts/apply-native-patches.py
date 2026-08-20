@@ -36,6 +36,9 @@ PATCHES = {
     "app/src/main/jni/moonlight-core/moonlight-common-c": [
         "patches/moonlight-common-c/0001-mbedtls3-cbc-pkcs7-and-iv.patch",
         "patches/moonlight-common-c/0002-count-decrypt-failures.patch",
+        "patches/moonlight-common-c/0003-idr-on-fec-loss-without-rfi.patch",
+        "patches/moonlight-common-c/0004-atomic-connection-interrupted.patch",
+        "patches/moonlight-common-c/0005-intra-refresh-capability.patch",
         "patches/moonlight-common-c/0006-li-ctype-steam.patch",
     ],
 }

@@ -3,8 +3,9 @@ package com.limelight.preferences;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
-import android.os.Build;
 import android.preference.PreferenceManager;
+
+import java.util.Locale;
 
 import com.limelight.nvstream.StreamConfiguration;
 import com.limelight.nvstream.jni.MoonBridge;
@@ -70,6 +71,7 @@ public class PreferenceConfiguration {
     static final String ENCRYPTION_PREF_STRING = "list_encryption";
     private static final String LEGACY_DISABLE_FRAME_DROP_PREF_STRING = "checkbox_disable_frame_drop";
     private static final String ENABLE_HDR_PREF_STRING = "checkbox_enable_hdr";
+    private static final String ENABLE_INTRA_REFRESH_PREF_STRING = "checkbox_enable_intra_refresh";
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
     private static final String WIRED_PAD_AUDIO_STRING = "checkbox_wired_pad_audio";
@@ -84,10 +86,12 @@ public class PreferenceConfiguration {
     private static final String FRAME_PACING_PREF_STRING = "frame_pacing";
     private static final String ABSOLUTE_MOUSE_MODE_PREF_STRING = "checkbox_absolute_mouse_mode";
     private static final String ENABLE_AAUDIO_PREF_STRING = "checkbox_enable_aaudio";
+    private static final String CONTINUOUS_AUDIO_PREF_STRING = "checkbox_continuous_audio";
     private static final String REDUCE_REFRESH_RATE_PREF_STRING = "checkbox_reduce_refresh_rate";
     private static final String FULL_RANGE_PREF_STRING = "checkbox_full_range";
     private static final String GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING = "checkbox_gamepad_touchpad_as_mouse";
     private static final String GAMEPAD_MOTION_SENSORS_PREF_STRING = "checkbox_gamepad_motion_sensors";
+    private static final String SEND_REAL_CLIENT_ID_PREF_STRING = "checkbox_send_real_client_id";
 
     static final String DEFAULT_RESOLUTION = "1280x720";
     static final String DEFAULT_FPS = "60";
@@ -104,6 +108,7 @@ public class PreferenceConfiguration {
     static final String DEFAULT_ENCRYPTION = "audio";
 
     private static final boolean DEFAULT_ENABLE_HDR = false;
+    private static final boolean DEFAULT_ENABLE_INTRA_REFRESH = false;
     private static final boolean DEFAULT_ENABLE_PERF_OVERLAY = false;
     private static final boolean DEFAULT_BIND_ALL_USB = false;
     // Off: claiming a cabled pad replaces a working kernel driver, which is the user's call
@@ -119,6 +124,7 @@ public class PreferenceConfiguration {
     private static final String DEFAULT_FRAME_PACING = "latency";
     private static final boolean DEFAULT_ABSOLUTE_MOUSE_MODE = false;
     private static final boolean DEFAULT_ENABLE_AAUDIO = false;
+    private static final boolean DEFAULT_CONTINUOUS_AUDIO = false;
     private static final boolean DEFAULT_REDUCE_REFRESH_RATE = false;
     private static final boolean DEFAULT_FULL_RANGE = false;
     private static final boolean DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE = false;
@@ -148,6 +154,7 @@ public class PreferenceConfiguration {
     public ScaleMode scaleMode;
     public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
     public boolean enableHdr;
+    public boolean enableIntraRefresh;
     public boolean enablePerfOverlay;
     public boolean enableLatencyToast;
     public boolean bindAllUsb;
@@ -163,6 +170,7 @@ public class PreferenceConfiguration {
     public int framePacing;
     public boolean absoluteMouseMode;
     public boolean enableAAudio;
+    public boolean continuousAudio;
     public boolean reduceRefreshRate;
     public boolean fullRange;
     public boolean gamepadMotionSensors;
@@ -208,28 +216,18 @@ public class PreferenceConfiguration {
     }
 
     private static String convertFromLegacyResolutionString(String resString) {
-        if (resString.equalsIgnoreCase("360p")) {
-            return RES_360P;
-        }
-        else if (resString.equalsIgnoreCase("480p")) {
-            return RES_480P;
-        }
-        else if (resString.equalsIgnoreCase("720p")) {
-            return RES_720P;
-        }
-        else if (resString.equalsIgnoreCase("1080p")) {
-            return RES_1080P;
-        }
-        else if (resString.equalsIgnoreCase("1440p")) {
-            return RES_1440P;
-        }
-        else if (resString.equalsIgnoreCase("4K")) {
-            return RES_4K;
-        }
-        else {
-            // Should be unreachable
-            return RES_720P;
-        }
+        // Locale.ROOT, not the default: the old form used equalsIgnoreCase, which is
+        // locale-independent, and a Turkish locale lowercases "4K" to "4ı" rather than "4k".
+        return switch (resString.toLowerCase(Locale.ROOT)) {
+            case "360p" -> RES_360P;
+            case "480p" -> RES_480P;
+            case "1080p" -> RES_1080P;
+            case "1440p" -> RES_1440P;
+            case "4k" -> RES_4K;
+            // "720p", plus anything unrecognised — this only runs against values the app itself
+            // wrote, so an unknown one means a hand-edited preference file.
+            default -> RES_720P;
+        };
     }
 
     private static int getWidthFromResolutionString(String resString) {
@@ -241,21 +239,16 @@ public class PreferenceConfiguration {
     }
 
     private static String getResolutionString(int width, int height) {
-        switch (height) {
-            case 360:
-                return RES_360P;
-            case 480:
-                return RES_480P;
-            default:
-            case 720:
-                return RES_720P;
-            case 1080:
-                return RES_1080P;
-            case 1440:
-                return RES_1440P;
-            case 2160:
-                return RES_4K;
-        }
+        return switch (height) {
+            case 360 -> RES_360P;
+            case 480 -> RES_480P;
+            case 1080 -> RES_1080P;
+            case 1440 -> RES_1440P;
+            case 2160 -> RES_4K;
+            // 720, and anything else. The old form wrote this as a `default:` label sitting above
+            // `case 720:` and sharing its body, which reads like a bug and is not one.
+            default -> RES_720P;
+        };
     }
 
     /** @return the default bitrate in Kbps for a resolution and frame rate, before user override */
@@ -341,6 +334,19 @@ public class PreferenceConfiguration {
         return context.getResources().getConfiguration().smallestScreenWidthDp < 500;
     }
 
+    /**
+     * @return true if hosts should be told this install's own client ID rather than the value
+     *         every Moonlight client shares
+     *
+     * <p>Read on its own rather than through {@link #readPreferences}, because
+     * {@code IdentityManager} needs it per HTTP request and has no use for the rest of the
+     * configuration. Interpreting the key here keeps this class the only place that does.
+     */
+    public static boolean sendRealClientId(Context context) {
+        return PreferenceManager.getDefaultSharedPreferences(context)
+                .getBoolean(SEND_REAL_CLIENT_ID_PREF_STRING, false);
+    }
+
     /** @return the default bitrate for the settings currently stored for this device */
     public static int getDefaultBitrate(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
@@ -375,23 +381,13 @@ public class PreferenceConfiguration {
     private static FormatOption getVideoFormatValue(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
 
-        String str = prefs.getString(VIDEO_FORMAT_PREF_STRING, DEFAULT_VIDEO_FORMAT);
-        if (str.equals("auto")) {
-            return FormatOption.AUTO;
-        }
-        else if (str.equals("forceav1")) {
-            return FormatOption.FORCE_AV1;
-        }
-        else if (str.equals("forceh265")) {
-            return FormatOption.FORCE_HEVC;
-        }
-        else if (str.equals("neverh265")) {
-            return FormatOption.FORCE_H264;
-        }
-        else {
-            // Should never get here
-            return FormatOption.AUTO;
-        }
+        return switch (prefs.getString(VIDEO_FORMAT_PREF_STRING, DEFAULT_VIDEO_FORMAT)) {
+            case "forceav1" -> FormatOption.FORCE_AV1;
+            case "forceh265" -> FormatOption.FORCE_HEVC;
+            case "neverh265" -> FormatOption.FORCE_H264;
+            // "auto", plus anything unrecognised
+            default -> FormatOption.AUTO;
+        };
     }
 
     private static int getFramePacingValue(Context context) {
@@ -406,38 +402,24 @@ public class PreferenceConfiguration {
                     .apply();
         }
 
-        String str = prefs.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING);
-        if (str.equals("latency")) {
-            return FRAME_PACING_MIN_LATENCY;
-        }
-        else if (str.equals("balanced")) {
-            return FRAME_PACING_BALANCED;
-        }
-        else if (str.equals("cap-fps")) {
-            return FRAME_PACING_CAP_FPS;
-        }
-        else if (str.equals("smoothness")) {
-            return FRAME_PACING_MAX_SMOOTHNESS;
-        }
-        else {
-            // Should never get here
-            return FRAME_PACING_MIN_LATENCY;
-        }
+        return switch (prefs.getString(FRAME_PACING_PREF_STRING, DEFAULT_FRAME_PACING)) {
+            case "balanced" -> FRAME_PACING_BALANCED;
+            case "cap-fps" -> FRAME_PACING_CAP_FPS;
+            case "smoothness" -> FRAME_PACING_MAX_SMOOTHNESS;
+            // "latency", plus anything unrecognised: this fork's default, and the safe one to
+            // fall back to on a value nobody recognises.
+            default -> FRAME_PACING_MIN_LATENCY;
+        };
     }
 
     private static AnalogStickForScrolling getAnalogStickForScrollingValue(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
 
-        String str = prefs.getString(ANALOG_SCROLLING_PREF_STRING, DEFAULT_ANALOG_STICK_FOR_SCROLLING);
-        if (str.equals("right")) {
-            return AnalogStickForScrolling.RIGHT;
-        }
-        else if (str.equals("left")) {
-            return AnalogStickForScrolling.LEFT;
-        }
-        else {
-            return AnalogStickForScrolling.NONE;
-        }
+        return switch (prefs.getString(ANALOG_SCROLLING_PREF_STRING, DEFAULT_ANALOG_STICK_FOR_SCROLLING)) {
+            case "right" -> AnalogStickForScrolling.RIGHT;
+            case "left" -> AnalogStickForScrolling.LEFT;
+            default -> AnalogStickForScrolling.NONE;
+        };
     }
 
     /**
@@ -458,14 +440,6 @@ public class PreferenceConfiguration {
                 .remove(UNLOCK_FPS_STRING)
                 .remove(FULL_RANGE_PREF_STRING)
                 .apply();
-    }
-
-    /** @return true on SHIELD firmware versions whose HDR output is broken, where HDR is suppressed */
-    public static boolean isShieldAtvFirmwareWithBrokenHdr() {
-        // This particular Shield TV firmware crashes when using HDR
-        // https://www.nvidia.com/en-us/geforce/forums/notifications/comment/155192/
-        return Build.MANUFACTURER.equalsIgnoreCase("NVIDIA") &&
-                Build.FINGERPRINT.contains("PPR1.180610.011/4079208_2235.1395");
     }
 
     /**
@@ -564,15 +538,6 @@ public class PreferenceConfiguration {
             prefs.edit().putBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context)).apply();
         }
 
-        if (!prefs.contains(GAMEPAD_MOTION_SENSORS_PREF_STRING) && Build.VERSION.SDK_INT == Build.VERSION_CODES.S) {
-            // Android 12 has a nasty bug that causes crashes when the app touches the InputDevice's
-            // associated InputDeviceSensorManager (just calling getSensorManager() is enough).
-            // As a workaround, we will override the default value for the gamepad motion sensor
-            // option to disabled on Android 12 to reduce the impact of this bug.
-            // https://cs.android.com/android/_/android/platform/frameworks/base/+/8970010a5e9f3dc5c069f56b4147552accfcbbeb
-            prefs.edit().putBoolean(GAMEPAD_MOTION_SENSORS_PREF_STRING, false).apply();
-        }
-
         // This must happen after the preferences migration to ensure the preferences are populated
         config.bitrate = prefs.getInt(BITRATE_PREF_STRING, prefs.getInt(BITRATE_PREF_OLD_STRING, 0) * 1000);
         if (config.bitrate == 0) {
@@ -613,23 +578,18 @@ public class PreferenceConfiguration {
             scaleModeValue = prefs.getBoolean(STRETCH_PREF_STRING, DEFAULT_STRETCH) ? "stretch" : "fit";
             prefs.edit().putString(SCALE_MODE_PREF_STRING, scaleModeValue).apply();
         }
-        switch (scaleModeValue) {
-            case "stretch":
-                config.scaleMode = ScaleMode.STRETCH;
-                break;
-            case "fill":
-                config.scaleMode = ScaleMode.FILL;
-                break;
-            default:
-                config.scaleMode = ScaleMode.FIT;
-                break;
-        }
+        config.scaleMode = switch (scaleModeValue) {
+            case "stretch" -> ScaleMode.STRETCH;
+            case "fill" -> ScaleMode.FILL;
+            default -> ScaleMode.FIT;
+        };
         config.stretchVideo = config.scaleMode == ScaleMode.STRETCH;
         config.playHostAudio = prefs.getBoolean(HOST_AUDIO_PREF_STRING, DEFAULT_HOST_AUDIO);
         config.smallIconMode = prefs.getBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context));
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
-        config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR) && !isShieldAtvFirmwareWithBrokenHdr();
+        config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR);
+        config.enableIntraRefresh = prefs.getBoolean(ENABLE_INTRA_REFRESH_PREF_STRING, DEFAULT_ENABLE_INTRA_REFRESH);
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.wiredPadAudio = prefs.getBoolean(WIRED_PAD_AUDIO_STRING, DEFAULT_WIRED_PAD_AUDIO);
@@ -644,26 +604,19 @@ public class PreferenceConfiguration {
                     "relative" : "absolute";
             prefs.edit().putString(MOUSE_MODE_PREF_STRING, mouseModeValue).apply();
         }
-        switch (mouseModeValue) {
-            case "absolute_swapped":
-                config.mouseMode = MouseMode.ABSOLUTE_SWAPPED;
-                break;
-            case "relative":
-                config.mouseMode = MouseMode.RELATIVE;
-                break;
-            case "trackpad":
-                config.mouseMode = MouseMode.TRACKPAD;
-                break;
-            default:
-                config.mouseMode = MouseMode.ABSOLUTE;
-                break;
-        }
+        config.mouseMode = switch (mouseModeValue) {
+            case "absolute_swapped" -> MouseMode.ABSOLUTE_SWAPPED;
+            case "relative" -> MouseMode.RELATIVE;
+            case "trackpad" -> MouseMode.TRACKPAD;
+            default -> MouseMode.ABSOLUTE;
+        };
         // Retained for the code paths that only care whether touch is indirect
         config.touchscreenTrackpad = config.mouseMode == MouseMode.RELATIVE ||
                 config.mouseMode == MouseMode.TRACKPAD;
         config.enableLatencyToast = prefs.getBoolean(LATENCY_TOAST_PREF_STRING, DEFAULT_LATENCY_TOAST);
         config.absoluteMouseMode = prefs.getBoolean(ABSOLUTE_MOUSE_MODE_PREF_STRING, DEFAULT_ABSOLUTE_MOUSE_MODE);
         config.enableAAudio = prefs.getBoolean(ENABLE_AAUDIO_PREF_STRING, DEFAULT_ENABLE_AAUDIO);
+        config.continuousAudio = prefs.getBoolean(CONTINUOUS_AUDIO_PREF_STRING, DEFAULT_CONTINUOUS_AUDIO);
         config.reduceRefreshRate = prefs.getBoolean(REDUCE_REFRESH_RATE_PREF_STRING, DEFAULT_REDUCE_REFRESH_RATE);
         config.fullRange = prefs.getBoolean(FULL_RANGE_PREF_STRING, DEFAULT_FULL_RANGE);
         config.gamepadTouchpadAsMouse = prefs.getBoolean(GAMEPAD_TOUCHPAD_AS_MOUSE_PREF_STRING, DEFAULT_GAMEPAD_TOUCHPAD_AS_MOUSE);

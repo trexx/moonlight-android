@@ -346,8 +346,7 @@ public class CachedAppAssetLoader {
         final Drawable drawable = imageView.getDrawable();
 
         // If our drawable is in play, get the loader task
-        if (drawable instanceof AsyncDrawable) {
-            final AsyncDrawable asyncDrawable = (AsyncDrawable) drawable;
+        if (drawable instanceof AsyncDrawable asyncDrawable) {
             return asyncDrawable.getLoaderTask();
         }
 
@@ -456,14 +455,26 @@ public class CachedAppAssetLoader {
             this.app = app;
         }
 
+        // Identity is the host's UUID and the app's ID, not the two objects: ComputerDetails and
+        // NvApp are both mutable and neither overrides equals, so comparing them would compare
+        // references and two tuples naming the same app would not match. That is also why this is
+        // not a record - the generated equals would do exactly the reference comparison this
+        // avoids.
         @Override
         public boolean equals(Object o) {
-            if (!(o instanceof LoaderTuple)) {
+            if (!(o instanceof LoaderTuple other)) {
                 return false;
             }
 
-            LoaderTuple other = (LoaderTuple) o;
             return computer.uuid.equals(other.computer.uuid) && app.getAppId() == other.app.getAppId();
+        }
+
+        // Must agree with equals() above. Absent until now, which was latent rather than broken
+        // only because the one cache keyed on a tuple builds a string key instead of using it
+        // directly - see MemoryAssetLoader.constructKey().
+        @Override
+        public int hashCode() {
+            return 31 * computer.uuid.hashCode() + app.getAppId();
         }
 
         @Override

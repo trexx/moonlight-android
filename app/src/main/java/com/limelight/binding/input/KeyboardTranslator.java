@@ -32,6 +32,10 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
      */
     private static final short KEY_PREFIX = (short) 0x80;
     
+    // Sentinel for "this key has no Windows equivalent". Negative because every real VK code is
+    // positive, so one check below the switch covers both this and a scancode KeyMapper rejected.
+    private static final int NOT_TRANSLATED = -1;
+
     public static final int VK_0 = 48;
     public static final int VK_9 = 57;
     public static final int VK_A = 65;
@@ -211,203 +215,62 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
             translated = (keycode - KeyEvent.KEYCODE_F1) + VK_F1;
         }
         else {
-            switch (keycode) {
-            case KeyEvent.KEYCODE_ALT_LEFT:
-                translated = VK_LMENU;
-                break;
-
-            case KeyEvent.KEYCODE_ALT_RIGHT:
-                translated = 0xA5;
-                break;
-                
-            case KeyEvent.KEYCODE_BACKSLASH:
-                translated = 0xdc;
-                break;
-                
-            case KeyEvent.KEYCODE_CAPS_LOCK:
-                translated = VK_CAPS_LOCK;
-                break;
-                
-            case KeyEvent.KEYCODE_CLEAR:
-                translated = VK_CLEAR;
-                break;
-                
-            case KeyEvent.KEYCODE_COMMA:
-                translated = 0xbc;
-                break;
-                
-            case KeyEvent.KEYCODE_CTRL_LEFT:
-                translated = VK_LCONTROL;
-                break;
-
-            case KeyEvent.KEYCODE_CTRL_RIGHT:
-                translated = 0xA3;
-                break;
-                
-            case KeyEvent.KEYCODE_DEL:
-                translated = VK_BACK_SPACE;
-                break;
-                
-            case KeyEvent.KEYCODE_ENTER:
-                translated = 0x0d;
-                break;
-
-            case KeyEvent.KEYCODE_PLUS:
-            case KeyEvent.KEYCODE_EQUALS:
-                translated = 0xbb;
-                break;
-                
-            case KeyEvent.KEYCODE_ESCAPE:
-                translated = VK_ESCAPE;
-                break;
-                
-            case KeyEvent.KEYCODE_FORWARD_DEL:
-                translated = 0x2e;
-                break;
-                
-            case KeyEvent.KEYCODE_INSERT:
-                translated = 0x2d;
-                break;
-                
-            case KeyEvent.KEYCODE_LEFT_BRACKET:
-                translated = 0xdb;
-                break;
-
-            case KeyEvent.KEYCODE_META_LEFT:
-                translated = VK_LWIN;
-                break;
-
-            case KeyEvent.KEYCODE_META_RIGHT:
-                translated = 0x5c;
-                break;
-
-            case KeyEvent.KEYCODE_MENU:
-                translated = 0x5d;
-                break;
-
-            case KeyEvent.KEYCODE_MINUS:
-                translated = 0xbd;
-                break;
-                
-            case KeyEvent.KEYCODE_MOVE_END:
-                translated = VK_END;
-                break;
-                
-            case KeyEvent.KEYCODE_MOVE_HOME:
-                translated = VK_HOME;
-                break;
-                
-            case KeyEvent.KEYCODE_NUM_LOCK:
-                translated = VK_NUM_LOCK;
-                break;
-                
-            case KeyEvent.KEYCODE_PAGE_DOWN:
-                translated = VK_PAGE_DOWN;
-                break;
-                
-            case KeyEvent.KEYCODE_PAGE_UP:
-                translated = VK_PAGE_UP;
-                break;
-                
-            case KeyEvent.KEYCODE_PERIOD:
-                translated = 0xbe;
-                break;
-                
-            case KeyEvent.KEYCODE_RIGHT_BRACKET:
-                translated = 0xdd;
-                break;
-                
-            case KeyEvent.KEYCODE_SCROLL_LOCK:
-                translated = VK_SCROLL_LOCK;
-                break;
-                
-            case KeyEvent.KEYCODE_SEMICOLON:
-                translated = 0xba;
-                break;
-                
-            case KeyEvent.KEYCODE_SHIFT_LEFT:
-                translated = VK_LSHIFT;
-                break;
-
-            case KeyEvent.KEYCODE_SHIFT_RIGHT:
-                translated = 0xA1;
-                break;
-                
-            case KeyEvent.KEYCODE_SLASH:
-                translated = 0xbf;
-                break;
-                
-            case KeyEvent.KEYCODE_SPACE:
-                translated = VK_SPACE;
-                break;
-                
-            case KeyEvent.KEYCODE_SYSRQ:
+            translated = switch (keycode) {
+                case KeyEvent.KEYCODE_ALT_LEFT -> VK_LMENU;
+                case KeyEvent.KEYCODE_ALT_RIGHT -> 0xA5;
+                case KeyEvent.KEYCODE_BACKSLASH -> 0xdc;
+                case KeyEvent.KEYCODE_CAPS_LOCK -> VK_CAPS_LOCK;
+                case KeyEvent.KEYCODE_CLEAR -> VK_CLEAR;
+                case KeyEvent.KEYCODE_COMMA -> 0xbc;
+                case KeyEvent.KEYCODE_CTRL_LEFT -> VK_LCONTROL;
+                case KeyEvent.KEYCODE_CTRL_RIGHT -> 0xA3;
+                case KeyEvent.KEYCODE_DEL -> VK_BACK_SPACE;
+                case KeyEvent.KEYCODE_ENTER -> 0x0d;
+                case KeyEvent.KEYCODE_PLUS, KeyEvent.KEYCODE_EQUALS -> 0xbb;
+                case KeyEvent.KEYCODE_ESCAPE -> VK_ESCAPE;
+                case KeyEvent.KEYCODE_FORWARD_DEL -> 0x2e;
+                case KeyEvent.KEYCODE_INSERT -> 0x2d;
+                case KeyEvent.KEYCODE_LEFT_BRACKET -> 0xdb;
+                case KeyEvent.KEYCODE_META_LEFT -> VK_LWIN;
+                case KeyEvent.KEYCODE_META_RIGHT -> 0x5c;
+                case KeyEvent.KEYCODE_MENU -> 0x5d;
+                case KeyEvent.KEYCODE_MINUS -> 0xbd;
+                case KeyEvent.KEYCODE_MOVE_END -> VK_END;
+                case KeyEvent.KEYCODE_MOVE_HOME -> VK_HOME;
+                case KeyEvent.KEYCODE_NUM_LOCK -> VK_NUM_LOCK;
+                case KeyEvent.KEYCODE_PAGE_DOWN -> VK_PAGE_DOWN;
+                case KeyEvent.KEYCODE_PAGE_UP -> VK_PAGE_UP;
+                case KeyEvent.KEYCODE_PERIOD -> 0xbe;
+                case KeyEvent.KEYCODE_RIGHT_BRACKET -> 0xdd;
+                case KeyEvent.KEYCODE_SCROLL_LOCK -> VK_SCROLL_LOCK;
+                case KeyEvent.KEYCODE_SEMICOLON -> 0xba;
+                case KeyEvent.KEYCODE_SHIFT_LEFT -> VK_LSHIFT;
+                case KeyEvent.KEYCODE_SHIFT_RIGHT -> 0xA1;
+                case KeyEvent.KEYCODE_SLASH -> 0xbf;
+                case KeyEvent.KEYCODE_SPACE -> VK_SPACE;
                 // Android defines this as SysRq/PrntScrn
-                translated = VK_PRINTSCREEN;
-                break;
-                
-            case KeyEvent.KEYCODE_TAB:
-                translated = VK_TAB;
-                break;
-                
-            case KeyEvent.KEYCODE_DPAD_LEFT:
-                translated = VK_LEFT;
-                break;
-                
-            case KeyEvent.KEYCODE_DPAD_RIGHT:
-                translated = VK_RIGHT;
-                break;
-                
-            case KeyEvent.KEYCODE_DPAD_UP:
-                translated = VK_UP;
-                break;
-                
-            case KeyEvent.KEYCODE_DPAD_DOWN:
-                translated = VK_DOWN;
-                break;
-                
-            case KeyEvent.KEYCODE_GRAVE:
-                translated = VK_BACK_QUOTE;
-                break;
-                
-            case KeyEvent.KEYCODE_APOSTROPHE:
-                translated = 0xde;
-                break;
-                
-            case KeyEvent.KEYCODE_BREAK:
-                translated = VK_PAUSE;
-                break;
-
-            case KeyEvent.KEYCODE_NUMPAD_DIVIDE:
-                translated = 0x6F;
-                break;
-
-            case KeyEvent.KEYCODE_NUMPAD_MULTIPLY:
-                translated = 0x6A;
-                break;
-
-            case KeyEvent.KEYCODE_NUMPAD_SUBTRACT:
-                translated = 0x6D;
-                break;
-
-            case KeyEvent.KEYCODE_NUMPAD_ADD:
-                translated = 0x6B;
-                break;
-
-            case KeyEvent.KEYCODE_NUMPAD_DOT:
-                translated = 0x6E;
-                break;
-
-            default:
+                case KeyEvent.KEYCODE_SYSRQ -> VK_PRINTSCREEN;
+                case KeyEvent.KEYCODE_TAB -> VK_TAB;
+                case KeyEvent.KEYCODE_DPAD_LEFT -> VK_LEFT;
+                case KeyEvent.KEYCODE_DPAD_RIGHT -> VK_RIGHT;
+                case KeyEvent.KEYCODE_DPAD_UP -> VK_UP;
+                case KeyEvent.KEYCODE_DPAD_DOWN -> VK_DOWN;
+                case KeyEvent.KEYCODE_GRAVE -> VK_BACK_QUOTE;
+                case KeyEvent.KEYCODE_APOSTROPHE -> 0xde;
+                case KeyEvent.KEYCODE_BREAK -> VK_PAUSE;
+                case KeyEvent.KEYCODE_NUMPAD_DIVIDE -> 0x6F;
+                case KeyEvent.KEYCODE_NUMPAD_MULTIPLY -> 0x6A;
+                case KeyEvent.KEYCODE_NUMPAD_SUBTRACT -> 0x6D;
+                case KeyEvent.KEYCODE_NUMPAD_ADD -> 0x6B;
+                case KeyEvent.KEYCODE_NUMPAD_DOT -> 0x6E;
                 // Android has no keycode for this key. Fall back to translating the
                 // hardware scancode, which is a Linux evdev code, into a Windows VK.
-                if (scancode >= 0) {
-                    translated = KeyMapper.getWindowsKeyCode(scancode);
-                    if (translated < 0) {
-                        return 0;
-                    }
-                    break;
-                }
+                // NOT_TRANSLATED rather than an early return: a switch expression has
+                // to produce a value, so the caller checks for it just below.
+                default -> scancode >= 0 ? KeyMapper.getWindowsKeyCode(scancode) : NOT_TRANSLATED;
+            };
+
+            if (translated < 0) {
                 return 0;
             }
         }

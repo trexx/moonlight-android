@@ -71,6 +71,11 @@
             android:title="@string/title_checkbox_enable_aaudio"
             android:summary="@string/summary_checkbox_enable_aaudio"
             android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_continuous_audio"
+            android:title="@string/title_checkbox_continuous_audio"
+            android:summary="@string/summary_checkbox_continuous_audio"
+            android:defaultValue="false" />
     </PreferenceCategory>
     <PreferenceCategory android:title="@string/category_gamepad_settings"
         android:key="category_gamepad_settings">
@@ -228,6 +233,11 @@
             android:summary="@string/summary_enable_hdr"
             android:defaultValue="false" />
         <CheckBoxPreference
+            android:key="checkbox_enable_intra_refresh"
+            android:title="@string/title_enable_intra_refresh"
+            android:summary="@string/summary_enable_intra_refresh"
+            android:defaultValue="false" />
+        <CheckBoxPreference
             android:key="checkbox_full_range"
             android:title="@string/title_full_range"
             android:summary="@string/summary_full_range"
@@ -241,6 +251,14 @@
             android:key="checkbox_enable_post_stream_toast"
             android:title="@string/title_enable_post_stream_toast"
             android:summary="@string/summary_enable_post_stream_toast"
+            android:defaultValue="false"/>
+        <!-- Defaults to off, which keeps the shared client ID every Moonlight client reports.
+             That is what lets a session started on one device be quit from another, so turning
+             this on is a real trade rather than a strict improvement. -->
+        <CheckBoxPreference
+            android:key="checkbox_send_real_client_id"
+            android:title="@string/title_send_real_client_id"
+            android:summary="@string/summary_send_real_client_id"
             android:defaultValue="false"/>
     </PreferenceCategory>
 </PreferenceScreen>

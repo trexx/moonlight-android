@@ -35,6 +35,7 @@ public class StreamConfiguration {
     private boolean sops;
     private boolean enableAdaptiveResolution;
     private boolean playLocalAudio;
+    private boolean continuousAudio;
     private int maxPacketSize;
     private int remote;
     private MoonBridge.AudioConfiguration audioConfiguration;
@@ -43,7 +44,6 @@ public class StreamConfiguration {
     private int encryptionFlags;
     private int colorRange;
     private int colorSpace;
-    private boolean persistGamepadsAfterDisconnect;
 
     public static class Builder {
         private StreamConfiguration config = new StreamConfiguration();
@@ -93,7 +93,12 @@ public class StreamConfiguration {
             config.playLocalAudio = enable;
             return this;
         }
-        
+
+        public StreamConfiguration.Builder setContinuousAudio(boolean enable) {
+            config.continuousAudio = enable;
+            return this;
+        }
+
         public StreamConfiguration.Builder setMaxPacketSize(int maxPacketSize) {
             config.maxPacketSize = maxPacketSize;
             return this;
@@ -101,11 +106,6 @@ public class StreamConfiguration {
 
         public StreamConfiguration.Builder setAttachedGamepadMask(int attachedGamepadMask) {
             config.attachedGamepadMask = attachedGamepadMask;
-            return this;
-        }
-
-        public StreamConfiguration.Builder setPersistGamepadsAfterDisconnect(boolean value) {
-            config.persistGamepadsAfterDisconnect = value;
             return this;
         }
 
@@ -206,6 +206,11 @@ public class StreamConfiguration {
     public boolean getPlayLocalAudio() {
         return playLocalAudio;
     }
+
+    /** @return whether the host should keep encoding audio while nothing is playing */
+    public boolean getContinuousAudio() {
+        return continuousAudio;
+    }
     
     /** @return whether this connection is local, remote, or auto-detected */
     public int getRemote() {
@@ -225,11 +230,6 @@ public class StreamConfiguration {
     /** @return bitmask of controllers attached at launch, so the host creates the right slots */
     public int getAttachedGamepadMask() {
         return attachedGamepadMask;
-    }
-
-    /** @return whether host-side controllers persist after the stream ends */
-    public boolean getPersistGamepadsAfterDisconnect() {
-        return persistGamepadsAfterDisconnect;
     }
 
     /** @return the client display's refresh rate in hundredths of a Hz, for host-side pacing */

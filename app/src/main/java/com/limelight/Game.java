@@ -17,6 +17,7 @@ import com.limelight.binding.input.driver.GipController;
 import com.limelight.binding.input.driver.XboxWiredGipController;
 import com.limelight.binding.input.touch.TouchContext;
 import com.limelight.binding.video.CrashListener;
+import com.limelight.binding.video.FramePacingSelector;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.binding.video.PerfOverlayListener;
@@ -79,8 +80,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.ByteArrayInputStream;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
@@ -407,13 +406,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             Display.HdrCapabilities hdrCaps = display.getHdrCapabilities();
 
             // We must now ensure our display is compatible with HDR10
-            if (hdrCaps != null) {
-                // getHdrCapabilities() returns null on Lenovo Lenovo Mirage Solo (vega), Android 8.0
-                for (int hdrType : hdrCaps.getSupportedHdrTypes()) {
-                    if (hdrType == Display.HdrCapabilities.HDR_TYPE_HDR10) {
-                        willStreamHdr = true;
-                        break;
-                    }
+            for (int hdrType : hdrCaps.getSupportedHdrTypes()) {
+                if (hdrType == Display.HdrCapabilities.HDR_TYPE_HDR10) {
+                    willStreamHdr = true;
+                    break;
                 }
             }
 
@@ -495,25 +491,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // If the user requested frame pacing using a capped FPS, we will need to change our
         // desired FPS setting here in accordance with the active display refresh rate.
-        int roundedRefreshRate = Math.round(displayRefreshRate);
-        int chosenFrameRate = prefConfig.fps;
-        if (prefConfig.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS) {
-            if (prefConfig.fps >= roundedRefreshRate) {
-                if (prefConfig.fps > roundedRefreshRate + 3) {
-                    // Use frame drops when rendering above the screen frame rate
-                    prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                    LimeLog.info("Using drop mode for FPS > Hz");
-                } else if (roundedRefreshRate <= 49) {
-                    // Let's avoid clearly bogus refresh rates and fall back to legacy rendering
-                    prefConfig.framePacing = PreferenceConfiguration.FRAME_PACING_BALANCED;
-                    LimeLog.info("Bogus refresh rate: " + roundedRefreshRate);
-                }
-                else {
-                    chosenFrameRate = roundedRefreshRate - 1;
-                    LimeLog.info("Adjusting FPS target for screen to " + chosenFrameRate);
-                }
-            }
-        }
+        FramePacingSelector pacing = FramePacingSelector.select(displayRefreshRate, prefConfig.fps, prefConfig.framePacing);
+        int chosenFrameRate = pacing.frameRate;
+        prefConfig.framePacing = pacing.framePacing;
 
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(prefConfig.width, prefConfig.height)
@@ -523,6 +503,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 .setBitrate(prefConfig.bitrate)
                 .setEnableSops(prefConfig.enableSops)
                 .enableLocalAudioPlayback(prefConfig.playHostAudio)
+                .setContinuousAudio(prefConfig.continuousAudio)
                 .setMaxPacketSize(1392)
                 .setRemoteConfiguration(StreamConfiguration.STREAM_CFG_AUTO) // NvConnection will perform LAN and VPN detection
                 .setSupportedVideoFormats(supportedVideoFormats)
@@ -535,7 +516,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 .setEncryptionFlags(prefConfig.encryptionFlags)
                 .setColorSpace(decoderRenderer.getPreferredColorSpace())
                 .setColorRange(decoderRenderer.getPreferredColorRange())
-                .setPersistGamepadsAfterDisconnect(!prefConfig.multiController)
                 .build();
 
         // Initialize the connection
@@ -594,40 +574,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         setPreferredOrientationForCurrentDisplay();
     }
 
-    /**
-     * Captures or releases the meta keys (Home, Recents, Back).
-     *
-     * <p>Capturing them lets combinations like Win+D reach the host instead of Android, which is
-     * the point; releasing them is what makes it possible to leave the stream at all.
-     */
-    public void setMetaKeyCaptureState(boolean enabled) {
-        // This uses custom APIs present on some Samsung devices to allow capture of
-        // meta key events while streaming.
-        try {
-            Class<?> semWindowManager = Class.forName("com.samsung.android.view.SemWindowManager");
-            Method getInstanceMethod = semWindowManager.getMethod("getInstance");
-            Object manager = getInstanceMethod.invoke(null);
-
-            if (manager != null) {
-                Class<?>[] parameterTypes = new Class<?>[2];
-                parameterTypes[0] = ComponentName.class;
-                parameterTypes[1] = boolean.class;
-                Method requestMetaKeyEventMethod = semWindowManager.getDeclaredMethod("requestMetaKeyEvent", parameterTypes);
-                requestMetaKeyEventMethod.invoke(manager, this.getComponentName(), enabled);
-            }
-            else {
-                LimeLog.warning("SemWindowManager.getInstance() returned null");
-            }
-        } catch (ClassNotFoundException e) {
-            e.printStackTrace();
-        } catch (NoSuchMethodException e) {
-            e.printStackTrace();
-        } catch (InvocationTargetException e) {
-            e.printStackTrace();
-        } catch (IllegalAccessException e) {
-            e.printStackTrace();
-        }
-    }
 
     /** {@inheritDoc} Re-establishes pointer capture and the system UI state on regaining focus. */
     @Override
@@ -1034,9 +980,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             inputCaptureProvider.disableCapture();
         }
 
-        // Grab/ungrab system keyboard shortcuts
-        setMetaKeyCaptureState(grab);
-
         grabbedInput = grab;
     }
 
@@ -1212,23 +1155,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 touchContextMap[i].cancelTouch();
             }
 
-            switch (prefConfig.mouseMode) {
-                case ABSOLUTE:
-                    touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamView, false);
-                    break;
-                case ABSOLUTE_SWAPPED:
-                    touchContextMap[i] = new AbsoluteTouchContext(conn, i, streamView, true);
-                    break;
-                case TRACKPAD:
-                    touchContextMap[i] = new TrackpadContext(conn, i);
-                    break;
-                case RELATIVE:
-                default:
-                    touchContextMap[i] = new RelativeTouchContext(conn, i,
-                            REFERENCE_HORIZ_RES, REFERENCE_VERT_RES,
-                            streamView, prefConfig);
-                    break;
-            }
+            // Exhaustive over the enum with no default, so adding a mouse mode becomes a compile
+            // error here rather than silently falling into the relative context.
+            touchContextMap[i] = switch (prefConfig.mouseMode) {
+                case ABSOLUTE -> new AbsoluteTouchContext(conn, i, streamView, false);
+                case ABSOLUTE_SWAPPED -> new AbsoluteTouchContext(conn, i, streamView, true);
+                case TRACKPAD -> new TrackpadContext(conn, i);
+                case RELATIVE -> new RelativeTouchContext(conn, i,
+                        REFERENCE_HORIZ_RES, REFERENCE_VERT_RES,
+                        streamView, prefConfig);
+            };
         }
     }
 
