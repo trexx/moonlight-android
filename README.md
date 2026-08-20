@@ -321,8 +321,9 @@ applies is a hard error rather than a warning. The cost is that a patched submod
 as dirty for as long as the patch is carried; `git submodule update --force` resets it and
 the next build re-applies.
 
-Currently carried, both against `moonlight-common-c`: the Mbed TLS 3.x CBC padding and IV
-fix, and the decrypt-failure counters.
+Currently carried, all against `moonlight-common-c`: the Mbed TLS 3.x CBC padding and IV
+fix, the decrypt-failure counters, and the `LI_CTYPE_STEAM` controller type, which upstream
+added after the commit this fork pins.
 
 ## Testing
 

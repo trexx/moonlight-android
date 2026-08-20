@@ -1,0 +1,76 @@
+Fix AES-CBC with mbedTLS 3.x: restore PKCS7 padding and apply caller IV
+
+Carried from upstream https://github.com/moonlight-stream/moonlight-common-c/pull/142
+(open as of 2026-08-08). Drop this patch and bump the submodule once it merges.
+
+Without it every audio packet fails to decrypt and streams play silently: audio is
+the only user of ALGORITHM_AES_CBC, and mbedTLS 3.5.0 made an explicit call to
+mbedtls_cipher_set_padding_mode() mandatory for CBC, where 2.x and OpenSSL's EVP
+layer both defaulted to PKCS7. Video, control and RTSP use AES-GCM and are
+unaffected, which is why the picture survives and only the sound disappears.
+
+NB: this patch alone is not sufficient for this project. Our trimmed mbedTLS config
+must also define MBEDTLS_CIPHER_PADDING_PKCS7, or mbedtls_cipher_set_padding_mode()
+compiles out its PKCS7 case and returns MBEDTLS_ERR_CIPHER_FEATURE_UNAVAILABLE.
+See app/src/main/jni/moonlight-core/moonlight_mbedtls_config.h.
+
+diff --git a/src/PlatformCrypto.c b/src/PlatformCrypto.c
+index 817d9bbf..bf7bd55f 100644
+--- a/src/PlatformCrypto.c
++++ b/src/PlatformCrypto.c
+@@ -68,6 +68,27 @@ bool PltEncryptMessage(PPLT_CRYPTO_CONTEXT ctx, int algorithm, int flags,
+             return false;
+         }
+ 
++#ifdef MBEDTLS_CIPHER_MODE_WITH_PADDING
++        // mbedTLS 3.x no longer defaults CBC contexts to PKCS7 padding in
++        // mbedtls_cipher_setup() (mbedTLS 2.x and OpenSSL's EVP layer do).
++        // The GameStream protocol requires PKCS7 for AES-CBC.
++        if (cipherMode == MBEDTLS_MODE_CBC &&
++                mbedtls_cipher_set_padding_mode(&ctx->ctx, MBEDTLS_PADDING_PKCS7) != 0) {
++            return false;
++        }
++#endif
++
++        // The OpenSSL path applies the caller's IV as part of the first
++        // initialization even without CIPHER_FLAG_RESET_IV. Match that here.
++        // (GCM passes its per-message IV to the auth encrypt call instead.)
++        if (tag == NULL) {
++            if (mbedtls_cipher_set_iv(&ctx->ctx, iv, ivLength) != 0) {
++                return false;
++            }
++
++            mbedtls_cipher_reset(&ctx->ctx);
++        }
++
+         ctx->initialized = true;
+     }
+ 
+@@ -268,6 +289,27 @@ bool PltDecryptMessage(PPLT_CRYPTO_CONTEXT ctx, int algorithm, int flags,
+             return false;
+         }
+ 
++#ifdef MBEDTLS_CIPHER_MODE_WITH_PADDING
++        // mbedTLS 3.x no longer defaults CBC contexts to PKCS7 padding in
++        // mbedtls_cipher_setup() (mbedTLS 2.x and OpenSSL's EVP layer do).
++        // The GameStream protocol requires PKCS7 for AES-CBC.
++        if (cipherMode == MBEDTLS_MODE_CBC &&
++                mbedtls_cipher_set_padding_mode(&ctx->ctx, MBEDTLS_PADDING_PKCS7) != 0) {
++            return false;
++        }
++#endif
++
++        // The OpenSSL path applies the caller's IV as part of the first
++        // initialization even without CIPHER_FLAG_RESET_IV. Match that here.
++        // (GCM passes its per-message IV to the auth decrypt call instead.)
++        if (tag == NULL) {
++            if (mbedtls_cipher_set_iv(&ctx->ctx, iv, ivLength) != 0) {
++                return false;
++            }
++
++            mbedtls_cipher_reset(&ctx->ctx);
++        }
++
+         ctx->initialized = true;
+     }
+ 
