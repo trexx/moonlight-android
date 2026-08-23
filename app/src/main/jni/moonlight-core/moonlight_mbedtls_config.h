@@ -45,6 +45,28 @@
 #define MBEDTLS_PSA_CRYPTO_C
 
 /*
+ * Without this, every PSA entry point defensively copies its caller's buffers: it
+ * mbedtls_calloc()s a zeroed block, memcpy()s the argument in, runs, copies the result
+ * back and frees. That is five heap allocations per video packet (set_nonce 1, aead_update
+ * 2, aead_verify 2) and four per audio packet (set_iv 1, cipher_update 2, cipher_finish 1),
+ * on the receive threads, plus a full payload copy in and out - which is more copying than
+ * the USE_MBEDTLS_CRYPTO_EXT memmove that moving to PSA was supposed to remove. Measured on
+ * the Shield, it is 1.6 us of the 2.1 us that PSA adds to a 1392-byte video packet, and
+ * 0.9 us of the 1.7 us it adds to an audio packet.
+ *
+ * The copying exists to protect against a caller mutating a buffer mid-call across a trust
+ * boundary - PSA-as-a-service, where arguments live in shared memory. Nothing here is such a
+ * caller: every buffer PlatformCrypto.c passes is ordinary process-local heap or stack.
+ *
+ * The one constraint it imposes is that input and output buffers must not overlap. They do
+ * not at any call site: VideoStream decrypts the receive buffer into a separate one,
+ * AudioStream into a stack buffer, ControlStream encrypts a stack tempBuffer into the enet
+ * packet, InputStream and RtspConnection likewise. Check this again before adding a call
+ * site that decrypts in place.
+ */
+#define MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS
+
+/*
  * PSA keeps its key slots and init state in file-scope globals, and every guard
  * around them in psa_crypto.c and psa_crypto_slot_management.c is compiled out
  * unless MBEDTLS_THREADING_C is set. moonlight-common-c first touches crypto from
@@ -61,6 +83,30 @@
  */
 #define MBEDTLS_THREADING_C
 #define MBEDTLS_THREADING_PTHREAD
+
+/*
+ * Entropy source. Mbed TLS defaults MBEDTLS_PLATFORM_DEV_RANDOM to "/dev/random"
+ * (platform.h), and only bypasses it via the getrandom() syscall when __GLIBC__ is
+ * defined - which it is not on bionic, so this build reads the device file.
+ *
+ * On the Shield's 4.9 kernel /dev/random is the *blocking* pool: a read waits until
+ * the kernel's entropy estimate covers it. entropy_gather_internal() asks for 128
+ * bytes (1024 bits) per poll, and the box idles at a few hundred bits, so the read
+ * blocks for as long as it takes the pool to refill.
+ *
+ * That is invisible until something seeds a DRBG on a latency-critical path, and PSA
+ * does exactly that: psa_crypto_init() seeds the CTR-DRBG, PltEncryptMessage() calls
+ * psa_crypto_init() lazily, and the first caller is sealRtspMessage() encrypting the
+ * OPTIONS request that opens the RTSP handshake. The connection thread then sits in
+ * read() and the client shows a spinner until the pool refills. The pre-PSA code never
+ * hit this: it seeded the CTR-DRBG only inside PltGenerateRandomData(), which the RTSP
+ * path does not call. Captured stack in psa-freeze-investigation/.
+ *
+ * /dev/urandom is the correct source: on Android the CRNG is seeded during early boot,
+ * long before an app runs, and it never blocks. It is not weaker - the blocking pool
+ * buys nothing here.
+ */
+#define MBEDTLS_PLATFORM_DEV_RANDOM "/dev/urandom"
 
 /* Random data for PltGenerateRandomData(), via psa_generate_random() */
 #define MBEDTLS_CTR_DRBG_C
