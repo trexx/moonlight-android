@@ -1607,6 +1607,62 @@ does not change the answer on its own.
 
 ---
 
+## 20. ARMv8 crypto extensions on the 32-bit build
+
+The config has always asked for `MBEDTLS_AESCE_C`, but `aesce.c` gates its whole body on
+`MBEDTLS_ARCH_IS_ARMV8_A`, which `build_info.h` derives from `__ARM_ARCH >= 8`. The NDK compiles
+`armeabi-v7a` as `armv7-a`, so on that ABI the file collapsed to a 684-byte stub containing no
+crypto instructions, and both AES and GHASH ran through table lookups. The Homatics has been
+paying that cost since the fork began; the Shield never did, because `arm64-v8a` satisfies the
+gate on its own.
+
+`moonlight-core/Android.mk` now raises `-march=armv8-a` for the mbedtls module on that ABI only.
+Verified in the shipped release library: `mbedtls_aesce_crypt_ecb` contains 54 `aese.8`
+encodings where it previously contained none. `llvm-objdump` renders them as `<unknown>` when
+disassembling the linked `.so`, because link-time attribute merging leaves it marked `ARM v7`;
+disassemble `aesce.o` instead, where they decode properly. The bytes execute either way — the
+tag is metadata.
+
+Measured with `psa-freeze-investigation/cryptobench.c`, a 32-bit binary on Cortex-A57, ns per
+packet on the legacy path:
+
+| Path | `armv7-a` | `-march=armv8-a` | |
+|---|---:|---:|---|
+| video, 1392 B | 36,933 | 6,683 | 5.5× |
+| video, 1024 B | 27,396 | 4,934 | 5.6× |
+| audio, 240 B | 3,247 | 729 | 4.5× |
+
+Those are per packet on the receive threads, so at ~3,600 video packets/s the 32-bit build was
+spending something like a fifth of a core on decryption alone. The numbers above are a proxy:
+they were taken on the Shield running a 32-bit binary, not on the Homatics, whose Cortex-A55 is
+a different core. The ratio should hold; the absolute figures will not.
+
+Dispatch is runtime-guarded — `mbedtls_aesce_has_support_impl()` checks
+`getauxval(AT_HWCAP2) & HWCAP2_AES` and falls back to tables — so a CPU without the extension
+still decrypts correctly. What is *not* guarded is that clang may now emit ARMv8-A baseline
+instructions elsewhere in mbedtls, which would fault on a genuine ARMv7 CPU. The S905X4 is
+ARMv8-A, so nothing in scope is affected, but this is the line to revisit if a 32-bit ARMv7
+device is ever added.
+
+- [ ] **Homatics: the stream still decrypts.** The whole risk is that the extensions are
+      compiled in but the CPU or kernel does not advertise them, in which case AES silently
+      produces garbage rather than falling back. Video failing is obvious; audio is not, so run
+      the §5 check as well:
+      ```bash
+      adb logcat -d | grep -a "Failed to decrypt"   # must return nothing
+      ```
+- [ ] **Homatics: the extensions are actually being used.** If `HWCAP2_AES` is absent the build
+      is correct but no faster, and the table path is still running:
+      ```bash
+      adb shell cat /proc/cpuinfo | grep -i features   # expect aes, pmull, sha1, sha2
+      ```
+- [ ] **Homatics: measure it.** Push the 32-bit `cryptobench` and confirm the ratio on the real
+      SoC, rather than trusting the Cortex-A57 proxy above.
+- [ ] **Shield TV: unchanged.** The `ifeq` is scoped to `armeabi-v7a`, so `arm64-v8a` should be
+      byte-identical apart from unrelated changes. Confirm a stream still runs.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -1633,3 +1689,4 @@ does not change the answer on its own.
 | §17 refresh rate | A display or output mode that reports a fractional rate (59.94, 29.97, 23.976) |
 | §18.2 two-client check | A second Moonlight client against the same host |
 | §19 | Both target devices; the survey differs per SoC |
+| §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |
