@@ -19,6 +19,31 @@ LOCAL_C_INCLUDES := $(LOCAL_PATH) \
 LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/mbedtls/include
 LOCAL_CFLAGS := -DMBEDTLS_CONFIG_FILE=\"moonlight_mbedtls_config.h\" -ffunction-sections -fdata-sections
 LOCAL_EXPORT_CFLAGS := -DMBEDTLS_CONFIG_FILE=\"moonlight_mbedtls_config.h\"
+
+# The config asks for MBEDTLS_AESCE_C on both ABIs, but aesce.c gates its whole body on
+# MBEDTLS_ARCH_IS_ARMV8_A, which build_info.h derives from __ARM_ARCH >= 8. The NDK compiles
+# armeabi-v7a as armv7-a, so on that ABI the file reduced to a 684-byte stub with no crypto
+# instructions in it at all, and both AES and GHASH fell back to table lookups. Measured
+# cost of that on a 1392-byte video packet: 36,933 ns against 6,683 ns once the extensions
+# are compiled in, and 3,247 ns against 729 ns on a 240-byte audio packet. Per packet, on
+# the receive threads.
+#
+# The only 32-bit consumer is the Homatics Box R 4K, whose Amlogic S905X4 is an ARMv8-A
+# Cortex-A55 running a 32-bit userspace - the instructions are in the silicon and were simply
+# not being emitted. Raising -march for this module is what makes them reachable; the flag is
+# scoped to mbedtls and deliberately kept out of LOCAL_EXPORT_CFLAGS so moonlight-core, enet
+# and nanors stay at the ABI default.
+#
+# Safe to dispatch: aesce.c checks getauxval(AT_HWCAP2) & HWCAP2_AES at runtime and uses the
+# table path when the CPU lacks the extension. What is *not* runtime-guarded is that clang may
+# now emit ARMv8-A baseline instructions anywhere in mbedtls, so this library would fault on a
+# genuine ARMv7 CPU. There is no such device in scope; revisit this line if one is ever added.
+#
+# +crypto is not needed on the command line - aesce.c pushes target("aes") on its own
+# functions. Requires clang >= 11 for 32-bit per mbedtls_config.h; the pinned NDK has 21.
+ifeq ($(TARGET_ARCH_ABI),armeabi-v7a)
+LOCAL_CFLAGS += -march=armv8-a
+endif
 LOCAL_BRANCH_PROTECTION := standard
 include $(BUILD_STATIC_LIBRARY)
 
