@@ -1218,9 +1218,9 @@ void GipDevice::handleAuthPacket(const uint8_t *data, size_t length)
      * consequence of the same thing - a v2 device answering a v1 hello - so both are checked and
      * either is enough.
      *
-     * Version 2 negotiates ECDH in place of an RSA-encrypted secret. Nothing here implements it,
-     * and there is no hardware on hand that asks for it, so say so plainly rather than carrying on
-     * and failing somewhere less obvious.
+     * Version 2 negotiates ECDH in place of an RSA-encrypted secret, and is implemented below as
+     * an upgrade: the exchange restarts from a fresh transcript rather than being translated
+     * mid-flight. An Elite Series 2 (045e:0b00, firmware 5.23.6.0) takes this path and completes.
      */
     uint8_t version = data[7];
 
@@ -1245,6 +1245,9 @@ void GipDevice::handleAuthPacket(const uint8_t *data, size_t length)
 
     if (version != (authVersion2 ? 0x02 : 0x01) || data[3] != data[6])
     {
+        // v1 and v2 are both implemented, and the upgrade above has already run if it was going
+        // to, so anything reaching here is a version this driver has never seen - or a header
+        // pair that disagrees for some reason other than the upgrade.
         Log::error("Security: device wants protocol v%u, which is not implemented", version);
 
         authLastSent = 0;

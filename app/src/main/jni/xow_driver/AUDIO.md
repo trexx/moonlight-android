@@ -340,6 +340,32 @@ interface 2 alt 1  class ff sub 47 proto d0 | ep 03 bulk 64      | ep 83 bulk 64
 gives 228 bytes out and 64 in; this pad offers 228 both ways. Alternate 0 carries no endpoints and
 is the idle setting to switch away from.
 
+**A second pad shows the addresses are not fixed.** An Xbox Elite Series 2 (`045e:0b00`) cabled to
+the Shield TV enumerates the same three sub-devices with every endpoint address one higher:
+
+```
+interface 0 alt 0  class ff sub 47 proto d0 | ep 02 intr 64 @4ms | ep 82 intr 64 @4ms
+interface 0 alt 1  class ff sub 47 proto d0 | ep 02 intr 64 @4ms | ep 82 intr 64 @2ms
+interface 1 alt 0  class ff sub 47 proto d0                              (no endpoints)
+interface 1 alt 1  class ff sub 47 proto d0 | ep 03 ISOC 228 @1ms | ep 83 ISOC 64 @1ms
+interface 2 alt 0  class ff sub 47 proto d0
+interface 2 alt 1  class ff sub 47 proto d0 | ep 04 bulk 64      | ep 84 bulk 64
+```
+
+This pad matches the specification more closely than `02dd` does: 228 out and 64 in on the audio
+interface is what 2.2.12 states, and `02dd`'s 228 both ways is the outlier. It also offers a second
+alternate on interface 0 that polls IN at 2 ms rather than 4 - unexplored, and interesting on a
+latency-first client.
+
+**Not fixed here, and it breaks the cabled path outright.** `usb_wired.h` hardcodes `02dd`'s
+addresses, so on the Elite the driver writes GIP to endpoint `0x01`, which that pad does not have:
+`LIBUSB_ERROR_IO` on the first transfer, before a single GIP byte moves. Input dies with it,
+because Java has already force-detached the kernel driver from interface 0 and the native side then
+cannot drive it. Worse if it had got further - the hardcoded `AUDIO_ENDPOINT_OUT = 0x02` is, on this
+pad, the *GIP interrupt* endpoint, so audio would have been submitted as isochronous transfers onto
+the endpoint carrying input. The addresses have to be read from the descriptors; that is its own
+branch, and it needs both pads to prove no regression on `02dd`.
+
 The three interfaces are the three sub-devices of Table 1 - primary, 3.5 mm audio, other - so the
 sub-device model is not an abstraction here, it is visible in the hardware. **This pad has audio,
 and it is laid out as documented.** Any remaining doubt about whether controller audio is possible
@@ -428,6 +454,26 @@ when the headset is plugged in.
 **Two things this validates in the current driver.** Windows does metadata request, metadata,
 Set Device State: START, LED - which is the order this driver was corrected to, so we now match the
 real host. Its LED brightness is `0x14`, the same value xow uses.
+
+**One thing it nearly misled about, recorded because the misreading cost a wrong fix.** There is no
+`<-- METADATA dev=3` line in that block: Windows requests metadata and then sends `SET_STATE STOP`
+93 ms later regardless. Read together with 2.2.11 - *"if the host stalls after metadata, audio
+devices SHOULD not resend hello ... the device SHOULD wait for the host to take the next action"* -
+that reads as "an audio sub-device does not answer metadata, so drive it from the announce instead".
+
+**It is wrong.** An Elite Series 2's audio sub-device answers within 16 ms, every time. What the
+capture actually shows is a host that does not *wait* for the answer, which is a different claim.
+The reason this driver saw nothing was its own: the reply is 110 bytes, fits the Command class MTU
+and so arrives unfragmented, and `handlePacket()` dispatched metadata only from the chunked path.
+It was acknowledged and dropped, so the pad considered the exchange finished and waited - which is
+exactly the stall 2.2.11 describes, arrived at from the other end.
+
+The fix was one branch in the dispatch chain. The fix the capture argued for - synthesising STOP
+and a format proposal from the announce, with the format pair hardcoded because no metadata would
+ever supply it - would have been the opposite, and would have been wrong. Diagnosis-first is what
+separated them: a debug build's accessory log showed `id=2 cmd=04 ty=3 len=110` arriving, with no
+chunk bits set, and that single line settled it. That discipline is recorded further up this file
+as what found the handshake; it earned its keep twice.
 
 **Two things it corrects in what shipped.** The format pair is `in=0x09, out=0x10`, not the
 `0x10/0x10` hardcoded here; the host takes the device's first advertised pair. And Audio Control:
