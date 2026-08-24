@@ -140,6 +140,39 @@ public class UsbDriverService extends Service implements UsbDriverListener {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Ordering is the whole of this method. The pad must leave {@link PadAudioSink} first, so
+     * the stream's audio goes back to the TV and nothing queues into a device that is gone; that
+     * call also joins the pad's sender thread. Only then may the driver forget the sub-device,
+     * because its id is what that thread addresses audio to.
+     *
+     * <p>Off the calling thread for the same reason {@code Game.togglePadAudio} is: this arrives
+     * on the driver's read thread, which is still carrying this pad's input, and the join can sit
+     * inside a USB write with a one-second timeout.
+     */
+    @Override
+    public void audioDeviceRemoved(AbstractController controller) {
+        if (!(controller instanceof GipController gip)) {
+            return;
+        }
+
+        final PadAudioSink sink = padAudioSink;
+
+        new Thread(() -> {
+            if (sink != null) {
+                sink.disable(gip);
+            }
+
+            gip.forgetAudioDevice();
+        }, "pad-audio-teardown").start();
+
+        if (listener != null) {
+            listener.audioDeviceRemoved(controller);
+        }
+    }
+
     /** {@inheritDoc} */
     @Override
     public void deviceAdded(AbstractController controller) {

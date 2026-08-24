@@ -104,6 +104,16 @@ Java_com_limelight_binding_input_driver_GipController_hasAudioSupportNative(JNIE
 }
 
 extern "C"
+JNIEXPORT void JNICALL
+Java_com_limelight_binding_input_driver_GipController_forgetAudioDeviceNative(JNIEnv *env,
+                                                                             jobject thiz,
+                                                                             jlong handle) {
+    auto *controller = (Controller *) handle;
+
+    controller->forgetAudioDevice();
+}
+
+extern "C"
 JNIEXPORT jboolean JNICALL
 Java_com_limelight_binding_input_driver_GipController_audioNeedsReplugNative(JNIEnv *env,
                                                                              jobject thiz,

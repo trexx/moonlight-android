@@ -230,8 +230,10 @@ void Controller::registerJavaContext(JavaVM *vm, JNIEnv *env, jobject thiz) {
 
     this->updateInputMethod = env->GetMethodID(this->jclazz, "updateInput", "(ISSSSSS)V");
     this->updateBatteryMethod = env->GetMethodID(this->jclazz, "updateBattery", "(BBB)V");
+    this->audioDeviceRemovedMethod = env->GetMethodID(this->jclazz, "audioDeviceRemoved", "()V");
 
-    if (this->updateInputMethod == nullptr || this->updateBatteryMethod == nullptr) {
+    if (this->updateInputMethod == nullptr || this->updateBatteryMethod == nullptr ||
+        this->audioDeviceRemovedMethod == nullptr) {
         Log::error("Failed to resolve controller callbacks");
     }
 }
@@ -319,6 +321,42 @@ void Controller::statusReceived(uint8_t id, const StatusData *status)
     const std::string charges[] = { "not charging", "charging", "charge error", "reserved" };
 
     uint8_t type = status->batteryType;
+    uint8_t rawPower = (status->connectionInfo >> 2) & 0x03;
+
+    /*
+     * A sub-device's status is about the sub-device, not the pad.
+     *
+     * The id was accepted and then ignored here, so a 3.5 mm audio device reporting its own
+     * removal was read as the *controller's* battery and power state. Unplugging a headset
+     * therefore logged "Battery: absent, running on external power" and "Controller is powering
+     * off or resetting" about a pad that was doing neither - and worse, pushed both to the host,
+     * which was told the pad had no battery and was shutting down. It self-corrected on the pad's
+     * next real status, but only because the values then differed enough to pass the change filter
+     * below.
+     *
+     * MS-GIPUSB Table 30 makes the removal unambiguous: bits 7:6 are Power level and 00 is
+     * "Device powering off/resetting". The whole status byte reads zero here, which 3.1.5.5.2 says
+     * "is not valid except for a USB-only device without batteries that is powering off" - an
+     * exact description of an audio sub-device on a headphone jack.
+     *
+     * Note this is not xone's reading, which takes bit 7 alone as a connected flag. That gets the
+     * common cases right because Full Power is 10, but the field is two bits wide.
+     */
+    if (id != DEVICE_ID_CONTROLLER)
+    {
+        // exchange() rather than a load-then-store, so two reports arriving together cannot both
+        // get through and start a teardown each
+        if (rawPower == POWER_LEVEL_OFF && id == audioDeviceId &&
+            !audioRemovalNotified.exchange(true))
+        {
+            Log::info("Audio device %u reports powering off; forgetting it", (unsigned)id);
+
+            notifyAudioDeviceRemoved();
+        }
+
+        return;
+    }
+
     uint8_t level = status->batteryLevel;
 
     // MS-GIPUSB Table 30 packs four fields into this byte: battery level in 1:0, battery type in
@@ -326,7 +364,7 @@ void Controller::statusReceived(uint8_t id, const StatusData *status)
     // lumps the top nibble into connectionInfo, which is why the charge state looked absent - the
     // protocol does report it, this driver was simply throwing it away.
     uint8_t charge = status->connectionInfo & 0x03;
-    uint8_t power = (status->connectionInfo >> 2) & 0x03;
+    uint8_t power = rawPower;
 
     // Nothing has moved since the last report
     if (type == batteryType && level == batteryLevel &&
@@ -660,6 +698,10 @@ void Controller::identifyReceived(uint8_t id, const IdentifyData *identify,
         audioDeviceId = id;
         audioDeviceFormats = parsed;
 
+        // A jack re-inserted after a removal adopts a device again, so the latch must not still be
+        // set from the last one or its removal would go unreported
+        audioRemovalNotified.store(false);
+
         /*
          * Silenced on discovery, because we may not be the first host to have configured it.
          *
@@ -848,6 +890,42 @@ void Controller::audioStats(uint32_t out[6]) const
     // Only a transport can see these: an isochronous packet reports its own status, where a GIP
     // message on the main link simply succeeds or fails as a whole.
     out[5] = audioTransport != nullptr ? audioTransport->underruns() : 0;
+}
+
+/*
+ * One JNI void call on the read thread, which is what keeps this off the blocking path: the
+ * teardown it triggers joins a sender thread that can sit in a USB write for a second, and this
+ * thread is still carrying the pad's input reports while that happens.
+ */
+void Controller::notifyAudioDeviceRemoved()
+{
+    if (jthis == nullptr || audioDeviceRemovedMethod == nullptr)
+    {
+        return;
+    }
+
+    JNIEnv *env = getAttachedEnv(jvm);
+
+    if (env == nullptr)
+    {
+        return;
+    }
+
+    env->CallVoidMethod(jthis, audioDeviceRemovedMethod);
+}
+
+void Controller::forgetAudioDevice()
+{
+    audioDeviceId = 0;
+    audioDeviceFormats.clear();
+    audioDeviceAnnounced = false;
+
+    // Released last, so a report arriving mid-teardown finds audioDeviceId already zero and stops
+    // on that test rather than starting a second teardown
+    audioRemovalNotified.store(false);
+
+    // Cleared too, or a jack re-inserted later would inherit the old device's rate as its baseline
+    audioFlowRate.store(0, std::memory_order_relaxed);
 }
 
 bool Controller::supportsAudioOut() const

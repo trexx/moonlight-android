@@ -86,6 +86,16 @@ public abstract class AbstractController {
         }
     }
 
+    /**
+     * Reports that this controller's audio sub-device has gone away — on a pad with a headphone
+     * jack, that the headset was pulled.
+     *
+     * @see UsbDriverListener#audioDeviceRemoved
+     */
+    protected void reportAudioDeviceRemoved() {
+        listener.audioDeviceRemoved(this);
+    }
+
     /** Pushes the current button, stick and trigger state to the listener. */
     protected void reportInput() {
         listener.reportControllerState(deviceId, buttonFlags, leftStickX, leftStickY,

@@ -45,4 +45,16 @@ public interface UsbDriverListener {
 
     /** The controller is initialised and about to start reporting input. */
     void deviceAdded(AbstractController controller);
+
+    /**
+     * The controller's audio sub-device has gone — a headset pulled from its jack.
+     *
+     * <p>The controller itself is still present and still reporting input; only its audio device
+     * is gone. Implementations that route stream audio to it must stop, or the pad keeps its place
+     * in the sink and the stream's audio never returns to the TV.
+     *
+     * <p>Defaulted to nothing because only {@link UsbDriverService} is positioned to act on it —
+     * everyone else on the chain sees controllers, not audio targets.
+     */
+    default void audioDeviceRemoved(AbstractController controller) {}
 }
