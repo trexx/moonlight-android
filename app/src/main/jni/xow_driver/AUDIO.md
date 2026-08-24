@@ -357,14 +357,20 @@ interface is what 2.2.12 states, and `02dd`'s 228 both ways is the outlier. It a
 alternate on interface 0 that polls IN at 2 ms rather than 4 - unexplored, and interesting on a
 latency-first client.
 
-**Not fixed here, and it breaks the cabled path outright.** `usb_wired.h` hardcodes `02dd`'s
-addresses, so on the Elite the driver writes GIP to endpoint `0x01`, which that pad does not have:
-`LIBUSB_ERROR_IO` on the first transfer, before a single GIP byte moves. Input dies with it,
-because Java has already force-detached the kernel driver from interface 0 and the native side then
-cannot drive it. Worse if it had got further - the hardcoded `AUDIO_ENDPOINT_OUT = 0x02` is, on this
+**This broke the cabled path outright, and is now fixed.** `usb_wired.h` hardcoded `02dd`'s
+addresses, so on the Elite the driver wrote GIP to endpoint `0x01`, which that pad does not have:
+`LIBUSB_ERROR_IO` on the first transfer, before a single GIP byte moved. Input died with it,
+because Java had already force-detached the kernel driver from interface 0 and the native side then
+could not drive it. Worse had it got further - the hardcoded `AUDIO_ENDPOINT_OUT = 0x02` is, on this
 pad, the *GIP interrupt* endpoint, so audio would have been submitted as isochronous transfers onto
-the endpoint carrying input. The addresses have to be read from the descriptors; that is its own
-branch, and it needs both pads to prove no regression on `02dd`.
+the endpoint carrying input.
+
+`resolveEndpoints()` now reads both pairs from the active configuration descriptor at open, matched
+on the descriptor's own interface number and alternate setting rather than array position, and
+refuses a device that yields no interrupt pair rather than claiming one it cannot drive. Verified on
+both pads. **The lesson generalises past the addresses**: `02dd` was treated as the shape of a GIP
+pad, and it is not even the specification-conforming one. Anything else read off a single pad and
+written down as a constant here deserves the same suspicion.
 
 The three interfaces are the three sub-devices of Table 1 - primary, 3.5 mm audio, other - so the
 sub-device model is not an abstraction here, it is visible in the hardware. **This pad has audio,
