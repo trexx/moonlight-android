@@ -515,6 +515,12 @@ something other than the Xbox button.
       bytes visibly ran on into the elements printed after it — so the offsets or item widths in
       `IdentifyData` are wrong for at least that pad. Until that is settled an `audio formats`
       line may be reading the wrong bytes entirely, and a 48 kHz answer cannot be believed.
+
+      *Corroborating but not closing, 2026-08-24:* the Elite Series 2 parses cleanly with the
+      corrected widths — `Metadata commands: 6 item(s): 20(len 47) 0c(len 17) 09(len 60) 4d(len 64)
+      1e(len 64) 0e(len 9)`, plausible lengths throughout, and `firmware versions: 05 00 17 00`
+      matching the 5.23 the announce reports. That is a different pad and a different run from the
+      one that misparsed, so it does not settle the original complaint.
 - [ ] **No `Malformed chunk`, `Truncated chunk` or `Chunk overruns` lines** in normal operation.
       Occasional ones during pairing are worth noting rather than ignoring.
 - [x] **Accessory clients are reported rather than dropped in silence.** Debug builds log every
@@ -537,7 +543,8 @@ something other than the Xbox button.
 
 | Pad | Firmware | `audio formats` bytes | Notes |
 |---|---|---|---|
-| *(fill in)* | | | |
+| Xbox Elite Series 2 `045e:0b00`, device 0 | 5.23.6.0 | *(none declared)* | A pad declares no audio formats of its own and is not supposed to — audio is a separate GIP device with its own metadata |
+| its 3.5 mm audio sub-device, id 2, `045e:0b01` | 5.23 | `09 10 09 09` | 48 kHz stereo render (`0x10`) in the first pair, so no resampling. Interface GUID `bc25d1a3-c24e-4992-9dda-ef4f123ef5dc` (IHeadset). Metadata is 110 bytes and arrives **unfragmented** — see section 10 |
 
 ---
 
@@ -549,9 +556,11 @@ here because §2.2.1.4 makes it the gate on everything else: *"GIP supports enum
 sub-devices after the primary device has completed the Security Handshake successfully."* No
 handshake, no sub-devices, and therefore no headphone audio.
 
-Only **v1** (RSA, commands `0x01`–`0x08`) is implemented. The data header's version byte selects,
-and a device asking for v2 (ECDH P-256, `0x21`–`0x27`) is logged and left unauthenticated rather
-than failed obscurely.
+**Both versions are implemented.** v1 (RSA, commands `0x01`–`0x08`) and v2 (ECDH P-256,
+`0x21`–`0x27`). The host always opens with a v1 hello; a device that wants v2 answers stating so in
+its data header, and the exchange restarts from a fresh transcript. v2 is unauthenticated — the
+certificate is requested and hashed in, but its key is never used — and so, in practice, is v1,
+where the certificate is never validated either.
 
 **This runs on every pad connect, whether or not audio is wanted**, so the regression checks matter
 far more than the feature check. Two connect-loops were inflicted on a real pad while getting the
@@ -582,28 +591,54 @@ its light flashing, with the add/remove device sounds looping.
       state and no slot exhaustion. Each connect runs a fresh exchange.
 - [ ] **Four pads on one adapter** authenticate independently and all four keep working. Each has
       its own sequence pool; a shared counter would show up here and nowhere else.
-- [ ] **A v2 pad completes the ECDH exchange.** Implemented on `gip/security-v2` and **never run
-      against hardware** — no device asking for v2 has been available. Expect `device wants
-      protocol v2, restarting the exchange`, then the same `Security: command 0x2X` lines the v1
-      exchange produces at 0x0X, then `handshake complete`.
+- [x] **A v2 pad completes the ECDH exchange.** *Verified on the Shield TV, 2026-08-24, with an
+      **Xbox Elite Wireless Controller Series 2** (`045e:0b00`, firmware 5.23.6.0, hardware 5.6) on
+      adapter `045e:02fe`.* Reproduced across four connects. The pad announces security version 1.0
+      in its hello and then asks for v2 anyway, which is why the announce cannot be used to
+      discriminate:
 
-      Sizes to check against, since they are xone's structures rather than anything observed here,
-      and a wrong request length is the most likely failure:
+      ```
+      Security: command 0x22, error 0x00, 90 bytes    ← v1 hello answered with a v2 reply
+      Security: device wants protocol v2, restarting the exchange
+      Security: command 0x22, 182 bytes
+      Security: command 0x23, 778 bytes
+      Security: command 0x24, 138 bytes
+      Security: command 0x27, 74 bytes
+      Security: handshake complete
+      ```
 
-      | Message | Bytes |
-      |---|---|
-      | `CLIENT_HELLO` (0x22) | 172 |
-      | `CLIENT_CERTIFICATE` (0x23) | 768 |
-      | `CLIENT_PUBKEY` (0x24) | 128 |
-      | `CLIENT_FINISH` (0x27) | 64 |
+      **The request lengths taken from xone's structures were all correct**, which is worth
+      recording because they were flagged here as the most likely thing to be wrong. Payload sizes
+      answered exactly as predicted; the byte counts logged above are those plus the handshake and
+      data headers.
 
-- [ ] **A v1 pad still authenticates with the v2 branch merged.** The upgrade path shares
+      | Message | Payload predicted | Answered |
+      |---|---|---|
+      | `CLIENT_HELLO` (0x22) | 172 | 172 |
+      | `CLIENT_CERTIFICATE` (0x23) | 768 | 768 |
+      | `CLIENT_PUBKEY` (0x24) | 128 | 128 |
+      | `CLIENT_FINISH` (0x27) | 64 | 64 |
+
+- [x] **A v1 pad still authenticates with the v2 branch merged.** The upgrade path shares
       `sendAuthPacket` and the version check with v1, so this is the regression that matters more
-      than the feature. *Not yet confirmed — the v2 build is installed on the Shield but the v1
-      handshake has not been re-run on it.*
-- [ ] **The transcript is reset on upgrade.** If it is not, everything succeeds until the final
-      finish messages, which then disagree — so a failure that reaches `CLIENT_FINISH` and stops
-      points here first.
+      than the feature. *Verified on the Shield TV, 2026-08-24, Xbox One pad `045e:02dd` on adapter
+      `045e:02fe`, on the same build that completes the v2 exchange.*
+
+      ```
+      Device 0 announced, vendor 045e product 02dd
+      Security: command 0x02, error 0x00,  90 bytes    ← v1, no upgrade triggered
+      Security: command 0x03, error 0x00, 825 bytes
+      Security: command 0x08, error 0x00,  74 bytes
+      Security: handshake complete
+      Device 3 announced, vendor 045e product 02e4
+      ```
+
+      Byte counts match the v1 baseline recorded above exactly (90 / 825 / 74), the version check
+      never fired, and headphone audio and input both worked on that pad afterwards.
+- [x] **The transcript is reset on upgrade.** *Confirmed by implication on the same runs.* If it
+      were not, everything would succeed until the final finish messages, which would then
+      disagree — and the device accepted `CLIENT_FINISH` rather than stopping there. That remains
+      the first place to look for a v2 handshake that reaches `CLIENT_FINISH` and halts.
 - [ ] **Timing on a cold boot.** The handshake is sent at the end of `startDevice()`, behind the
       metadata response with a 500 ms fallback. Confirm a pad powered on *before* the adapter, and
       one powered on long after, both authenticate.
@@ -622,14 +657,43 @@ Off until switched on from the in-game menu, **Controller headphone audio**, whi
 when an adapter is running, a pad is paired, and the stream's audio is 48 kHz stereo. Up to two
 pads at once; while any pad is on, the TV gets nothing.
 
-**This works.** An Xbox One pad (PID `02dd`) over adapter `045e:02fe` on the Shield TV plays the
-stream's audio through its headphone jack, and the TV falls silent while it does. It took the
-security handshake in §9 to get there — audio is a sub-device, and sub-devices do not appear until
-the pad has authenticated. Details in `app/src/main/jni/xow_driver/AUDIO.md`.
+**This works**, on two pads now. An Xbox One pad (PID `02dd`) and an **Xbox Elite Series 2**
+(PID `0b00`), both over adapter `045e:02fe` on the Shield TV, play the stream's audio through their
+headphone jacks, and the TV falls silent while they do. It took the security handshake in §9 to get
+there — audio is a sub-device, and sub-devices do not appear until the pad has authenticated.
+Details in `app/src/main/jni/xow_driver/AUDIO.md`.
+
+**The Elite took one more fix, and it is the reason to test a second pad at all.** Its audio
+sub-device answers metadata in 110 bytes, which fits the Command data class MTU and so arrives
+*unfragmented*. `handlePacket()` only dispatched the fragmented form, so the reply was acknowledged
+and then dropped, the sub-device was never adopted, and the menu read
+`Unavailable (no headset detected)` with the headset plugged in and `Device 2 announced` in the log.
+Fragmentation follows size, not message type (2.2.10.4); the two pads sit either side of the MTU
+and nothing else about them differs here.
 
 The first two items are the ones that decide whether this ships at all, and **the second is still
 open** — the feature works but has not been shown to be worth using.
 
+- [x] **A second pad's audio sub-device is reached**, not just the one the path was built on.
+      *Xbox Elite Series 2 on the Shield TV, 2026-08-24.* The full sequence, which matches the
+      Windows capture in `AUDIO.md` step for step:
+
+      ```
+      Security: handshake complete
+      Device 2 announced, vendor 045e product 0b01     ← 3.5 mm audio, spec Table 1's own example
+      Metadata from device 2: 94 bytes                 ← 110 on the wire, unfragmented
+      Audio device 2 offers 2 format pair(s), first 09/10, announced yes
+      Audio: proposed format 09/10 to device 2, awaiting its reply
+      Audio: device confirmed format 09/10, starting it
+      Audio: device volume, speaker 50% (writable), balance 50, mic 100%, flags 0x84
+      Audio: device reported volume, streaming
+      ```
+
+      Two things worth carrying forward. The audio device announces on **expansion index 2** while
+      carrying PID `0b01`, which [MS-GIPUSB] Table 1 assigns to sub-device *1* of this exact pad —
+      so the announced index is what to address, never the PID's implied one. And it announces only
+      when a headset is inserted: `probeSubDevices()` at handshake completion finds nothing on
+      index 2 until then, which is hot-swap working as §1.2 describes rather than a fault.
 - [x] **No pad enabled: nothing changes.** Audio behaves exactly as before, no new logging, and
       the menu entry is the only visible difference. This is what makes the feature safe to have.
       *An empty target list is the normal path and is checked with one volatile read per audio
@@ -646,6 +710,16 @@ open** — the feature works but has not been shown to be worth using.
       Sender held 125.04 packets/s against an expected 125.00 over 102 s.*
 - [ ] **Two pads at once**, both correct. A third shows "Off (two controllers already)" and
       refuses rather than silently doing nothing.
+- [!] **A pad's number in this menu is its adapter slot, and slots are reused.** The menu numbers
+      by list position over `XboxWirelessDongle.getControllers()`, which sorts by slot, and
+      `associateClient()` hands out the *lowest free* slot rather than the next one. So a pad that
+      drops off and returns can come back under a different number, and a pad connecting after it
+      can take the number it had. *Seen on the Shield, 2026-08-24: cabling the Elite took it off
+      the adapter and freed slot 1, an Xbox One pad then took slot 1, and the Elite returned as 2.*
+
+      Cosmetic in this menu, but the same slot is namespaced into the controller's device ID
+      (`id + 0x045e0000`), so anything keyed on that identity inherits it. Stable per-pad numbering
+      would have to key off the MAC the dongle already keeps in `clientAddresses`. Not attempted.
 - [x] **Toggling mid-game** moves audio between the TV and a pad promptly, both directions,
       repeatedly. The toggle runs off the main thread — watch for any UI stall regardless, since
       disabling joins a sender thread that may be inside a USB write with a one-second timeout.
@@ -721,6 +795,28 @@ open** — the feature works but has not been shown to be worth using.
       USB bus - the read fails with `LIBUSB_ERROR_NO_DEVICE`, Android re-attaches it, and the
       permission prompt loops. Seven rounds were inflicted on a real device before this was
       understood. xone's `usb_reset_device()` is the same trap by a different route.
+- [!] **A cabled Elite Series 2 is not driven at all, and takes input down with it.** *Reproduced
+      on the Shield TV, 2026-08-24, twice — once racing the attach broadcast and once from a
+      settled bus, so it is the claim itself and not a timing race.*
+
+      ```
+      Wired: device opened
+      Wired: interrupt write failed: LIBUSB_ERROR_IO
+      Failed to request metadata
+      Wired: interrupt read failed: LIBUSB_ERROR_IO
+      Wired: device is gone; stopping audio
+      ```
+
+      Every transfer fails in the same millisecond as the open. `usb_wired.h` hardcodes the Xbox
+      One pad's endpoint addresses and the Elite's are one higher throughout — GIP on `0x02`/`0x82`
+      rather than `0x01`/`0x81`, audio on `0x03`/`0x83` rather than `0x02`/`0x82`. Full descriptor
+      dump in `AUDIO.md`. Input dies because Java force-detaches the kernel driver from interface 0
+      before the native side finds it cannot drive it.
+
+      **Not fixed on this branch** — the addresses must come from the descriptors, and that needs a
+      regression pass on the `02dd` pad the path was built against. Until then, leave
+      **Controller headphone audio over USB** off for this pad; with it off the claim never happens
+      and Android drives the pad normally.
 - [x] **Audio reaches a cabled pad's headphones**, over isochronous transfers on interface 1 alt 1.
       *Xbox One pad cabled to the Shield TV: 21900 packets over 87 s - 251.7/s against an expected
       250.0 - with 0 dropped, 0 send failures and **0 underruns**. Volume works too, through the
@@ -1698,7 +1794,7 @@ device is ever added.
 | §7 battery, extended status | Xbox Series X\|S pad, plus a play-and-charge kit or USB cable |
 | §7 JNI input path | Four pads on one adapter, for a sustained session |
 | §8 metadata | Any adapter pad; ideally several generations, since what they report is the point |
-| §9 v2 security | A pad that uses the ECDH handshake — none has been available; `gip/security-v2` is unverified without one |
+| §9 v2 security | An Xbox Elite Series 2 — it asks for v2, and the exchange is verified against it |
 | §9 multi-pad | Four pads on one adapter, to confirm per-pad sequence pools |
 | §10 pad audio | Two adapter pads with integrated 3.5 mm jacks, and wired headphones for each |
 | §11 Steam type | A Valve Steam Controller, and a HORIPAD for Steam for the negative case |

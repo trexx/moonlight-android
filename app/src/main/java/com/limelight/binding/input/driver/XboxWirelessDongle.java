@@ -150,8 +150,17 @@ public class XboxWirelessDongle {
     }
 
     /**
-     * @return the controllers currently paired to this adapter, ordered by slot so the first is
-     *         the first that paired. Used by the in-game audio menu, which needs stable names.
+     * @return the controllers currently paired to this adapter, ordered by adapter slot.
+     *
+     * <p><b>Slot order is not pairing order.</b> The native side hands out the lowest free slot
+     * rather than the next one — {@code Dongle::associateClient} keys off a free-slot bitmask and
+     * never looks at the address — so a slot vacated by a pad going away is handed to whichever
+     * pad connects next. A pad that drops off and returns can therefore come back under a
+     * different number, and one connecting after it can take the number it had.
+     *
+     * <p>The in-game audio menu numbers pads by their position in this list, so it inherits that.
+     * Stable per-pad names would have to key off the MAC address the driver already tracks
+     * alongside each slot, which nothing does today.
      */
     public List<GipController> getControllers() {
         var found = new ArrayList<GipController>();
