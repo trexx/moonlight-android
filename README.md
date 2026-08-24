@@ -177,10 +177,18 @@ the Java side.
 
 The migration did cost one regression, since fixed: Mbed TLS 3.5.0 made an explicit
 `mbedtls_cipher_set_padding_mode()` call mandatory for CBC, and `moonlight-common-c` never
-makes it, so every audio packet failed to decrypt — perfect video, no sound. Audio is the
+made it, so every audio packet failed to decrypt — perfect video, no sound. Audio is the
 only user of AES-CBC; video, control and RTSP are AES-GCM and were unaffected, which is why
-the symptom looked like an audio bug rather than a crypto one. The fix is carried as a
-patch against the submodule (see [Carried patches](#carried-patches)).
+the symptom looked like an audio bug rather than a crypto one. It was carried as a patch
+against the submodule until upstream `518b244` rewrote that file onto Mbed TLS's PSA API,
+which asks for `PSA_ALG_CBC_PKCS7` by name and needs no patch to do it.
+
+That rewrite is what the crypto now runs on. It also takes a full-payload `memcpy`/`memmove`
+off the video receive thread once per packet: the legacy path had to shuffle the GCM tag and
+ciphertext around in place, because `mbedtls_cipher_auth_decrypt_ext()` wants the tag after
+the ciphertext and GameStream puts it before, while `psa_aead_verify()` simply takes the tag
+as its own argument. The trimmed config has to enable `MBEDTLS_PSA_CRYPTO_C` and, because PSA
+keeps key slots in globals that each stream thread touches on its own, `MBEDTLS_THREADING_C`.
 
 ### Stream encryption is now a setting
 
@@ -370,11 +378,10 @@ applies is a hard error rather than a warning. The cost is that a patched submod
 as dirty for as long as the patch is carried; `git submodule update --force` resets it and
 the next build re-applies.
 
-Currently carried, all against `moonlight-common-c`: the Mbed TLS 3.x CBC padding and IV
-fix, the decrypt-failure counters, an IDR request when the FEC queue reports a loss on a
-client running without reference frame invalidation, atomics for `ConnectionInterrupted`
-and the blocking queue's size, the opt-in intra refresh capability, and the
-`LI_CTYPE_STEAM` controller type, which upstream added after the commit this fork pins.
+Currently carried, all against `moonlight-common-c`: the decrypt-failure counters, an IDR
+request when the FEC queue reports a loss on a client running without reference frame
+invalidation, atomics for `ConnectionInterrupted` and the blocking queue's size, and the
+opt-in intra refresh capability.
 
 The IDR one matters most here. Without it a frame the FEC queue declares unrecoverable
 freezes the picture for 120 frames — 2 seconds at 60 FPS — on any client that streams without
