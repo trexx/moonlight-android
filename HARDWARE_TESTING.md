@@ -710,16 +710,53 @@ open** — the feature works but has not been shown to be worth using.
       Sender held 125.04 packets/s against an expected 125.00 over 102 s.*
 - [ ] **Two pads at once**, both correct. A third shows "Off (two controllers already)" and
       refuses rather than silently doing nothing.
-- [!] **A pad's number in this menu is its adapter slot, and slots are reused.** The menu numbers
-      by list position over `XboxWirelessDongle.getControllers()`, which sorts by slot, and
-      `associateClient()` hands out the *lowest free* slot rather than the next one. So a pad that
-      drops off and returns can come back under a different number, and a pad connecting after it
-      can take the number it had. *Seen on the Shield, 2026-08-24: cabling the Elite took it off
-      the adapter and freed slot 1, an Xbox One pad then took slot 1, and the Elite returned as 2.*
+- [x] **A pad keeps its number across a disconnect.** *Verified on the Shield TV, 2026-08-24.*
+      Numbering was the adapter slot, and `Mt76::associateClient()` hands out the *lowest free* one
+      — so cabling a pad freed slot 1, a second pad took it, and the first came back as 2. Pads are
+      now numbered by their wireless address, assigned on first sight and kept for the life of the
+      adapter.
 
-      Cosmetic in this menu, but the same slot is namespaced into the controller's device ID
-      (`id + 0x045e0000`), so anything keyed on that identity inherits it. Stable per-pad numbering
-      would have to key off the MAC the dongle already keeps in `clientAddresses`. Not attempted.
+      Reached further than the menu label: the number is namespaced into the controller ID, which
+      is the key `ControllerHandler` stores a pad's context under, so a returning pad now keeps its
+      player number instead of being treated as a new controller.
+
+      To re-test: connect A, connect B, power A off, power A on. A must return to its original
+      number rather than taking B's.
+
+      **A pad that leaves for good does not strand its player slot, and this is the question that
+      will be asked again.** Three different numbers are in play and only one of them is sticky:
+
+      | Number | Assigned by | Released on removal? |
+      |---|---|---|
+      | Player number, sent to the host | `ControllerHandler.assignControllerNumberIfNeeded()` | **Yes** — `releaseControllerNumber()` clears the bit, and the next pad to send input takes the lowest free one |
+      | This menu's label | `GameMenu.showPadAudioMenu()`, positional | N/A — a departed pad leaves no hole |
+      | Pad identity | `XboxWirelessDongle.numberFor()` | **No, deliberately** — releasing it is what would break reconnect stability |
+- [x] **A headset pulled from a pad reverts the menu**, rather than leaving it offering `Off` for an
+      empty jack. *Verified on the Shield TV, 2026-08-24, both pads, with audio off, with audio on,
+      and across a replug.*
+
+      The pad reports it — a Status message addressed to the *audio sub-device*, with Power level
+      `00` per Table 30. `statusReceived()` took the device id and never read it, so the report was
+      applied to the primary pad. Two symptoms, and the second was never reported because it
+      self-corrected:
+
+      ```
+      Accessory packet: #5 id=3 cmd=03 ty=2 len=4 size=8
+      Battery: absent, running on external power     ← the pad's, and wrong
+      Controller is powering off or resetting        ← the pad's, and wrong
+      ```
+
+      Those two were pushed to the host as the pad's battery state. **So check battery reporting on
+      the host while plugging and unplugging a headset** — it must not flicker to absent. Expect
+      `Audio device N reports powering off; forgetting it` and no battery line at all.
+- [x] **A headset pulled mid-stream returns audio to the TV** without stalling the stream or
+      leaking the sender thread. *Verified on the Shield, 2026-08-24: `Audio session: 535 packets
+      sent, 1536 bytes dropped, 0 send failures, 0 underruns` then `Audio disabled for controller`,
+      on the teardown thread rather than the driver's read thread.*
+
+      The single dropped buffer is the one in flight when the jack was pulled, and is expected.
+      This is a near-rehearsal of the pad-powering-off row below, which is still open — the
+      difference is that there the whole pad goes away, not just its audio device.
 - [x] **Toggling mid-game** moves audio between the TV and a pad promptly, both directions,
       repeatedly. The toggle runs off the main thread — watch for any UI stall regardless, since
       disabling joins a sender thread that may be inside a USB write with a one-second timeout.
@@ -795,28 +832,30 @@ open** — the feature works but has not been shown to be worth using.
       USB bus - the read fails with `LIBUSB_ERROR_NO_DEVICE`, Android re-attaches it, and the
       permission prompt loops. Seven rounds were inflicted on a real device before this was
       understood. xone's `usb_reset_device()` is the same trap by a different route.
-- [!] **A cabled Elite Series 2 is not driven at all, and takes input down with it.** *Reproduced
-      on the Shield TV, 2026-08-24, twice — once racing the attach broadcast and once from a
-      settled bus, so it is the claim itself and not a timing race.*
+- [x] **A cabled pad's endpoints are read from it, not assumed.** *Both pads verified on the
+      Shield TV, 2026-08-24.* An Elite Series 2 could not be driven over USB at all before this and
+      took input down with it: every transfer failed `LIBUSB_ERROR_IO` in the same millisecond as
+      the open, because the addresses were hardcoded to the Xbox One pad's and the Elite's are one
+      higher throughout.
 
-      ```
-      Wired: device opened
-      Wired: interrupt write failed: LIBUSB_ERROR_IO
-      Failed to request metadata
-      Wired: interrupt read failed: LIBUSB_ERROR_IO
-      Wired: device is gone; stopping audio
-      ```
+      | Interface | Xbox One `02dd` | Elite Series 2 `0b00` |
+      |---|---|---|
+      | 0 — GIP | `01`/`81` intr | `02`/`82` intr |
+      | 1 alt 1 — audio | `02`/`82` ISOC, 228 both ways | `03`/`83` ISOC, 228 out / **64 in** |
+      | 2 alt 1 | `03`/`83` bulk | `04`/`84` bulk |
 
-      Every transfer fails in the same millisecond as the open. `usb_wired.h` hardcodes the Xbox
-      One pad's endpoint addresses and the Elite's are one higher throughout — GIP on `0x02`/`0x82`
-      rather than `0x01`/`0x81`, audio on `0x03`/`0x83` rather than `0x02`/`0x82`. Full descriptor
-      dump in `AUDIO.md`. Input dies because Java force-detaches the kernel driver from interface 0
-      before the native side finds it cannot drive it.
+      Confirm the line `Wired: GIP on 02/82, audio on 03/83 (228/64 bytes)` names the pad in front
+      of you. The Elite is the one that matches 2.2.12 — 228 out and 64 in — and `02dd`'s 228 both
+      ways is the outlier, so neither pad is the "normal" one to generalise from.
 
-      **Not fixed on this branch** — the addresses must come from the descriptors, and that needs a
-      regression pass on the `02dd` pad the path was built against. Until then, leave
-      **Controller headphone audio over USB** off for this pad; with it off the claim never happens
-      and Android drives the pad normally.
+      **The old failure mode is worth recognising**, because it looks like a dead pad rather than a
+      driver fault: the claim succeeds, Android's driver has already been detached from interface
+      0, and then nothing drives the pad. A device whose interface 0 yields no interrupt pair is now
+      refused instead, which releases the interface and lets Android take it back — no headphone
+      audio, but input intact.
+- [ ] **A pad whose interface 0 has no interrupt pair is refused, and input still works.** The
+      refusal path above. Neither pad on hand exercises it, so this is unverified rather than
+      passing.
 - [x] **Audio reaches a cabled pad's headphones**, over isochronous transfers on interface 1 alt 1.
       *Xbox One pad cabled to the Shield TV: 21900 packets over 87 s - 251.7/s against an expected
       250.0 - with 0 dropped, 0 send failures and **0 underruns**. Volume works too, through the

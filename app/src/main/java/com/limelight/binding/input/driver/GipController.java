@@ -206,7 +206,30 @@ public class GipController extends AbstractController{
         queueAudioNative(handle, audioData, count);
     }
 
+    /**
+     * Called from the native driver when the audio sub-device reports itself powering off, which
+     * on a pad with a headphone jack means the headset was pulled.
+     *
+     * <p>Only reports it. The unwinding has to happen in a particular order and off this thread —
+     * see {@link UsbDriverListener#audioDeviceRemoved} — because this arrives on the driver's read
+     * thread, which is simultaneously carrying this pad's input.
+     */
+    public void audioDeviceRemoved() {
+        reportAudioDeviceRemoved();
+    }
+
+    /**
+     * Drops the native driver's record of the audio sub-device.
+     *
+     * <p>Must not be called until the pad has left {@code PadAudioSink} and its sender thread has
+     * been joined: the sub-device's id is what that thread addresses audio to.
+     */
+    public void forgetAudioDevice() {
+        forgetAudioDeviceNative(handle);
+    }
+
     native void registerNative(long handle);
+    native void forgetAudioDeviceNative(long handle);
     native boolean setAudioEnabledNative(long handle, boolean enable);
     native int[] audioStatsNative(long handle);
     native boolean setAudioVolumeNative(long handle, int percent);

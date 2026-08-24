@@ -111,6 +111,18 @@ public:
     bool supportsAudioOut() const;
 
     /*
+     * Drops everything remembered about the audio sub-device, so supportsAudioOut() answers no
+     * again and the pad reports itself as having no headset.
+     *
+     * Called from Java rather than from the status handler that notices the removal, and the
+     * ordering is the point: the sub-device's id is what the sender thread addresses its packets
+     * to, so it may only be cleared once that thread has been joined. Java owns that sequence -
+     * it has to leave PadAudioSink first anyway, or the sink keeps the pad in its target list and
+     * the stream's audio never returns to the TV.
+     */
+    void forgetAudioDevice();
+
+    /*
      * Whether this pad's audio will stutter until its cable is pulled.
      *
      * True when the audio sub-device answered its metadata without ever announcing: it was left
@@ -168,6 +180,9 @@ public:
      * a transport with its own receive path runs on its own thread, so it must not go through it.
      */
     void audioFlowRateReported(uint16_t flowRate);
+
+    /* Tells Java the audio sub-device has gone, so it can unwind the sink and then forget it. */
+    void notifyAudioDeviceRemoved();
 
     /*
      * Lets a transport supply the JavaVM before any Java object exists.
@@ -401,6 +416,18 @@ private:
     std::atomic<bool> audioDeviceAnnounced{false};
 
     /*
+     * Whether Java has already been told this audio sub-device went away.
+     *
+     * A device may report its status more than once, and each report would otherwise start another
+     * teardown thread. The window is small - once the teardown clears audioDeviceId, later reports
+     * no longer match it - but it is open for as long as the teardown takes, and that includes
+     * joining a sender thread which can sit in a USB write for a second.
+     *
+     * Atomic because it is set on the driver's read thread and cleared on the teardown thread.
+     */
+    std::atomic<bool> audioRemovalNotified{false};
+
+    /*
      * Where 2.2.11's initialisation sequence has got to. The host cannot simply send a format and
      * start playing: it stops the device, proposes a format, waits for the device to echo the one
      * it adopted, starts it, and waits for the device's volume message before any audio counts as
@@ -547,6 +574,7 @@ private:
     jclass jclazz = nullptr;
     jmethodID updateInputMethod = nullptr;
     jmethodID updateBatteryMethod = nullptr;
+    jmethodID audioDeviceRemovedMethod = nullptr;
 };
 
 constexpr uint16_t A_FLAG = 0x1000;

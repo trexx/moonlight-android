@@ -238,6 +238,22 @@ bool WiredController::enableAudio()
         return false;
     }
 
+    /*
+     * The render endpoint has to be able to carry a whole GIP audio message. AUDIO_PACKET_BYTES
+     * comes from the GIP framing and the endpoint's size comes from the pad, so nothing guarantees
+     * they agree - both pads scanned declare 228 out, which is enough, but that is a fact about
+     * them rather than about the protocol. Refuse rather than submit transfers the endpoint will
+     * truncate, which would be heard as noise rather than reported as an error.
+     */
+    if (AUDIO_PACKET_BYTES > device->audioMaxPacketSize())
+    {
+        Log::error("Wired: render endpoint %02x carries %zu bytes, under the %zu a GIP audio "
+                   "message needs", device->audioEndpointOut(), device->audioMaxPacketSize(),
+                   AUDIO_PACKET_BYTES);
+
+        return false;
+    }
+
     audioUnderruns.store(0, std::memory_order_relaxed);
     audioIdle.store(0, std::memory_order_relaxed);
     audioOutstanding.store(0, std::memory_order_relaxed);
@@ -278,8 +294,10 @@ bool WiredController::enableAudio()
         }
 
         captureTransfers.push_back(transfer);
+        // The capture endpoint's own size, which is not the render endpoint's: an Xbox One pad
+        // declares 228 both ways where an Elite Series 2 declares 228 out and 64 in.
         captureBuffers.emplace_back(
-            UsbWiredDevice::AUDIO_MAX_PACKET_SIZE * AUDIO_PACKETS_PER_TRANSFER, 0);
+            device->audioCaptureMaxPacketSize() * AUDIO_PACKETS_PER_TRANSFER, 0);
     }
 
     audioRunning.store(true);
@@ -544,7 +562,7 @@ bool WiredController::submitAudioTransfer(libusb_transfer *transfer)
     }
 
     libusb_fill_iso_transfer(transfer, device->deviceHandle(),
-                             UsbWiredDevice::AUDIO_ENDPOINT_OUT,
+                             device->audioEndpointOut(),
                              buffer,
                              static_cast<int>(AUDIO_PACKETS_PER_TRANSFER * packetBytes),
                              AUDIO_PACKETS_PER_TRANSFER, audioCallback, this, 1000);
@@ -655,10 +673,10 @@ bool WiredController::submitCaptureTransfer(libusb_transfer *transfer)
         return false;
     }
 
-    const int packetSize = static_cast<int>(UsbWiredDevice::AUDIO_MAX_PACKET_SIZE);
+    const int packetSize = static_cast<int>(device->audioCaptureMaxPacketSize());
 
     libusb_fill_iso_transfer(transfer, device->deviceHandle(),
-                             UsbWiredDevice::AUDIO_ENDPOINT_IN,
+                             device->audioEndpointIn(),
                              captureBuffers[index].data(),
                              packetSize * AUDIO_PACKETS_PER_TRANSFER,
                              AUDIO_PACKETS_PER_TRANSFER, captureCallback, this, 1000);

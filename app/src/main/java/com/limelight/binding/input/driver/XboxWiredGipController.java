@@ -28,6 +28,29 @@ public class XboxWiredGipController extends GipController {
     // Interface 0 carries every GIP message; MS-GIPUSB 2.2.12 puts audio on interface 1
     private static final int GIP_INTERFACE = 0;
 
+    /**
+     * Finds interface 0's default alternate setting, which is where the GIP endpoints live.
+     *
+     * <p>{@link UsbDevice#getInterface(int)} indexes a flat list of every interface/alternate
+     * pairing, so its index is not an interface number. It happens to be one on both pads tested —
+     * each puts interface 0 alt 0 first — but a pad that enumerates its alternates in another
+     * order would hand back an interface with the wrong endpoints, and the failure would look like
+     * the hardcoded-endpoint bug this went with.
+     *
+     * @return interface 0 alt 0, or null if this device has no such interface
+     */
+    private static UsbInterface findGipInterface(UsbDevice device) {
+        for (int i = 0; i < device.getInterfaceCount(); i++) {
+            UsbInterface iface = device.getInterface(i);
+
+            if (iface.getId() == GIP_INTERFACE && iface.getAlternateSetting() == 0) {
+                return iface;
+            }
+        }
+
+        return null;
+    }
+
     // Native transport instance, or 0 once destroyed
     private long wiredHandle;
 
@@ -63,7 +86,12 @@ public class XboxWiredGipController extends GipController {
          * is this call with force set. libusb_claim_interface on the wrapped descriptor would lose
          * to the kernel driver with EBUSY, so the native side deliberately does not attempt it.
          */
-        UsbInterface gipInterface = device.getInterface(GIP_INTERFACE);
+        UsbInterface gipInterface = findGipInterface(device);
+
+        if (gipInterface == null) {
+            LimeLog.warning("Wired GIP: no interface " + GIP_INTERFACE + " alt 0 on this device");
+            return null;
+        }
 
         if (!connection.claimInterface(gipInterface, true)) {
             LimeLog.warning("Wired GIP: could not claim the GIP interface from the kernel driver");

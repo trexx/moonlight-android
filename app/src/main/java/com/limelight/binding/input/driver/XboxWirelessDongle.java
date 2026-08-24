@@ -7,10 +7,10 @@ import com.limelight.LimeLog;
 import com.limelight.binding.input.driver.UsbDriverListener;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeMap;
 
 /**
  * Xbox One wireless adapter, driven through the bundled native {@code xow-driver}.
@@ -34,6 +34,13 @@ public class XboxWirelessDongle {
 
     // Live controllers by the native driver's slot index
     private Map<Integer, AbstractController> controllers = new HashMap<>();
+
+    /*
+     * Pad number by wireless address, assigned on first sight and kept for the life of this
+     * adapter. Separate from 'controllers', which is keyed by adapter slot because that is what
+     * the driver names a pad by when it goes away. See numberFor().
+     */
+    private final Map<Long, Integer> padNumbers = new HashMap<>();
 
     static {
         System.loadLibrary("xow-driver");
@@ -142,11 +149,47 @@ public class XboxWirelessDongle {
      * @param vid    the controller's own vendor ID, which differs from the adapter's
      * @param pid    the controller's own product ID
      */
-    public void addNewController(int id, long handle, short vid, short pid){
-        // Namespaced by vendor ID so slot indices can't collide with other drivers' device IDs
-        var controller = new GipController(id + 0x045e0000, listener, vid, pid, handle);
+    public void addNewController(int id, long handle, short vid, short pid, long address){
+        // Namespaced by vendor ID so pad numbers can't collide with other drivers' device IDs
+        var controller = new GipController(numberFor(address) + 0x045e0000,
+                                           listener, vid, pid, handle);
         controllers.put(id, controller);
         this.listener.deviceAdded(controller);
+    }
+
+    /**
+     * Gives a pad a number that survives it dropping off and coming back.
+     *
+     * <p>The adapter slot cannot do this. {@code Mt76::associateClient} hands out the lowest free
+     * WCID, so a slot vacated by one pad goes to whichever pad connects next: cabling a pad frees
+     * its slot, a second pad takes it, and the first returns on a different one. That was visible
+     * as pads swapping numbers in the audio menu, and it reached further than cosmetics — the
+     * number is namespaced into the controller ID, which is the key
+     * {@code ControllerHandler.usbDeviceContexts} stores a pad's context under, and therefore what
+     * decides whether a returning pad keeps its player number or is treated as a new controller.
+     *
+     * <p>The slot stays the driver's business — it is a radio resource and the MT76 keys its own
+     * client table on it. What changes is only that identity here is the pad's wireless address
+     * rather than the slot it happens to be occupying.
+     *
+     * <p>Numbers are never released. A pad that disconnects keeps its number for the life of this
+     * adapter, which is what makes reconnecting stable; the cost is that numbers climb if many
+     * different pads pair in one session, bounded by how long a stream lasts.
+     *
+     * @param address the pad's six-byte wireless address, packed into a long by the driver
+     * @return a small index, stable for this address
+     */
+    private int numberFor(long address) {
+        Integer existing = padNumbers.get(address);
+
+        if (existing != null) {
+            return existing;
+        }
+
+        int number = padNumbers.size();
+        padNumbers.put(address, number);
+
+        return number;
     }
 
     /**
@@ -164,11 +207,13 @@ public class XboxWirelessDongle {
      */
     public List<GipController> getControllers() {
         var found = new ArrayList<GipController>();
-        for (var entry : new TreeMap<>(controllers).entrySet()) {
-            if (entry.getValue() instanceof GipController wireless) {
+        for (var controller : controllers.values()) {
+            if (controller instanceof GipController wireless) {
                 found.add(wireless);
             }
         }
+        // By the stable number rather than by slot, so a pad keeps its place in the audio menu
+        found.sort(Comparator.comparingInt(GipController::getControllerId));
         return found;
     }
 
