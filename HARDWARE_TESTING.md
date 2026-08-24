@@ -521,6 +521,40 @@ something other than the Xbox button.
       1e(len 64) 0e(len 9)`, plausible lengths throughout, and `firmware versions: 05 00 17 00`
       matching the 5.23 the announce reports. That is a different pad and a different run from the
       one that misparsed, so it does not settle the original complaint.
+- [ ] **Two sub-devices answering fragmented metadata at once are reassembled separately.**
+      *Never reproduced — the fix is preventive and is not to be recorded as verified.*
+
+      Reassembly was one buffer shared across every device id on a pad, so two fragmented transfers
+      in flight together interleaved into it. Nothing reported it: the guard compares the message
+      command and both are `CMD_IDENTIFY`, so what came out was one plausible-looking metadata blob
+      built from two devices.
+
+      **Neither pad on hand can show it**, and the reason is worth keeping because it explains why
+      this survived so long:
+
+      | Pad | Answers the probe on id 1? | Audio metadata |
+      |---|---|---|
+      | Elite Series 2 `0b00` | yes, fragmented | id 2, **unfragmented** (110 bytes) |
+      | Xbox One `02dd` | no — nothing answers the probe | id 3, **fragmented** |
+
+      A pad with both would collide. It was close on the Elite: device 1's transfer completed and
+      device 2 announced within the same millisecond.
+
+      To attempt it: debug build, pad powered on with a headset already inserted so its audio
+      sub-device is present when `probeSubDevices()` fires, and watch for two chunk streams
+      interleaving — `Accessory chunk: #n id=X` with X changing mid-transfer. Strictly sequential
+      per id means not reproduced, which is the result so far on both pads.
+- [ ] **A sub-device's input is not taken as the pad's.** Debug builds log
+      `Ignoring input from sub-device N`. **Expect this to stay silent on both pads** — neither
+      declares input (`0x20`) in a sub-device's capabilities — so an empty log is the pass, and a
+      line appearing means a pad with a chatpad-like sub-device has turned up and is worth
+      recording. The same guard covers the guide button, the serial number and audio samples.
+- [ ] **A pad leading with a format other than 48 kHz stereo.** The audio menu now answers from the
+      *first* advertised pair, because that is the one 2.2.11 has the host propose. No pad seen
+      here leads with anything else — both advertise `09 10` — so the refusal branch is
+      unexercised, and it logs `leads with format XX/YY, not 48 kHz stereo` rather than declining
+      in silence. If that line ever appears, the question is whether the "first configuration" rule
+      is really absolute.
 - [ ] **No `Malformed chunk`, `Truncated chunk` or `Chunk overruns` lines** in normal operation.
       Occasional ones during pairing are worth noting rather than ignoring.
 - [x] **Accessory clients are reported rather than dropped in silence.** Debug builds log every

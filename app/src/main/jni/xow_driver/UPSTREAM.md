@@ -113,6 +113,27 @@ clean copy. Differences from the baseline commit:
   §3.1.5.5.2.2 requires the extended form on all new devices — whose status messages were therefore
   dropped whole. Now `>=`, matching the `CMD_INPUT` branch that already handled larger packets.
 
+* **Changed** fragment reassembly in `controller/gip.{h,cpp}` from one shared slot to one per
+  device id. Upstream xow has no reassembly at all, and the port's first version of it kept a
+  single `chunkBuffer`/`chunkActive` pair on `GipDevice` — shared by every device id on the pad.
+  `probeSubDevices()` asks devices 1 through 7 in one burst and a sub-device announcing mid-burst
+  answers on top of that, so two fragmented transfers can overlap; sharing one buffer let their
+  fragments interleave into it, and the guard that would have caught it compares the message
+  command, which is `CMD_IDENTIFY` for both.
+
+  Per device id is what xone does — `chunk_buf_in`/`chunk_buf_out` on `struct gip_client`, one
+  client per device id. Never reproduced on hardware here: no pad on hand has both a sub-device
+  that answers the probe with fragmented metadata *and* a fragmented audio device.
+* **Changed** four `GipDevice` handler signatures in `controller/gip.h` to take the device id:
+  `guideButtonPressed`, `serialNumberReceived`, `inputReceived` and `audioSamplesReceived`.
+  Upstream passes no id, so a sub-device's message was applied to the primary pad — a chatpad is a
+  sub-device that sends input reports, and xone drives one in `driver/chatpad.c`. `Controller` now
+  accepts input, the guide button and the serial number only from device 0, and audio samples only
+  from the audio sub-device.
+
+  The decision is in `Controller`, not in `GipDevice`: the GIP layer speaks a protocol where a
+  sub-device sending input is meaningful, and it is only meaningless to a class modelling one pad.
+
 Files that are byte-identical to upstream (for example `utils/bytes.h` and `utils/buffer.h`) can be
 refreshed directly; the rest need a manual three-way merge. `controller/gip.h` **was** in that list
 and no longer is — the fragment reassembly below had to add state to `GipDevice`.
