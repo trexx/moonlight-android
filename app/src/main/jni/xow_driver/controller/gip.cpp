@@ -559,6 +559,10 @@ bool GipDevice::requestSerialNumber()
 bool GipDevice::handleChunk(const Frame &frame, uint32_t length, uint32_t offset,
                             const Bytes &data)
 {
+    // This device's own slot. Another device's transfer may be in flight in parallel and must not
+    // be disturbed by this one - see the ChunkTransfer comment in gip.h.
+    ChunkTransfer &transfer = chunkFor(frame.deviceId);
+
     if (frame.type & TYPE_CHUNK_START)
     {
         // On the first fragment the offset field is the total length of what is coming
@@ -569,46 +573,48 @@ bool GipDevice::handleChunk(const Frame &frame, uint32_t length, uint32_t offset
             return true;
         }
 
-        if (chunkActive)
+        if (transfer.active)
         {
-            Log::debug("Discarding incomplete chunked message");
+            Log::debug("Discarding incomplete chunked message for device %u",
+                       (unsigned)frame.deviceId);
         }
 
-        chunkBuffer.assign(offset, 0);
-        chunkLength = offset;
-        chunkCommand = frame.command;
-        chunkDeviceId = frame.deviceId;
-        chunkActive = true;
+        transfer.buffer.assign(offset, 0);
+        transfer.length = offset;
+        transfer.command = frame.command;
+        transfer.active = true;
 
         // The first fragment's own payload starts at zero
         offset = 0;
     }
 
-    if (!chunkActive)
+    if (!transfer.active)
     {
         // A stray completion for a transfer we never saw the start of. Older controllers send
         // these spontaneously, so it is not worth logging as an error.
         return true;
     }
 
-    if (frame.command != chunkCommand)
+    // Still only catches a *different message type* on the same device - two transfers of the same
+    // type now go to different slots rather than needing to be told apart here
+    if (frame.command != transfer.command)
     {
-        Log::error("Conflicting chunked message");
+        Log::error("Conflicting chunked message for device %u", (unsigned)frame.deviceId);
 
-        chunkActive = false;
-        chunkBuffer.clear();
+        transfer.active = false;
+        transfer.buffer.clear();
 
         return true;
     }
 
     uint32_t received = offset + length;
 
-    if (received > chunkLength || received < offset)
+    if (received > transfer.length || received < offset)
     {
         Log::error("Chunk overruns its message");
 
-        chunkActive = false;
-        chunkBuffer.clear();
+        transfer.active = false;
+        transfer.buffer.clear();
 
         return true;
     }
@@ -617,11 +623,11 @@ bool GipDevice::handleChunk(const Frame &frame, uint32_t length, uint32_t offset
     {
         // Acknowledge when asked, and always on the final fragment: the sender waits for that one
         // before considering the transfer done, whether or not it set the flag.
-        bool last = (received == chunkLength);
+        bool last = (received == transfer.length);
 
         if ((frame.type & TYPE_ACK) || last)
         {
-            if (!acknowledgeChunk(frame, received, chunkLength - received))
+            if (!acknowledgeChunk(frame, received, transfer.length - received))
             {
                 Log::error("Failed to acknowledge chunk");
 
@@ -634,16 +640,16 @@ bool GipDevice::handleChunk(const Frame &frame, uint32_t length, uint32_t offset
             return true;
         }
 
-        std::copy(data.begin(), data.begin() + length, chunkBuffer.begin() + offset);
+        std::copy(data.begin(), data.begin() + length, transfer.buffer.begin() + offset);
 
         return true;
     }
 
     // An empty fragment ends the transfer
-    dispatchChunked(chunkCommand, chunkBuffer.data(), chunkLength);
+    dispatchChunked(frame.deviceId, transfer.command, transfer.buffer.data(), transfer.length);
 
-    chunkActive = false;
-    chunkBuffer.clear();
+    transfer.active = false;
+    transfer.buffer.clear();
 
     return true;
 }
@@ -652,14 +658,15 @@ bool GipDevice::handleChunk(const Frame &frame, uint32_t length, uint32_t offset
  * Handles a message that arrived fragmented. Only metadata is acted on; anything else is noted
  * and dropped, which is the same as before this reassembly existed, only now visibly.
  */
-void GipDevice::dispatchChunked(uint8_t command, const uint8_t *data, size_t length)
+void GipDevice::dispatchChunked(uint8_t deviceId, uint8_t command, const uint8_t *data,
+                                size_t length)
 {
     if (command == CMD_IDENTIFY && length >= sizeof(IdentifyData))
     {
         const IdentifyData *identify = reinterpret_cast<const IdentifyData *>(data);
 
         // Offsets are relative to the end of the opening blob, not the start of the message
-        identifyReceived(chunkDeviceId, identify, data + sizeof(identify->unknown),
+        identifyReceived(deviceId, identify, data + sizeof(identify->unknown),
                          length - sizeof(identify->unknown));
 
         return;

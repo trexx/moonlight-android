@@ -18,6 +18,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -536,9 +537,9 @@ private:
     bool acknowledgePacket(Frame frame);
     bool acknowledgeChunk(const Frame &frame, uint32_t received, uint32_t remaining);
     bool handleChunk(const Frame &frame, uint32_t length, uint32_t offset, const Bytes &data);
-    void dispatchChunked(uint8_t command, const uint8_t *data, size_t length);
-    // Device the in-flight fragmented transfer belongs to, so its dispatch reaches the right one
-    uint8_t chunkDeviceId = 0;
+    // Takes the device id rather than reading it from shared state, so a transfer completing
+    // while another device's is in flight still dispatches to its own device
+    void dispatchChunked(uint8_t deviceId, uint8_t command, const uint8_t *data, size_t length);
     uint8_t getSequence(bool accessory = false);
 
 #ifdef _DEBUG
@@ -577,12 +578,41 @@ private:
     SendPacket sendPacket;
 
     /*
-     * Reassembly state for the one fragmented transfer a device may have in flight. Fragmented
-     * messages are rare - metadata and security only - so this is allocated when one starts and
-     * released when it completes, rather than kept around.
+     * Reassembly state for one fragmented transfer. Fragmented messages are rare - metadata and
+     * security only - so the buffer is allocated when a transfer starts and released when it
+     * completes, rather than kept around.
      */
-    std::vector<uint8_t> chunkBuffer;
-    uint32_t chunkLength = 0;
-    uint8_t chunkCommand = 0;
-    bool chunkActive = false;
+    struct ChunkTransfer
+    {
+        std::vector<uint8_t> buffer;
+        uint32_t length = 0;
+        uint8_t command = 0;
+        bool active = false;
+    };
+
+    /*
+     * One per device id, because a pad's sub-devices transfer independently of each other.
+     *
+     * This was a single shared slot, which was wrong in a way that could not announce itself.
+     * probeSubDevices() asks devices 1 through 7 for metadata in one burst, and a sub-device that
+     * announces mid-burst answers its own request on top of that - so two fragmented transfers can
+     * be in flight at once. Sharing one buffer let their fragments interleave into it at their own
+     * offsets, and the guard that would have caught it compares the *command*, which is
+     * CMD_IDENTIFY for both. What came out was one plausible-looking metadata blob assembled from
+     * two devices.
+     *
+     * Per device id is xone's model rather than an invention: chunk_buf_in and chunk_buf_out live
+     * on struct gip_client, which is per device id.
+     *
+     * Sized for the full three-bit expansion index (2.2.10.2), and indexed with that mask, so a
+     * malformed header cannot reach past the end. Eight empty vectors is what an idle pad costs.
+     */
+    static const size_t CHUNK_DEVICE_COUNT = 8;
+
+    std::array<ChunkTransfer, CHUNK_DEVICE_COUNT> chunks;
+
+    ChunkTransfer &chunkFor(uint8_t deviceId)
+    {
+        return chunks[deviceId & (CHUNK_DEVICE_COUNT - 1)];
+    }
 };
