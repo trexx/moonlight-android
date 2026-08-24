@@ -1237,7 +1237,6 @@ void GipDevice::handleAuthPacket(const uint8_t *data, size_t length)
     if (!authVersion2 && (version == 0x02 || data[3] != data[6]))
     {
         Log::info("Security: device wants protocol v2, restarting the exchange");
-      
 
         sendAuthHostHello2();
 
