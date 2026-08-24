@@ -325,9 +325,23 @@ protected:
 
     virtual void deviceAnnounced(uint8_t id, const AnnounceData *announce) = 0;
     virtual void statusReceived(uint8_t id, const StatusData *status) = 0;
-    virtual void guideButtonPressed(const GuideButtonData *button) = 0;
-    virtual void serialNumberReceived(const SerialData *serial) = 0;
-    virtual void inputReceived(const InputData *input) = 0;
+    /*
+     * The device id is passed to every handler, including the ones where only the primary device
+     * is expected to use them.
+     *
+     * Dropping it was a bug three times over. A sub-device's Status was applied to the pad's
+     * battery until it was routed properly, and these four were the same mistake still standing:
+     * whatever a sub-device sends in these classes would be taken as the pad's own. Input is the
+     * one that matters - a chatpad is a sub-device that sends input reports, and they would have
+     * been parsed as the pad's sticks and buttons.
+     *
+     * Deciding what to do with a sub-device's message belongs to the subclass, not here. This
+     * layer speaks GIP, where a sub-device sending input is meaningful; it is only meaningless to
+     * a class that models a single pad.
+     */
+    virtual void guideButtonPressed(uint8_t id, const GuideButtonData *button) = 0;
+    virtual void serialNumberReceived(uint8_t id, const SerialData *serial) = 0;
+    virtual void inputReceived(uint8_t id, const InputData *input) = 0;
 
     /*
      * The reassembled metadata response. 'payload' points at the bytes the offsets in 'identify'
@@ -450,7 +464,7 @@ protected:
 
 
     /* Upstream audio from the pad. Only the flow rate is of interest - there is no mic support. */
-    virtual void audioSamplesReceived(const AudioSamplesData *samples) {}
+    virtual void audioSamplesReceived(uint8_t id, const AudioSamplesData *samples) {}
 
     /*
      * An Audio Control message from the device: the format it adopted, or its volume. Both are

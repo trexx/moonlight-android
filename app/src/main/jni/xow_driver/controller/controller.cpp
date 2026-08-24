@@ -402,8 +402,37 @@ void Controller::statusReceived(uint8_t id, const StatusData *status)
     notifyJavaBattery(type, level, charge);
 }
 
-void Controller::serialNumberReceived(const SerialData *serial)
+/*
+ * Whether a message addressed to 'id' is this pad's own.
+ *
+ * This class models one physical controller, so input, the guide button and the serial number only
+ * mean anything from device 0. A sub-device sending them is not a malformed packet - a chatpad is a
+ * sub-device that sends input reports, and xone drives one - it is simply something this driver
+ * does not model, and taking it as the pad's own would report a chatpad's keys as stick movement.
+ *
+ * Reported in debug builds rather than dropped in silence, for the same reason
+ * logAccessoryPacket() exists: "no sub-device ever sent input" is only worth anything if it can be
+ * distinguished from "nobody looked".
+ */
+bool Controller::isPrimary(uint8_t id, const char *what)
 {
+    if (id == DEVICE_ID_CONTROLLER)
+    {
+        return true;
+    }
+
+    Log::debug("Ignoring %s from sub-device %u", what, (unsigned)id);
+
+    return false;
+}
+
+void Controller::serialNumberReceived(uint8_t id, const SerialData *serial)
+{
+    if (!isPrimary(id, "serial number"))
+    {
+        return;
+    }
+
     const std::string number(
         serial->serialNumber,
         sizeof(serial->serialNumber)
@@ -420,10 +449,17 @@ void Controller::serialNumberReceived(const SerialData *serial)
     }                                   \
 } while(0);
 
-void Controller::guideButtonPressed(const GuideButtonData *button)
+void Controller::guideButtonPressed(uint8_t id, const GuideButtonData *button)
 {
+    if (!isPrimary(id, "guide button"))
+    {
+        return;
+    }
+
     SET_BUTTON_STATUS(SPECIAL_BUTTON_FLAG, button->pressed);
-    inputReceived(nullptr);
+
+    // Already established as the pad's, so this reports as the pad rather than re-checking
+    inputReceived(DEVICE_ID_CONTROLLER, nullptr);
 }
 
 void Controller::updateButtonStatus(const GipDevice::InputData *input) {
@@ -450,8 +486,12 @@ void Controller::updateButtonStatus(const GipDevice::InputData *input) {
 }
 #undef SET_BUTTON_STATUS
 
-void Controller::inputReceived(const InputData *input)
+void Controller::inputReceived(uint8_t id, const InputData *input)
 {
+    if (!isPrimary(id, "input")) {
+        return;
+    }
+
     if(input) {
         updateButtonStatus(input);
     }
@@ -837,8 +877,18 @@ void Controller::waitForMetadata()
     }
 }
 
-void Controller::audioSamplesReceived(const AudioSamplesData *samples)
+void Controller::audioSamplesReceived(uint8_t id, const AudioSamplesData *samples)
 {
+    /*
+     * The audio sub-device's, not the pad's, and not another sub-device's. The flow rate carried
+     * here paces a transport that can honour it, so taking it from the wrong device would be
+     * pacing the audio stream by something unrelated to it.
+     */
+    if (id != audioDeviceId)
+    {
+        return;
+    }
+
     // How many bytes of render data the pad wants in each message (MS-GIPUSB Table 69). It nudges
     // this up and down to absorb the difference between its clock and ours, and per 3.2.5.1.5 that
     // is "the mechanism GIP devices use to eliminate pops and clicks in audio".

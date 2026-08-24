@@ -390,7 +390,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
         payloadLength == sizeof(GuideButtonData) &&
         data.size() >= sizeof(GuideButtonData)
     ) {
-        guideButtonPressed(data.toStruct<GuideButtonData>());
+        guideButtonPressed(frame->deviceId, data.toStruct<GuideButtonData>());
     }
 
     else if (
@@ -405,7 +405,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
         payloadLength == sizeof(SerialData) &&
         data.size() >= sizeof(SerialData)
     ) {
-        serialNumberReceived(data.toStruct<SerialData>());
+        serialNumberReceived(frame->deviceId, data.toStruct<SerialData>());
     }
 
     // Elite controllers send a larger input packet
@@ -416,7 +416,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
         payloadLength >= sizeof(InputData) &&
         data.size() >= sizeof(InputData)
     ) {
-        inputReceived(data.toStruct<InputData>());
+        inputReceived(frame->deviceId, data.toStruct<InputData>());
     }
 
     // The pad sends these whether or not it has a microphone, because the flow rate they carry is
@@ -435,7 +435,7 @@ bool GipDevice::handlePacket(const Bytes &packet)
         payloadLength >= sizeof(AudioSamplesData) &&
         data.size() >= sizeof(AudioSamplesData)
     ) {
-        audioSamplesReceived(data.toStruct<AudioSamplesData>());
+        audioSamplesReceived(frame->deviceId, data.toStruct<AudioSamplesData>());
     }
 
     /*
