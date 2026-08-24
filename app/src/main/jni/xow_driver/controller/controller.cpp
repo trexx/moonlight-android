@@ -986,19 +986,39 @@ bool Controller::supportsAudioOut() const
      * once the security handshake has completed (MS-GIPUSB 2.2.1.4). Asking device 0 was always
      * going to answer no, whatever was plugged into the jack.
      */
-    if (audioDeviceId == 0)
+    if (audioDeviceId == 0 || audioDeviceFormats.size() < METADATA_AUDIO_FORMAT_LENGTH)
     {
         return false;
     }
 
-    // Render is the second of each capture/render pair
-    for (size_t i = 1; i < audioDeviceFormats.size(); i += METADATA_AUDIO_FORMAT_LENGTH)
+    /*
+     * The *first* pair only, because the first pair is what setAudioEnabled() will propose - 2.2.11
+     * has the host take the device's first advertised configuration rather than choose among them.
+     *
+     * This used to scan every pair, which let the two disagree: a pad advertising 48 kHz stereo
+     * anywhere in its list was offered in the menu, and then sent whatever its first pair happened
+     * to be. Answering a question about pair 3 when pair 1 is the one that will be used is how a
+     * menu ends up promising audio the stream cannot feed.
+     *
+     * Deliberately not fixed the other way round, by choosing the pair that suits us. AUDIO.md
+     * records what that cost: proposing anything but the first pair retuned the render path to
+     * 24 kHz mono and back on every connect, degrading the pad a step each time.
+     *
+     * Render is the second of each capture/render pair.
+     */
+    if (audioDeviceFormats[1] == AUDIO_FORMAT_48KHZ_STEREO)
     {
-        if (audioDeviceFormats[i] == AUDIO_FORMAT_48KHZ_STEREO)
-        {
-            return true;
-        }
+        return true;
     }
+
+    /*
+     * Said out loud, because no pad seen here reaches it. Both advertise 09/10 first, so this
+     * branch is unexercised and would otherwise be a silent refusal on hardware nobody has - which
+     * is exactly the kind of thing that gets debugged from the wrong end. If this ever prints, the
+     * question to answer is whether 2.2.11's "first configuration" rule really is absolute.
+     */
+    Log::info("Audio device %u leads with format %02x/%02x, not 48 kHz stereo; not offering audio",
+              (unsigned)audioDeviceId, audioDeviceFormats[0], audioDeviceFormats[1]);
 
     return false;
 }
