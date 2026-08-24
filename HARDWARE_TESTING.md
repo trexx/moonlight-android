@@ -582,9 +582,28 @@ its light flashing, with the add/remove device sounds looping.
       state and no slot exhaustion. Each connect runs a fresh exchange.
 - [ ] **Four pads on one adapter** authenticate independently and all four keep working. Each has
       its own sequence pool; a shared counter would show up here and nowhere else.
-- [ ] **A v2 pad is detected and logged**, not silently broken. Expect `device wants protocol v2,
-      which is not implemented`. **No v2 hardware has been available** — this is the item that
-      needs it.
+- [ ] **A v2 pad completes the ECDH exchange.** Implemented on `gip/security-v2` and **never run
+      against hardware** — no device asking for v2 has been available. Expect `device wants
+      protocol v2, restarting the exchange`, then the same `Security: command 0x2X` lines the v1
+      exchange produces at 0x0X, then `handshake complete`.
+
+      Sizes to check against, since they are xone's structures rather than anything observed here,
+      and a wrong request length is the most likely failure:
+
+      | Message | Bytes |
+      |---|---|
+      | `CLIENT_HELLO` (0x22) | 172 |
+      | `CLIENT_CERTIFICATE` (0x23) | 768 |
+      | `CLIENT_PUBKEY` (0x24) | 128 |
+      | `CLIENT_FINISH` (0x27) | 64 |
+
+- [ ] **A v1 pad still authenticates with the v2 branch merged.** The upgrade path shares
+      `sendAuthPacket` and the version check with v1, so this is the regression that matters more
+      than the feature. *Not yet confirmed — the v2 build is installed on the Shield but the v1
+      handshake has not been re-run on it.*
+- [ ] **The transcript is reset on upgrade.** If it is not, everything succeeds until the final
+      finish messages, which then disagree — so a failure that reaches `CLIENT_FINISH` and stops
+      points here first.
 - [ ] **Timing on a cold boot.** The handshake is sent at the end of `startDevice()`, behind the
       metadata response with a 500 ms fallback. Confirm a pad powered on *before* the adapter, and
       one powered on long after, both authenticate.
@@ -1679,7 +1698,7 @@ device is ever added.
 | §7 battery, extended status | Xbox Series X\|S pad, plus a play-and-charge kit or USB cable |
 | §7 JNI input path | Four pads on one adapter, for a sustained session |
 | §8 metadata | Any adapter pad; ideally several generations, since what they report is the point |
-| §9 v2 security | A pad that uses the ECDH handshake — none has been available to test against |
+| §9 v2 security | A pad that uses the ECDH handshake — none has been available; `gip/security-v2` is unverified without one |
 | §9 multi-pad | Four pads on one adapter, to confirm per-pad sequence pools |
 | §10 pad audio | Two adapter pads with integrated 3.5 mm jacks, and wired headphones for each |
 | §11 Steam type | A Valve Steam Controller, and a HORIPAD for Steam for the negative case |

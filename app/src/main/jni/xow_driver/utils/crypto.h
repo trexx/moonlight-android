@@ -40,4 +40,15 @@ namespace GipCrypto
     /* Encrypts with PKCS#1 v1.5 under a DER RSAPublicKey. */
     std::vector<uint8_t> rsaEncrypt(const uint8_t *publicKey, size_t keyLength,
                                     const uint8_t *data, size_t length);
+
+    /*
+     * The v2 handshake's ECDH over NIST P-256, generating an ephemeral key pair and agreeing with
+     * the device's key in one step - the private half is never needed again.
+     *
+     * Keys are raw affine X||Y, 64 bytes, with no uncompressed-point prefix.
+     *
+     * @return 96 bytes: our public key, then the SHA-256 of the agreed secret, which is what the
+     *         PRF consumes. Empty on failure.
+     */
+    std::vector<uint8_t> ecdhP256(const uint8_t *peerKey, size_t length);
 }

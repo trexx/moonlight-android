@@ -21,6 +21,7 @@ namespace
     jmethodID hmacMethod = nullptr;
     jmethodID randomMethod = nullptr;
     jmethodID rsaMethod = nullptr;
+    jmethodID ecdhMethod = nullptr;
 
     jbyteArray toJava(JNIEnv *env, const uint8_t *data, size_t length)
     {
@@ -101,9 +102,10 @@ bool GipCrypto::init(JNIEnv *env)
     hmacMethod = env->GetStaticMethodID(cryptoClass, "hmacSha256", "([B[B)[B");
     randomMethod = env->GetStaticMethodID(cryptoClass, "randomBytes", "(I)[B");
     rsaMethod = env->GetStaticMethodID(cryptoClass, "rsaEncrypt", "([B[B)[B");
+    ecdhMethod = env->GetStaticMethodID(cryptoClass, "ecdhP256", "([B)[B");
 
     if (sha256Method == nullptr || hmacMethod == nullptr ||
-        randomMethod == nullptr || rsaMethod == nullptr)
+        randomMethod == nullptr || rsaMethod == nullptr || ecdhMethod == nullptr)
     {
         env->ExceptionClear();
         Log::error("Crypto: failed to resolve GipCrypto methods");
@@ -244,6 +246,37 @@ std::vector<uint8_t> GipCrypto::rsaEncrypt(const uint8_t *publicKey, size_t keyL
 
     env->DeleteLocalRef(jkey);
     env->DeleteLocalRef(jdata);
+
+    if (result != nullptr)
+    {
+        env->DeleteLocalRef(result);
+    }
+
+    return out;
+}
+
+std::vector<uint8_t> GipCrypto::ecdhP256(const uint8_t *peerKey, size_t length)
+{
+    JNIEnv *env = ready();
+
+    if (env == nullptr)
+    {
+        return {};
+    }
+
+    jbyteArray in = toJava(env, peerKey, length);
+
+    if (in == nullptr)
+    {
+        return {};
+    }
+
+    auto result = static_cast<jbyteArray>(
+            env->CallStaticObjectMethod(cryptoClass, ecdhMethod, in));
+
+    std::vector<uint8_t> out = failed(env, "ecdhP256") ? std::vector<uint8_t>() : fromJava(env, result);
+
+    env->DeleteLocalRef(in);
 
     if (result != nullptr)
     {
