@@ -71,7 +71,10 @@ private:
     void handleBulkData(const Bytes &data);
     void readBulkPackets(uint8_t endpoint);
 
-    void notifyJavaControllerAdd(int id, Controller *controller, short vid, short pid);
+    // 'address' is the pad's six-byte wireless address packed into a long - its only stable
+    // identity, since the slot 'id' carries is reused. See packAddress() in dongle.cpp.
+    void notifyJavaControllerAdd(int id, Controller *controller, short vid, short pid,
+                                 jlong address);
     void notifyJavaControllerRemove(int id);
 
     jobject jthis;

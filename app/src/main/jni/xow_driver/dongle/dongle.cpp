@@ -91,6 +91,29 @@ Dongle::~Dongle()
     }
 }
 
+/*
+ * Packs a six-byte wireless address into a long, most significant byte first.
+ *
+ * The address is the only stable identity a pad has. Its WCID is not: associateClient() hands out
+ * the lowest free one, so a pad that drops off and returns can come back on a different slot, and
+ * a pad connecting in between can take the slot it had. Java needs the identity to keep a pad's
+ * number across that; see XboxWirelessDongle.addNewController().
+ *
+ * A long rather than a byte array because six bytes fit in one with room to spare, and this then
+ * costs no allocation and makes a natural map key on the other side.
+ */
+static jlong packAddress(const Bytes &address)
+{
+    jlong packed = 0;
+
+    for (size_t i = 0; i < address.size(); i++)
+    {
+        packed = (packed << 8) | address.raw()[i];
+    }
+
+    return packed;
+}
+
 void Dongle::handleControllerConnect(Bytes address)
 {
     Log::debug("handleControllerConnect");
@@ -131,11 +154,12 @@ void Dongle::handleControllerConnect(Bytes address)
     Controller *rawptr = uptr.get();
     controllers[wcid - 1] = std::move(uptr);
     clientAddresses[wcid - 1] = address;
-    notifyJavaControllerAdd(wcid - 1, rawptr, 0xdead, 0xbeef);
+    notifyJavaControllerAdd(wcid - 1, rawptr, 0xdead, 0xbeef, packAddress(address));
     Log::info("Controller '%d' connected", wcid);
 }
 
-void Dongle::notifyJavaControllerAdd(int id, Controller *controller, short vid, short pid) {
+void Dongle::notifyJavaControllerAdd(int id, Controller *controller, short vid, short pid,
+                                     jlong address) {
     // Called from the read thread, which readBulkPackets() keeps attached. Detaching here would
     // detach that thread out from under its own loop.
     JNIEnv *env = getAttachedEnv(jvm);
@@ -144,8 +168,8 @@ void Dongle::notifyJavaControllerAdd(int id, Controller *controller, short vid, 
         return;
     }
     jclass clazz = env->GetObjectClass(jthis);
-    jmethodID method = env->GetMethodID(clazz, "addNewController", "(IJSS)V");
-    env->CallVoidMethod(jthis, method, id, (jlong) controller, vid, pid);
+    jmethodID method = env->GetMethodID(clazz, "addNewController", "(IJSSJ)V");
+    env->CallVoidMethod(jthis, method, id, (jlong) controller, vid, pid, address);
     // Freed explicitly: without the detach that used to do it, local references accumulate for
     // the life of the thread. Pairing is rare, but the read thread is not short-lived.
     env->DeleteLocalRef(clazz);
