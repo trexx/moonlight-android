@@ -438,6 +438,41 @@ bool GipDevice::handlePacket(const Bytes &packet)
         audioSamplesReceived(data.toStruct<AudioSamplesData>());
     }
 
+    /*
+     * Metadata that fitted in one message, which until this existed was dropped here without
+     * trace.
+     *
+     * Fragmentation is a function of size, not of message type (2.2.10.4): a device whose
+     * metadata exceeds the Command class MTU sends it fragmented, and one whose metadata fits
+     * sends it whole. Only the fragmented form was ever handled, in dispatchChunked(), because
+     * every device measured until now took it - a pad's own metadata is 452 bytes and its
+     * non-audio sub-device's 161.
+     *
+     * An Elite Series 2's 3.5 mm audio sub-device answers in 110 bytes, unfragmented, and so
+     * never reached identifyReceived(). The audio device was therefore never adopted, its
+     * formats never read, and headphone audio was unreachable on that pad - the menu offered
+     * "Unavailable (no headset detected)" with the headset plugged in and the sub-device
+     * announced. The message is acknowledged above whether or not anything acts on it, so the
+     * pad considered the exchange finished and waited, as 2.2.11 tells an audio device to do.
+     *
+     * Last in the chain deliberately. Every comparison ahead of a message costs the per-packet
+     * paths that run behind it - input at ~120 Hz and audio at 125 packets/s - and metadata
+     * arrives twice per connect.
+     */
+    else if (
+        frame->command == CMD_IDENTIFY &&
+        payloadLength >= sizeof(IdentifyData) &&
+        data.size() >= payloadLength
+    ) {
+        const IdentifyData *identify = data.toStruct<IdentifyData>();
+
+        // Offsets inside are relative to the end of the opening blob, exactly as dispatchChunked()
+        // resolves them, so the same two adjustments apply here.
+        identifyReceived(frame->deviceId, identify,
+                         data.raw() + sizeof(identify->unknown),
+                         payloadLength - sizeof(identify->unknown));
+    }
+
     // Ignore any unknown packets
     return true;
 }
