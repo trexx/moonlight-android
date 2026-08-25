@@ -15,6 +15,7 @@
     <string name="pcview_menu_header_unknown">Refreshing</string>
     <string name="pcview_menu_app_list">View All Apps</string>
     <string name="pcview_menu_pair_pc">Pair with PC</string>
+    <string name="pcview_menu_unpair_pc">Unpair from PC</string>
     <string name="pcview_menu_delete_pc">Delete PC</string>
     <string name="pcview_menu_test_network">Test Network Connection</string>
     <string name="pcview_menu_details">View Details</string>
@@ -39,6 +40,12 @@
     <string name="pair_fail">Pairing failed</string>
     <string name="pair_already_in_progress">Pairing already in progress</string>
 
+    <!-- Unpair messages -->
+    <string name="unpairing">Unpairing\u2026</string>
+    <string name="unpair_success">Unpaired successfully</string>
+    <string name="unpair_fail">Failed to unpair</string>
+    <string name="unpair_error">Device was not paired</string>
+    <string name="unpair_confirmation">Unpair from this PC? You will need to enter a PIN on it again to stream.</string>
 
     <!-- Errors -->
     <string name="error_pc_offline">Computer is offline</string>

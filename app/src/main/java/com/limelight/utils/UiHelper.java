@@ -232,4 +232,40 @@ public class UiHelper {
                 .setNegativeButton(parent.getResources().getString(R.string.no), dialogClickListener)
                 .show();
     }
+
+    /**
+     * Confirms unpairing from a host.
+     *
+     * <p>Confirmed for the same reason deleting one is: it cannot be undone from this end. The
+     * host forgets this client's certificate, so recovering means walking to the machine and
+     * entering a PIN on it. The menu entry also sits next to Delete PC, and this menu is driven
+     * with a remote.
+     */
+    public static void displayUnpairConfirmationDialog(Activity parent, ComputerDetails computer, final Runnable onYes, final Runnable onNo) {
+        DialogInterface.OnClickListener dialogClickListener = new DialogInterface.OnClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which) {
+                switch (which){
+                    case DialogInterface.BUTTON_POSITIVE:
+                        if (onYes != null) {
+                            onYes.run();
+                        }
+                        break;
+
+                    case DialogInterface.BUTTON_NEGATIVE:
+                        if (onNo != null) {
+                            onNo.run();
+                        }
+                        break;
+                }
+            }
+        };
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(parent);
+        builder.setMessage(parent.getResources().getString(R.string.unpair_confirmation))
+                .setTitle(computer.name)
+                .setPositiveButton(parent.getResources().getString(R.string.yes), dialogClickListener)
+                .setNegativeButton(parent.getResources().getString(R.string.no), dialogClickListener)
+                .show();
+    }
 }

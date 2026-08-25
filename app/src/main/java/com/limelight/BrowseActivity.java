@@ -87,9 +87,9 @@ import javax.microedition.khronos.opengles.GL10;
  * for the screen lives in {@link BrowseState}, deliberately separated so it can be exercised
  * without a device.
  *
- * <p>Pairing, waking and removing hosts, and starting, quitting and hiding apps, are all driven
- * from the two context menus, which is why so much of this class is menu and dialog handling
- * rather than view code.
+ * <p>Pairing, unpairing, waking and removing hosts, and starting, quitting and hiding apps, are
+ * all driven from the two context menus, which is why so much of this class is menu and dialog
+ * handling rather than view code.
  *
  * <p>Latency: nothing here runs while a stream exists. The activity is torn down before
  * {@link Game} starts and rebuilt after it finishes.
@@ -114,13 +114,14 @@ public class BrowseActivity extends Activity {
 
     // Host context menu.
     private final static int PAIR_ID = 1;
-    private final static int DELETE_ID = 2;
-    private final static int HOST_RESUME_ID = 3;
-    private final static int HOST_QUIT_ID = 4;
-    private final static int HOST_DETAILS_ID = 5;
-    private final static int FULL_APP_LIST_ID = 6;
-    private final static int TEST_NETWORK_ID = 7;
-    private final static int MANAGEMENT_PAGE_ID = 8;
+    private final static int UNPAIR_ID = 2;
+    private final static int DELETE_ID = 3;
+    private final static int HOST_RESUME_ID = 4;
+    private final static int HOST_QUIT_ID = 5;
+    private final static int HOST_DETAILS_ID = 6;
+    private final static int FULL_APP_LIST_ID = 7;
+    private final static int TEST_NETWORK_ID = 8;
+    private final static int MANAGEMENT_PAGE_ID = 9;
 
     // App context menu. A separate range so onContextItemSelected can dispatch on the id alone
     // and never confuse a host action for an app one.
@@ -1104,14 +1105,26 @@ public class BrowseActivity extends Activity {
             }
 
             menu.add(Menu.NONE, FULL_APP_LIST_ID, 4, getResources().getString(R.string.pcview_menu_app_list));
+
+            // Unpair is a request to the host, so it needs one that is answering. It also has no
+            // meaning for a host we are not paired with - that case gets Pair, above. Grouped
+            // with Delete rather than with the app actions: both are ways of undoing the setup
+            // of this host, and both need a confirmation before they run.
+            if (details.state == ComputerDetails.State.ONLINE
+                    && details.pairState == PairState.PAIRED) {
+                menu.add(Menu.NONE, UNPAIR_ID, 7, getResources().getString(R.string.pcview_menu_unpair_pc));
+            }
         }
 
+        // Orders are distinct so the sequence is defined. Management page and network test both
+        // sat at 5 before, which left their relative order down to insertion.
+        //
         // Sunshine serves its web UI one port above the HTTP port
         menu.add(Menu.NONE, MANAGEMENT_PAGE_ID, 5, getResources().getString(R.string.pcview_menu_management_page));
 
-        menu.add(Menu.NONE, TEST_NETWORK_ID, 5, getResources().getString(R.string.pcview_menu_test_network));
-        menu.add(Menu.NONE, DELETE_ID, 6, getResources().getString(R.string.pcview_menu_delete_pc));
-        menu.add(Menu.NONE, HOST_DETAILS_ID, 7, getResources().getString(R.string.pcview_menu_details));
+        menu.add(Menu.NONE, TEST_NETWORK_ID, 6, getResources().getString(R.string.pcview_menu_test_network));
+        menu.add(Menu.NONE, DELETE_ID, 8, getResources().getString(R.string.pcview_menu_delete_pc));
+        menu.add(Menu.NONE, HOST_DETAILS_ID, 9, getResources().getString(R.string.pcview_menu_details));
     }
 
     private void buildAppContextMenu(ContextMenu menu, AdapterContextMenuInfo info) {
@@ -1177,6 +1190,15 @@ public class BrowseActivity extends Activity {
         switch (item.getItemId()) {
             case PAIR_ID:
                 doPair(details);
+                return true;
+
+            case UNPAIR_ID:
+                UiHelper.displayUnpairConfirmationDialog(this, details, new Runnable() {
+                    @Override
+                    public void run() {
+                        doUnpair(details);
+                    }
+                }, null);
                 return true;
 
             case DELETE_ID:
@@ -1424,6 +1446,78 @@ public class BrowseActivity extends Activity {
                         // Polling has to resume either way: on success it is what reports the new
                         // pair state, which is what makes the host selectable.
                         startComputerUpdates();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /**
+     * Asks the host to forget this client, off the UI thread.
+     *
+     * <p>Not reachable before the browsing activities were merged: upstream declared the menu id
+     * and handled it, but never added the menu item, and no label string for one existed.
+     *
+     * <p>Unlike pairing, this does not stop host polling while it runs. It is a single request,
+     * and the poll result that reports NOT_PAIRED is what drives the screen back to the unpaired
+     * state - {@link BrowseState} revokes the selection on it, so the grid empties on its own.
+     */
+    private void doUnpair(final ComputerDetails computer) {
+        if (computer.state == ComputerDetails.State.OFFLINE || computer.activeAddress == null) {
+            Toast.makeText(this, getResources().getString(R.string.error_pc_offline), Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (managerBinder == null) {
+            Toast.makeText(this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        Toast.makeText(this, getResources().getString(R.string.unpairing), Toast.LENGTH_SHORT).show();
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                NvHTTP httpConn;
+                String message;
+                boolean unpaired = false;
+                try {
+                    httpConn = new NvHTTP(ServerHelper.getCurrentAddressFromComputer(computer),
+                            computer.httpsPort, managerBinder.getUniqueId(), computer.serverCert,
+                            PlatformBinding.getCryptoProvider(BrowseActivity.this));
+                    if (httpConn.getPairState() == PairState.PAIRED) {
+                        httpConn.unpair();
+                        if (httpConn.getPairState() == PairState.NOT_PAIRED) {
+                            message = getResources().getString(R.string.unpair_success);
+                            unpaired = true;
+                        }
+                        else {
+                            message = getResources().getString(R.string.unpair_fail);
+                        }
+                    }
+                    else {
+                        message = getResources().getString(R.string.unpair_error);
+                    }
+                } catch (UnknownHostException e) {
+                    message = getResources().getString(R.string.error_unknown_host);
+                } catch (FileNotFoundException e) {
+                    message = getResources().getString(R.string.error_404);
+                } catch (XmlPullParserException | IOException e) {
+                    message = e.getMessage();
+                    e.printStackTrace();
+                }
+
+                if (unpaired) {
+                    // Cached reachability still says PAIRED, and the band and the app grid are
+                    // drawn from it. Invalidating forces the pair state to be read again on the
+                    // next poll rather than served from the cache, which is the same reason
+                    // doPair() invalidates after a successful pairing.
+                    managerBinder.invalidateStateForComputer(computer.uuid);
+                }
+
+                final String toastMessage = message;
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        Toast.makeText(BrowseActivity.this, toastMessage, Toast.LENGTH_LONG).show();
                     }
                 });
             }
