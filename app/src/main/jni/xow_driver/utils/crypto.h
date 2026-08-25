@@ -22,14 +22,15 @@
  * moonlight-core - a couple of hundred kilobytes in both libraries for a handshake that runs once
  * per controller connect. Nothing here is on a per-frame or per-report path.
  *
- * init() must be called from a thread the JVM created. The driver's read threads attach
- * themselves, and an attached thread gets the system class loader, which cannot see application
- * classes: FindClass for GipCrypto fails there. Everything else is callable from any attached
- * thread once init() has run.
+ * init() takes the GipCrypto class rather than looking it up, because the lookup has to happen
+ * on a thread the JVM created: the driver's read threads attach themselves, and an attached
+ * thread gets the system class loader, which cannot see application classes at all. JNI_OnLoad
+ * runs on the thread that called System.loadLibrary() and resolves it there. Everything else is
+ * callable from any attached thread once init() has run.
  */
 namespace GipCrypto
 {
-    bool init(JNIEnv *env);
+    bool init(JNIEnv *env, jclass clazz);
 
     /* All return an empty vector on failure, having logged. */
     std::vector<uint8_t> sha256(const uint8_t *data, size_t length);

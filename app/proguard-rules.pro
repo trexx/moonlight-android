@@ -17,8 +17,10 @@
 }
 
 # Our code
-# The USB drivers are reached from native code (the xow driver calls back into
-# XboxWirelessDongle and XboxWirelessController by name), so R8 cannot see those references.
+# The USB drivers are reached from native code by name, so R8 cannot see those references: the
+# xow driver calls back into XboxWirelessDongle and GipController, resolves GipCrypto's statics,
+# and binds its own entry points against the method names in these classes from the tables in
+# xow_driver_jni.cpp.
 -keep class com.limelight.binding.input.driver.* {*;}
 
 # Moonlight common

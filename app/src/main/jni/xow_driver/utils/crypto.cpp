@@ -13,8 +13,8 @@
 
 namespace
 {
-    // Resolved once by init(), from a thread the JVM created. Global references, so the class stays
-    // loaded and the method IDs below stay valid for the life of the process.
+    // Resolved once by init(), from JNI_OnLoad. Global references, so the class stays loaded and
+    // the method IDs below stay valid for the life of the process.
     JavaVM *vm = nullptr;
     jclass cryptoClass = nullptr;
     jmethodID sha256Method = nullptr;
@@ -71,7 +71,7 @@ namespace
     }
 }
 
-bool GipCrypto::init(JNIEnv *env)
+bool GipCrypto::init(JNIEnv *env, jclass clazz)
 {
     if (cryptoClass != nullptr)
     {
@@ -85,18 +85,7 @@ bool GipCrypto::init(JNIEnv *env)
         return false;
     }
 
-    jclass local = env->FindClass("com/limelight/binding/input/driver/GipCrypto");
-
-    if (local == nullptr || env->ExceptionCheck())
-    {
-        env->ExceptionClear();
-        Log::error("Crypto: GipCrypto not found");
-
-        return false;
-    }
-
-    cryptoClass = static_cast<jclass>(env->NewGlobalRef(local));
-    env->DeleteLocalRef(local);
+    cryptoClass = static_cast<jclass>(env->NewGlobalRef(clazz));
 
     sha256Method = env->GetStaticMethodID(cryptoClass, "sha256", "([B)[B");
     hmacMethod = env->GetStaticMethodID(cryptoClass, "hmacSha256", "([B[B)[B");

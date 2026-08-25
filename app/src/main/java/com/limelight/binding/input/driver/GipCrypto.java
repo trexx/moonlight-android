@@ -38,7 +38,13 @@ import javax.crypto.spec.SecretKeySpec;
  * <p><b>The class reference must be cached from a Java thread.</b> The driver's read threads attach
  * to the JVM themselves, and a thread attached that way gets the system class loader, which cannot
  * find application classes — {@code FindClass} for this class fails there. The native side resolves
- * it once during {@code registerNative()}, which does run on a real Java thread.
+ * it once in {@code JNI_OnLoad}, which runs on whichever thread called
+ * {@code System.loadLibrary("xow-driver")} and so has the application class loader.
+ *
+ * <p>Nothing in Java references this class, so it survives only because
+ * {@code proguard-rules.pro} keeps the whole {@code driver} package. The native side names it as
+ * a string in {@code xow_driver_jni.cpp}; renaming or moving it breaks the handshake at runtime,
+ * not at compile time.
  */
 final class GipCrypto {
     /** The v2 handshake's curve, and the raw X‖Y key length it carries. */

@@ -33,6 +33,14 @@ clean copy. Differences from the baseline commit:
   `firmwarePath` parameter for signature compatibility but ignores it and uses the
   embedded `FW_ACC_00U` array.
 * **Added** `Android.mk` for ndk-build.
+* **Changed** how the JNI entry points are bound. `xow_driver_jni.cpp` now exports only
+  `JNI_OnLoad` and binds the twenty entry points with `RegisterNatives`, instead of exporting
+  twenty `Java_com_limelight_binding_input_driver_*` symbols whose names encoded the consumer's
+  package. `GipCrypto::init()` takes the class rather than calling `FindClass` on a hardcoded name,
+  so all four Java class names now sit in one block at the top of `xow_driver_jni.cpp` and nothing
+  else in the port names the app. A signature that drifts from its Java declaration is also caught
+  at `System.loadLibrary()`, naming the method, rather than as an `UnsatisfiedLinkError` at first
+  call — which for the audio and rumble entry points would be mid-stream.
 * **Added** `Dongle::setPairing()` in `dongle/dongle.{h,cpp}` and a JNI entry point for it.
   Upstream reaches pairing mode from exactly one place — an `EVT_BUTTON_PRESS` from the
   adapter's physical button — which leaves no way to pair at all on a unit whose button has
