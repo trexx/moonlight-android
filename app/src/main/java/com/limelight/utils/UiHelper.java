@@ -4,11 +4,9 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.GameManager;
 import android.app.GameState;
-import android.app.UiModeManager;
 import android.content.Context;
 import android.content.DialogInterface;
 import android.content.SharedPreferences;
-import android.content.res.Configuration;
 import android.graphics.Insets;
 import android.os.Build;
 import android.view.View;
@@ -23,16 +21,12 @@ import com.limelight.preferences.PreferenceConfiguration;
 
 
 /**
- * Shared UI behaviour: window insets, TV-specific layout adjustments, and the dialogs used from
- * more than one screen.
+ * Shared UI behaviour: window insets and the dialogs used from more than one screen.
  *
  * <p>Also carries the notification hooks that tell the system when a stream starts and ends, which
  * is what suppresses interruptions during play.
  */
 public class UiHelper {
-
-    private static final int TV_VERTICAL_PADDING_DP = 15;
-    private static final int TV_HORIZONTAL_PADDING_DP = 15;
 
     private static void setGameModeStatus(Context context, boolean streaming, boolean interruptible) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -89,14 +83,16 @@ public class UiHelper {
     }
 
     /**
-     * Applies the app's window conventions to a newly set content view: insets, and the TV
-     * overscan margins that keep content off the edges of televisions.
+     * Applies the app's window conventions to a newly set content view.
+     *
+     * <p>Television overscan padding used to be applied here, by measuring the UI mode and pushing
+     * padding onto the content view. It is now {@code screen_padding_*} in
+     * {@code values-television/dimens.xml}, which the layouts reference directly: a resource
+     * qualifier is resolved before the first measure pass rather than after it, so the screen no
+     * longer lays out once at the wrong inset and then again at the right one.
      */
     public static void notifyNewRootView(final Activity activity)
     {
-        View rootView = activity.findViewById(android.R.id.content);
-        UiModeManager modeMgr = (UiModeManager) activity.getSystemService(Context.UI_MODE_SERVICE);
-
         // Set GameState.MODE_NONE initially for all activities
         setGameModeStatus(activity, false, false);
 
@@ -108,45 +104,34 @@ public class UiHelper {
         activity.getWindow().getAttributes().layoutInDisplayCutoutMode =
                 WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES;
 
-        if (modeMgr.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION) {
-            // Increase view padding on TVs
-            float scale = activity.getResources().getDisplayMetrics().density;
-            int verticalPaddingPixels = (int) (TV_VERTICAL_PADDING_DP*scale + 0.5f);
-            int horizontalPaddingPixels = (int) (TV_HORIZONTAL_PADDING_DP*scale + 0.5f);
+        // Draw under the status bar.
+        //
+        // Using getDecorView() here breaks the translucent status/navigation bar when gestures are disabled
+        activity.findViewById(android.R.id.content).setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View view, WindowInsets windowInsets) {
+                // Use the tappable insets so we can draw under the status bar in gesture mode
+                Insets tappableInsets = windowInsets.getTappableElementInsets();
+                view.setPadding(tappableInsets.left,
+                        tappableInsets.top,
+                        tappableInsets.right,
+                        0);
 
-            rootView.setPadding(horizontalPaddingPixels, verticalPaddingPixels,
-                    horizontalPaddingPixels, verticalPaddingPixels);
-        }
-        else {
-            // Draw under the status bar on Android Q devices
-
-            // Using getDecorView() here breaks the translucent status/navigation bar when gestures are disabled
-            activity.findViewById(android.R.id.content).setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
-                @Override
-                public WindowInsets onApplyWindowInsets(View view, WindowInsets windowInsets) {
-                    // Use the tappable insets so we can draw under the status bar in gesture mode
-                    Insets tappableInsets = windowInsets.getTappableElementInsets();
-                    view.setPadding(tappableInsets.left,
-                            tappableInsets.top,
-                            tappableInsets.right,
-                            0);
-
-                    // Show a translucent navigation bar if we can't tap there
-                    if (tappableInsets.bottom != 0) {
-                        activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-                    }
-                    else {
-                        activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
-                    }
-
-                    return windowInsets;
+                // Show a translucent navigation bar if we can't tap there
+                if (tappableInsets.bottom != 0) {
+                    activity.getWindow().addFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
                 }
-            });
+                else {
+                    activity.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_NAVIGATION);
+                }
 
-            // Lay out edge-to-edge so the insets listener above controls the padding.
-            // Replaces SYSTEM_UI_FLAG_LAYOUT_STABLE | SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION.
-            activity.getWindow().setDecorFitsSystemWindows(false);
-        }
+                return windowInsets;
+            }
+        });
+
+        // Lay out edge-to-edge so the insets listener above controls the padding.
+        // Replaces SYSTEM_UI_FLAG_LAYOUT_STABLE | SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION.
+        activity.getWindow().setDecorFitsSystemWindows(false);
     }
 
     /**

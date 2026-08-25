@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The focus ring, set as android:foreground on a tile so it draws over box art rather than
+  behind it.
+
+  A stroke-only shape with no solid fill: the artwork underneath has to stay visible, and a
+  focused tile that dims its own content defeats the point of focusing it.
+
+  Paired with tile_focus.xml, which does the scale and lift. Ring and lift together, rather than
+  either alone, because a lift with no ring is ambiguous against a tile that simply has a
+  brighter image, and a ring with no lift is easy to miss from across a room.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="@dimen/tile_corner_radius" />
+            <stroke
+                android:width="@dimen/tile_focus_ring_width"
+                android:color="@color/focus_ring" />
+        </shape>
+    </item>
+
+    <!-- Pressed but not focused: a touch on a phone or a ChromeOS window, where there is no
+         focus to move. Dimmer than the focus ring, since the finger already says where it is. -->
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="@dimen/tile_corner_radius" />
+            <stroke
+                android:width="@dimen/tile_focus_ring_width"
+                android:color="@color/accent_dim" />
+        </shape>
+    </item>
+
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+
+</selector>

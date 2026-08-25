@@ -1,10 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- Base application theme -->
+    <!--
+      Base application theme.
+
+      Parented on the platform's Material theme rather than an AppCompat or Material Components
+      one: this fork has no AndroidX on its classpath and deliberately keeps it that way, so
+      everything below is a framework attribute available at minSdk 30.
+
+      The palette is set here rather than per-view so that framework widgets we never touch -
+      AlertDialog, the preference list, the seek bar in SeekBarPreference - pick it up for free.
+    -->
     <style name="AppBaseTheme" parent="android:Theme.Material">
+        <item name="android:colorPrimary">@color/surface</item>
+        <item name="android:colorPrimaryDark">@color/surface</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorBackground">@color/surface</item>
+        <item name="android:windowBackground">@color/surface</item>
+        <item name="android:colorControlHighlight">@color/accent_dim</item>
+
+        <item name="android:textColorPrimary">@color/on_surface</item>
+        <item name="android:textColorSecondary">@color/on_surface_variant</item>
+
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
+
+        <!-- Cross-activity transitions, used for browse -> settings. Free on both boxes: the
+             framework runs them on the render thread and neither activity exists while a stream
+             is running. -->
+        <item name="android:windowActivityTransitions">true</item>
+
         <!-- Avoid some systems like MIUI which break the visibility of games title -->
         <item name="android:forceDarkAllowed">false</item>
     </style>
@@ -19,15 +44,65 @@
       Use a black background to avoid the transparent background when switching apps.
       android:windowBackgroundFallback is supposed to do this, but it wasn't working for
       me as of Android 7.1
+
+      Note this is pure black, not @color/surface: it is what shows through around a stream that
+      does not fill the panel, where anything but black would be visible letterboxing.
     -->
     <style name="StreamBaseTheme" parent="AppBaseTheme">
         <item name="android:windowBackground">@android:color/black</item>
+        <!-- The stream activity must not animate in or out; a transition would composite over
+             the decoder's surface during the first frames. -->
+        <item name="android:windowActivityTransitions">false</item>
     </style>
 
     <!-- Stream activity theme -->
     <style name="StreamTheme" parent="StreamBaseTheme">
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
+    </style>
+
+    <!--
+      Type scale. Sizes are in sp so the system font-size setting still applies, and the families
+      are the platform's own - loading a font file would add weight to the APK for no legibility
+      gain at three metres.
+    -->
+    <style name="TextAppearance.Moonlight" parent="@android:style/TextAppearance.Material">
+        <item name="android:textColor">@color/on_surface</item>
+    </style>
+
+    <!-- Screen title: the host name above the app grid. -->
+    <style name="TextAppearance.Moonlight.Title">
+        <item name="android:fontFamily">sans-serif-light</item>
+        <item name="android:textSize">32sp</item>
+    </style>
+
+    <!-- "Hosts", "Apps on <name>" - the labels that separate the bands. -->
+    <style name="TextAppearance.Moonlight.Section">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:textColor">@color/on_surface_variant</item>
+    </style>
+
+    <!-- The name under a tile. Medium rather than regular because it is frequently drawn over
+         box art, where a light weight disappears. -->
+    <style name="TextAppearance.Moonlight.Tile">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textSize">16sp</item>
+    </style>
+
+    <!-- Rail labels, visible only while the rail is expanded. -->
+    <style name="TextAppearance.Moonlight.Rail">
+        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="android:textSize">16sp</item>
+    </style>
+
+    <!-- Shown when there is no host, or the selected host has no apps yet. -->
+    <style name="TextAppearance.Moonlight.Empty">
+        <item name="android:fontFamily">sans-serif-light</item>
+        <item name="android:textSize">22sp</item>
+        <item name="android:textColor">@color/on_surface_variant</item>
     </style>
 
 </resources>

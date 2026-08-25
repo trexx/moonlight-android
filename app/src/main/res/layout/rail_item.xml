@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One destination in the navigation rail. Inflated by BrowseActivity rather than <include>d three
+  times, because each copy needs its own icon and label and <include> cannot supply either.
+
+  Focusable in its own right - unlike the app grid's cells, this is a plain view in a plain
+  LinearLayout, so android:stateListAnimator works here and the framework moves focus between
+  items with no help.
+
+  The label is present at all widths and simply clipped while the rail is collapsed. Animating a
+  width the text is already laid out for is what lets ChangeBounds do the whole expansion; adding
+  and removing the TextView instead would re-measure the text on every focus change.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="@dimen/rail_item_height"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:paddingStart="@dimen/space_5"
+    android:paddingEnd="@dimen/space_5"
+    android:layout_marginBottom="@dimen/space_2"
+    android:background="@drawable/rail_item_background"
+    android:stateListAnimator="@animator/tile_focus"
+    android:focusable="true"
+    android:clickable="true">
+
+    <ImageView
+        android:id="@+id/railIcon"
+        android:importantForAccessibility="no"
+        android:layout_width="@dimen/rail_icon_size"
+        android:layout_height="@dimen/rail_icon_size" />
+
+    <TextView
+        android:id="@+id/railLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/space_4"
+        android:singleLine="true"
+        android:textAppearance="@style/TextAppearance.Moonlight.Rail" />
+
+</LinearLayout>

@@ -31,7 +31,7 @@ import java.util.UUID;
 
 /**
  * Entry point for launcher shortcuts and TV channel programs, which start a stream directly
- * without going through {@link PcView}.
+ * without going through {@link BrowseActivity}.
  *
  * <p>It exists because a shortcut carries only a host UUID and an app ID, while starting a stream
  * needs a paired, reachable host and its certificate. So this activity binds to the computer
@@ -155,16 +155,15 @@ public class ShortcutTrampoline extends Activity {
                                                 // Close this activity
                                                 finish();
 
-                                                // Add the PC view at the back (and clear the task)
-                                                Intent i;
-                                                i = new Intent(ShortcutTrampoline.this, PcView.class);
+                                                // One browse activity at the back, carrying this
+                                                // intent's UUID so it opens on the right host.
+                                                // This used to be two activities - the host grid
+                                                // with the app grid stacked on top - which is what
+                                                // merging them into BrowseActivity removed.
+                                                Intent i = new Intent(getIntent());
+                                                i.setClass(ShortcutTrampoline.this, BrowseActivity.class);
                                                 i.setAction(Intent.ACTION_MAIN);
                                                 i.setFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK | Intent.FLAG_ACTIVITY_NEW_TASK);
-                                                intentStack.add(i);
-
-                                                // Take this intent's data and create an intent to start the app view
-                                                i = new Intent(getIntent());
-                                                i.setClass(ShortcutTrampoline.this, AppView.class);
                                                 intentStack.add(i);
 
                                                 // If a game is running, we'll make the stream the top level activity
@@ -276,8 +275,8 @@ public class ShortcutTrampoline extends Activity {
         ComputerDetails _computer = null;
 
         // PC arguments, both are optional, but at least one must be provided
-        uuidString = getIntent().getStringExtra(AppView.UUID_EXTRA);
-        String nameString = getIntent().getStringExtra(AppView.NAME_EXTRA);
+        uuidString = getIntent().getStringExtra(BrowseActivity.UUID_EXTRA);
+        String nameString = getIntent().getStringExtra(BrowseActivity.NAME_EXTRA);
 
         // App arguments, both are optional, but one must be provided in order to start an app
         String appIdString = getIntent().getStringExtra(Game.EXTRA_APP_ID);
@@ -302,8 +301,8 @@ public class ShortcutTrampoline extends Activity {
 
             uuidString = _computer.uuid;
 
-            // Set the AppView UUID intent, since it wasn't provided
-            setIntent(new Intent(getIntent()).putExtra(AppView.UUID_EXTRA, uuidString));
+            // Set the browse UUID intent, since it wasn't provided
+            setIntent(new Intent(getIntent()).putExtra(BrowseActivity.UUID_EXTRA, uuidString));
         }
 
         if (appIdString != null && !appIdString.isEmpty()) {

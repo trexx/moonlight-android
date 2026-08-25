@@ -4,7 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.widget.Toast;
 
-import com.limelight.AppView;
+import com.limelight.BrowseActivity;
 import com.limelight.Game;
 import com.limelight.R;
 import com.limelight.ShortcutTrampoline;
@@ -24,7 +24,7 @@ import java.net.UnknownHostException;
 import java.security.cert.CertificateEncodingException;
 
 /**
- * Host and app actions shared between {@code PcView} and {@code AppView}: building launch intents,
+ * Host and app actions shared between {@code BrowseActivity}: building launch intents,
  * starting streams, quitting the running app and running the network test.
  */
 public class ServerHelper {
@@ -44,8 +44,8 @@ public class ServerHelper {
     /** @return an intent that opens this host's app list, for a launcher shortcut */
     public static Intent createPcShortcutIntent(Activity parent, ComputerDetails computer) {
         Intent i = new Intent(parent, ShortcutTrampoline.class);
-        i.putExtra(AppView.NAME_EXTRA, computer.name);
-        i.putExtra(AppView.UUID_EXTRA, computer.uuid);
+        i.putExtra(BrowseActivity.NAME_EXTRA, computer.name);
+        i.putExtra(BrowseActivity.UUID_EXTRA, computer.uuid);
         i.setAction(Intent.ACTION_DEFAULT);
         return i;
     }
@@ -53,8 +53,8 @@ public class ServerHelper {
     /** @return an intent that streams this app directly, for a launcher shortcut */
     public static Intent createAppShortcutIntent(Activity parent, ComputerDetails computer, NvApp app) {
         Intent i = new Intent(parent, ShortcutTrampoline.class);
-        i.putExtra(AppView.NAME_EXTRA, computer.name);
-        i.putExtra(AppView.UUID_EXTRA, computer.uuid);
+        i.putExtra(BrowseActivity.NAME_EXTRA, computer.name);
+        i.putExtra(BrowseActivity.UUID_EXTRA, computer.uuid);
         i.putExtra(Game.EXTRA_APP_NAME, app.getAppName());
         i.putExtra(Game.EXTRA_APP_ID, ""+app.getAppId());
         i.putExtra(Game.EXTRA_APP_HDR, app.isHdrSupported());

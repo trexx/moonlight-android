@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The focus lift: a tile grows and rises when it takes focus, and settles back when it loses it.
+  This is what tells a user driving with a D-pad where they are, and it is the single largest
+  visible difference between this UI and the framework default, which draws nothing at all.
+
+  Platform StateListAnimator, applied with android:stateListAnimator - no library involved. It
+  runs on the render thread, only on focus change, and only while browsing; no stream exists at
+  that point.
+
+  translationZ rather than elevation because it composes: the tile keeps whatever resting
+  elevation its background gives it, and lifting also raises it above its neighbours in draw
+  order, so the grown edges are not clipped by the next cell along.
+
+  Durations are asymmetric on purpose. Focus in is quick enough to feel attached to the D-pad
+  press; focus out is slower so that holding a direction down does not strobe.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item android:state_focused="true">
+        <set>
+            <objectAnimator
+                android:propertyName="scaleX"
+                android:valueTo="@dimen/tile_focus_scale"
+                android:valueType="floatType"
+                android:duration="150"
+                android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <objectAnimator
+                android:propertyName="scaleY"
+                android:valueTo="@dimen/tile_focus_scale"
+                android:valueType="floatType"
+                android:duration="150"
+                android:interpolator="@android:interpolator/fast_out_slow_in" />
+            <objectAnimator
+                android:propertyName="translationZ"
+                android:valueTo="@dimen/tile_focus_lift"
+                android:valueType="floatType"
+                android:duration="150"
+                android:interpolator="@android:interpolator/fast_out_slow_in" />
+        </set>
+    </item>
+
+    <item>
+        <set>
+            <objectAnimator
+                android:propertyName="scaleX"
+                android:valueTo="1.0"
+                android:valueType="floatType"
+                android:duration="200"
+                android:interpolator="@android:interpolator/fast_out_linear_in" />
+            <objectAnimator
+                android:propertyName="scaleY"
+                android:valueTo="1.0"
+                android:valueType="floatType"
+                android:duration="200"
+                android:interpolator="@android:interpolator/fast_out_linear_in" />
+            <objectAnimator
+                android:propertyName="translationZ"
+                android:valueTo="0dp"
+                android:valueType="floatType"
+                android:duration="200"
+                android:interpolator="@android:interpolator/fast_out_linear_in" />
+        </set>
+    </item>
+
+</selector>

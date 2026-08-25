@@ -1,38 +1,48 @@
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Add a host by address.
+
+  A centred column rather than the previous title-plus-row arrangement: this screen is one field
+  and one button, and on a television a form pinned to the top left of a 55" panel is a long way
+  from where the eye is. Centring also removes the reason the field and button had to share a row.
+
+  The field keeps <requestFocus/> so a keyboard-driven entry starts in the right place, and the
+  activity keeps windowSoftInputMode="stateVisible" in the manifest so the soft keyboard is up on
+  arrival.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
-    android:layout_width="fill_parent"
-    android:layout_height="fill_parent"
-    android:paddingBottom="@dimen/activity_vertical_margin"
-    android:paddingLeft="@dimen/activity_horizontal_margin"
-    android:paddingRight="@dimen/activity_horizontal_margin"
-    android:paddingTop="@dimen/activity_vertical_margin"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:paddingStart="@dimen/screen_padding_horizontal"
+    android:paddingEnd="@dimen/screen_padding_horizontal"
+    android:paddingTop="@dimen/screen_padding_vertical"
+    android:paddingBottom="@dimen/screen_padding_vertical"
     tools:context=".preferences.AddComputerManually" >
 
     <TextView
         android:id="@+id/manuallyAddPcText"
-        android:text="@string/title_add_pc"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_marginBottom="@dimen/space_5"
+        android:text="@string/title_add_pc"
+        android:gravity="center"
         android:preferKeepClear="true"
-        android:layout_centerHorizontal="true"
-        android:textAppearance="?android:attr/textAppearanceLarge"
-        android:layout_alignParentTop="true"/>
+        android:textAppearance="@style/TextAppearance.Moonlight.Title" />
 
     <EditText
         android:id="@+id/hostTextView"
         android:importantForAutofill="no"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_below="@+id/manuallyAddPcText"
-        android:layout_toStartOf="@+id/addPcButton"
-        android:layout_marginTop="25dp"
-        android:layout_alignParentStart="true"
-        android:ems="10"
+        android:maxWidth="480dp"
         android:singleLine="true"
         android:preferKeepClear="true"
         android:inputType="textNoSuggestions"
         android:hint="@string/ip_hint" >
-        
+
         <requestFocus />
     </EditText>
 
@@ -40,10 +50,10 @@
         android:id="@+id/addPcButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:layout_marginTop="25dp"
-        android:layout_below="@+id/manuallyAddPcText"
-        android:layout_alignParentEnd="true"
+        android:layout_marginTop="@dimen/space_5"
+        android:paddingStart="@dimen/space_5"
+        android:paddingEnd="@dimen/space_5"
         android:preferKeepClear="true"
         android:text="@android:string/ok"/>
-	
-</RelativeLayout>
+
+</LinearLayout>

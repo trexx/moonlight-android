@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The resting surface of a tile, behind the icon or box art.
+
+  It exists mainly so that a tile whose artwork has not arrived yet, or which is letterboxed
+  inside its cell, is still a shape rather than a hole in the background. It also gives the
+  focus lift in tile_focus.xml something to cast a shadow from - translationZ on a fully
+  transparent view produces no visible shadow.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <corners android:radius="@dimen/tile_corner_radius" />
+    <solid android:color="@color/surface_variant" />
+</shape>

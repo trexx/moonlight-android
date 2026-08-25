@@ -3,17 +3,19 @@ package com.limelight.grid;
 import android.content.Context;
 import android.graphics.BitmapFactory;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
-import com.limelight.AppView;
+
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.grid.assets.CachedAppAssetLoader;
 import com.limelight.grid.assets.DiskAssetLoader;
 import com.limelight.grid.assets.MemoryAssetLoader;
 import com.limelight.grid.assets.NetworkAssetLoader;
+import com.limelight.ui.RoundedOutlineProvider;
 import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.preferences.PreferenceConfiguration;
 
@@ -33,22 +35,30 @@ import java.util.Set;
  * otherwise queue work for cells that are long gone.
  */
 @SuppressWarnings("unchecked")
-public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
+public class AppGridAdapter extends GenericGridAdapter<AppObject> {
     private static final int ART_WIDTH_PX = 300;
-    private static final int SMALL_WIDTH_DP = 100;
-    private static final int LARGE_WIDTH_DP = 150;
 
     private final ComputerDetails computer;
     private final String uniqueId;
     private final boolean showHiddenApps;
 
+    /**
+     * Cell geometry, resolved from resources rather than held as dp constants so the television
+     * overrides in values-television/ apply. Rewritten by
+     * {@link #updateLayoutWithPreferences} whenever the small-icon setting changes.
+     */
+    private int cellWidthPx, cellHeightPx;
+
+    /** Shared across every cell: all cells are the same size, so one outline serves them all. */
+    private RoundedOutlineProvider outlineProvider;
+
     private CachedAppAssetLoader loader;
     private Set<Integer> hiddenAppIds = new HashSet<>();
-    private ArrayList<AppView.AppObject> allApps = new ArrayList<>();
+    private ArrayList<AppObject> allApps = new ArrayList<>();
 
     /** @param showHiddenApps include apps the user has hidden, for the settings-driven view */
     public AppGridAdapter(Context context, PreferenceConfiguration prefs, ComputerDetails computer, String uniqueId, boolean showHiddenApps) {
-        super(context, getLayoutIdForPreferences(prefs));
+        super(context, R.layout.app_grid_item);
 
         this.computer = computer;
         this.uniqueId = uniqueId;
@@ -70,7 +80,7 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         if (hideImmediately) {
             // Reconstruct the itemList with the new hidden app set
             itemList.clear();
-            for (AppView.AppObject app : allApps) {
+            for (AppObject app : allApps) {
                 app.isHidden = hiddenAppIds.contains(app.app.getAppId());
 
                 if (!app.isHidden || showHiddenApps) {
@@ -80,7 +90,7 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         }
         else {
             // Just update the isHidden state to show the correct UI indication
-            for (AppView.AppObject app : allApps) {
+            for (AppObject app : allApps) {
                 app.isHidden = hiddenAppIds.contains(app.app.getAppId());
             }
         }
@@ -88,32 +98,22 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         notifyDataSetChanged();
     }
 
-    private static int getLayoutIdForPreferences(PreferenceConfiguration prefs) {
-        if (prefs.smallIconMode) {
-            return R.layout.app_grid_item_small;
-        }
-        else {
-            return R.layout.app_grid_item;
-        }
-    }
-
-    /** Re-reads the cell size and box art preferences, then rebuilds the layout. */
+    /**
+     * Re-reads the cell size and box art preferences, then rebuilds the asset loader around them.
+     *
+     * <p>There is one cell layout now, not one per setting: small icon mode changes the cell's
+     * measured size, which is applied per bind in {@link #populateView}, rather than swapping in a
+     * second copy of the same layout at a different scale.
+     */
     public void updateLayoutWithPreferences(Context context, PreferenceConfiguration prefs) {
-        int dpi = context.getResources().getDisplayMetrics().densityDpi;
-        int dp;
+        cellWidthPx = context.getResources().getDimensionPixelSize(prefs.smallIconMode
+                ? R.dimen.app_tile_width_small : R.dimen.app_tile_width_large);
+        cellHeightPx = context.getResources().getDimensionPixelSize(prefs.smallIconMode
+                ? R.dimen.app_tile_height_small : R.dimen.app_tile_height_large);
+        outlineProvider = new RoundedOutlineProvider(
+                context.getResources().getDimensionPixelSize(R.dimen.tile_corner_radius));
 
-        if (prefs.smallIconMode) {
-            dp = SMALL_WIDTH_DP;
-        }
-        else {
-            dp = LARGE_WIDTH_DP;
-        }
-
-        double scalingDivisor = ART_WIDTH_PX / (dp * (dpi / 160.0));
-        if (scalingDivisor < 1.0) {
-            // We don't want to make them bigger before draw-time
-            scalingDivisor = 1.0;
-        }
+        double scalingDivisor = GridMetrics.artScalingDivisor(ART_WIDTH_PX, cellWidthPx);
         LimeLog.info("Art scaling divisor: " + scalingDivisor);
 
         if (loader != null) {
@@ -127,8 +127,8 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
                 new DiskAssetLoader(context),
                 BitmapFactory.decodeResource(context.getResources(), R.drawable.no_app_image));
 
-        // This will trigger the view to reload with the new layout
-        setLayoutId(getLayoutIdForPreferences(prefs));
+        // Cells already on screen were measured for the previous size
+        notifyDataSetInvalidated();
     }
 
     /** Cancels pending box art loads, e.g. when leaving the screen. */
@@ -138,17 +138,17 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
         loader.freeCacheMemory();
     }
 
-    private static void sortList(List<AppView.AppObject> list) {
-        Collections.sort(list, new Comparator<AppView.AppObject>() {
+    private static void sortList(List<AppObject> list) {
+        Collections.sort(list, new Comparator<AppObject>() {
             @Override
-            public int compare(AppView.AppObject lhs, AppView.AppObject rhs) {
+            public int compare(AppObject lhs, AppObject rhs) {
                 return lhs.app.getAppName().toLowerCase(Locale.getDefault()).compareTo(rhs.app.getAppName().toLowerCase(Locale.getDefault()));
             }
         });
     }
 
     /** Adds an app and re-sorts, so the grid order is stable regardless of arrival order. */
-    public void addApp(AppView.AppObject app) {
+    public void addApp(AppObject app) {
         // Update hidden state
         app.isHidden = hiddenAppIds.contains(app.app.getAppId());
 
@@ -168,7 +168,7 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
     }
 
     /** Removes an app from the grid. */
-    public void removeApp(AppView.AppObject app) {
+    public void removeApp(AppObject app) {
         itemList.remove(app);
         allApps.remove(app);
     }
@@ -182,7 +182,28 @@ public class AppGridAdapter extends GenericGridAdapter<AppView.AppObject> {
 
     /** {@inheritDoc} Binds name and box art, starting an asynchronous load if it isn't cached. */
     @Override
-    public void populateView(View parentView, ImageView imgView, ProgressBar prgView, TextView txtView, ImageView overlayView, AppView.AppObject obj) {
+    public void populateView(View parentView, ImageView imgView, ProgressBar prgView, TextView txtView, ImageView overlayView, AppObject obj) {
+        // Cell size is a preference, not a layout, so it is applied here rather than by inflating
+        // a second copy of the layout at a different scale.
+        ViewGroup.LayoutParams params = parentView.getLayoutParams();
+        if (params != null && (params.width != cellWidthPx || params.height != cellHeightPx)) {
+            params.width = cellWidthPx;
+            params.height = cellHeightPx;
+            parentView.setLayoutParams(params);
+        }
+
+        // Rounds the artwork and the label scrim along with the tile's own background. Set once
+        // per view rather than per bind: this runs on every scroll, and both calls invalidate.
+        if (parentView.getOutlineProvider() != outlineProvider) {
+            outlineProvider.applyTo(parentView);
+        }
+
+        // Cells are recycled, and BrowseActivity raises the selected one by hand because GridView
+        // cells cannot hold focus. A cell recycled while raised would arrive still scaled.
+        parentView.setScaleX(1f);
+        parentView.setScaleY(1f);
+        parentView.setTranslationZ(0f);
+
         // Let the cached asset loader handle it
         loader.populateImageView(obj.app, imgView, txtView);
 

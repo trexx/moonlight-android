@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One host in the band above the app grid. Replaces pc_grid_item.xml.
+
+  Not an adapter cell: the band is a LinearLayout inside a HorizontalScrollView, holding one of
+  these per host. Hosts number one to a handful in practice, so there is nothing to recycle, and
+  a plain focusable view gets the framework's own focus handling - android:stateListAnimator and
+  android:foreground both work here, which they cannot inside a GridView. See activity_browse.xml
+  for why the app grid has to do it differently.
+
+  The badge and the spinner deliberately occupy the same place over the icon: a host is either
+  being probed (spinner), or settled with something to report (offline, or online but unpaired),
+  never both.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="@dimen/host_tile_width"
+    android:layout_height="wrap_content"
+    android:layout_marginEnd="@dimen/tile_spacing"
+    android:background="@drawable/tile_background"
+    android:foreground="@drawable/tile_focus_ring"
+    android:stateListAnimator="@animator/tile_focus"
+    android:focusable="true"
+    android:clickable="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center_horizontal"
+        android:padding="@dimen/space_3">
+
+        <FrameLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content">
+
+            <ImageView
+                android:id="@+id/grid_image"
+                android:importantForAccessibility="no"
+                android:layout_width="@dimen/host_tile_icon_size"
+                android:layout_height="@dimen/host_tile_icon_size"
+                android:src="@drawable/ic_computer" />
+
+            <ImageView
+                android:id="@+id/grid_overlay"
+                android:importantForAccessibility="no"
+                android:layout_width="@dimen/host_tile_badge_size"
+                android:layout_height="@dimen/host_tile_badge_size"
+                android:layout_gravity="center" />
+
+            <ProgressBar
+                android:id="@+id/grid_spinner"
+                android:layout_width="@dimen/host_tile_badge_size"
+                android:layout_height="@dimen/host_tile_badge_size"
+                android:layout_gravity="center"
+                android:indeterminate="true" />
+
+        </FrameLayout>
+
+        <TextView
+            android:id="@+id/grid_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_2"
+            android:gravity="center"
+            android:maxLines="2"
+            android:ellipsize="end"
+            android:textAppearance="@style/TextAppearance.Moonlight.Tile" />
+
+    </LinearLayout>
+
+</FrameLayout>

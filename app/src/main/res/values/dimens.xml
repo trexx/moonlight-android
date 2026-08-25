@@ -1,8 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The spacing and sizing scale. Layouts reference these rather than literal dp so that the
+  television overrides in values-television/ can move the whole UI at once.
+
+  space_* runs in multiples of 4dp. Use it for margins and padding; do not introduce values off
+  the scale, because a grid that lands on it is what makes rows line up across screens.
+-->
 <resources>
 
-    <!-- Default screen margins, per the Android Design guidelines. -->
-    <dimen name="activity_horizontal_margin">16dp</dimen>
-    <dimen name="activity_vertical_margin">16dp</dimen>
+    <!-- Screen edges. Overridden in values-television/ for overscan, which is why no layout
+         should ever hardcode its own edge padding. -->
+    <dimen name="screen_padding_horizontal">16dp</dimen>
+    <dimen name="screen_padding_vertical">16dp</dimen>
+
+    <dimen name="space_2">8dp</dimen>
+    <dimen name="space_3">12dp</dimen>
+    <dimen name="space_4">16dp</dimen>
+    <dimen name="space_5">24dp</dimen>
+
+    <!-- Navigation rail. collapsed is the resting width - icons only; expanded is what it grows
+         to when any rail item takes focus, which is where the labels become visible. -->
+    <dimen name="rail_width_collapsed">72dp</dimen>
+    <dimen name="rail_width_expanded">220dp</dimen>
+    <dimen name="rail_item_height">56dp</dimen>
+    <dimen name="rail_icon_size">28dp</dimen>
+
+    <!-- Host tiles, in the fixed band above the app grid. -->
+    <dimen name="host_tile_width">150dp</dimen>
+    <dimen name="host_tile_icon_size">72dp</dimen>
+    <dimen name="host_tile_badge_size">40dp</dimen>
+
+    <!-- App tiles. The two widths are the small-icon preference, not a screen-size decision, so
+         they are chosen in code rather than by a resource qualifier - see BrowseActivity. The
+         3:4 art aspect is Steam's grid capsule ratio, which is what most box art arrives as. -->
+    <dimen name="app_tile_width_large">150dp</dimen>
+    <dimen name="app_tile_height_large">200dp</dimen>
+    <dimen name="app_tile_width_small">100dp</dimen>
+    <dimen name="app_tile_height_small">133dp</dimen>
+    <dimen name="app_tile_badge_size">44dp</dimen>
+
+    <!-- Tile decoration. focus_lift is translationZ, so it is both the shadow depth and the
+         stacking order against neighbouring tiles. -->
+    <dimen name="tile_corner_radius">8dp</dimen>
+    <dimen name="tile_focus_ring_width">3dp</dimen>
+    <dimen name="tile_focus_lift">8dp</dimen>
+    <dimen name="tile_spacing">10dp</dimen>
+
+    <!-- Alpha for a host that is offline or still being probed. A float dimen rather than a
+         second set of colours, because it applies to artwork as well as to text. -->
+    <item name="tile_alpha_offline" format="float" type="dimen">0.4</item>
+    <item name="tile_alpha_normal" format="float" type="dimen">1.0</item>
+
+    <!-- How far a focused tile grows. Kept below 1.1 because a GridView cell that overlaps its
+         neighbour by more than a few dp reads as a layout bug rather than as focus. -->
+    <item name="tile_focus_scale" format="float" type="dimen">1.08</item>
+
     <dimen name="tv_channel_logo_width">80dp</dimen>
 
 </resources>

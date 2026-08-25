@@ -40,12 +40,6 @@
     <string name="pair_already_in_progress">Pairing already in progress</string>
 
 
-    <!-- Unpair messages -->
-    <string name="unpairing">Unpairing…</string>
-    <string name="unpair_success">Unpaired successfully</string>
-    <string name="unpair_fail">Failed to unpair</string>
-    <string name="unpair_error">Device was not paired</string>
-
     <!-- Errors -->
     <string name="error_pc_offline">Computer is offline</string>
     <string name="error_manager_not_running">The ComputerManager service is not running. Please wait a few seconds or restart the app.</string>
@@ -82,7 +76,7 @@
     <!-- General strings -->
     <string name="ip_hint">IP address of host PC</string>
     <string name="no_pc_added">No host PCs added yet.\n\n
-        Use the + button to add one by IP address or hostname, and make sure Sunshine is running on it.</string>
+        Use Add PC in the sidebar to add one by IP address or hostname, and make sure Sunshine is running on it.</string>
     <string name="yes">Yes</string>
     <string name="no">No</string>
     <string name="lost_connection">Lost connection to PC</string>
@@ -318,4 +312,16 @@
     <string name="analogscroll_none">None (both sticks move the mouse)</string>
     <string name="analogscroll_right">Right analog stick</string>
     <string name="analogscroll_left">Left analog stick</string>
+
+    <!-- Browse screen. The navigation rail, the band of hosts, and the messages shown in place
+         of the app grid when there is no host to show apps for. -->
+    <string name="section_hosts">Hosts</string>
+    <string name="section_apps">Apps on %1$s</string>
+    <string name="rail_add_pc">Add PC</string>
+    <string name="browse_no_selection">Select a PC above to see its apps.</string>
+    <string name="browse_host_probing">Checking %1$s\u2026</string>
+    <string name="browse_host_offline">%1$s is offline.</string>
+    <string name="browse_host_unpaired">Not paired with %1$s.\n\nSelect it to pair.</string>
+    <string name="browse_no_apps">No apps on %1$s yet.</string>
+
 </resources>
