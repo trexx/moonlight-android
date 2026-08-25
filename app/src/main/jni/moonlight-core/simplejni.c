@@ -176,18 +176,6 @@ Java_com_limelight_nvstream_jni_MoonBridge_getRTPVideoStats(JNIEnv *env, jclass 
 }
 
 JNIEXPORT jint JNICALL
-Java_com_limelight_nvstream_jni_MoonBridge_testClientConnectivity(JNIEnv *env, jclass clazz, jstring testServerHostName, jint referencePort, jint testFlags) {
-    int ret;
-    const char* testServerHostNameStr = (*env)->GetStringUTFChars(env, testServerHostName, NULL);
-
-    ret = LiTestClientConnectivity(testServerHostNameStr, (unsigned short)referencePort, testFlags);
-
-    (*env)->ReleaseStringUTFChars(env, testServerHostName, testServerHostNameStr);
-
-    return ret;
-}
-
-JNIEXPORT jint JNICALL
 Java_com_limelight_nvstream_jni_MoonBridge_getPortFlagsFromStage(JNIEnv *env, jclass clazz, jint stage) {
     return LiGetPortFlagsFromStage(stage);
 }

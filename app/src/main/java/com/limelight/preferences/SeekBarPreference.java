@@ -13,6 +13,8 @@ import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
+import com.limelight.R;
+
 import java.util.Locale;
 
 // Based on a Stack Overflow example: http://stackoverflow.com/questions/1974193/slider-on-my-preferencescreen
@@ -83,13 +85,19 @@ public class SeekBarPreference extends DialogPreference
     @Override
     protected View onCreateDialogView() {
 
+        // Padding comes from dimens rather than the raw pixel counts this used to pass, which were
+        // the same handful of pixels at every density and so all but invisible on a 4K panel.
+        int outerPadding = context.getResources().getDimensionPixelSize(R.dimen.space_2);
+        int textPaddingH = context.getResources().getDimensionPixelSize(R.dimen.space_5);
+        int textPaddingV = context.getResources().getDimensionPixelSize(R.dimen.space_3);
+
         LinearLayout.LayoutParams params;
         LinearLayout layout = new LinearLayout(context);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(6, 6, 6, 6);
+        layout.setPadding(outerPadding, outerPadding, outerPadding, outerPadding);
 
         TextView splashText = new TextView(context);
-        splashText.setPadding(30, 10, 30, 10);
+        splashText.setPadding(textPaddingH, textPaddingV, textPaddingH, textPaddingV);
         if (dialogMessage != null) {
             splashText.setText(dialogMessage);
         }

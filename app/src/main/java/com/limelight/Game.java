@@ -35,7 +35,6 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamView;
 import com.limelight.utils.Dialog;
-import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.UiHelper;
@@ -1850,15 +1849,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      */
     @Override
     public boolean stageFailed(final String stage, final int portFlags, final int errorCode) {
-        // Perform a connection test if the failure could be due to a blocked port
-        // This does network I/O, so don't do it on the main thread.
-        final int portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER, 443, portFlags);
-
-        // A failure with no error code, on a connection where we cannot demonstrate a
-        // blocked port, is usually a host that is reachable but not ready to launch yet.
-        // Tell the caller to retry instead of tearing the session down.
-        if (errorCode == 0 &&
-                (portTestResult == MoonBridge.ML_TEST_RESULT_INCONCLUSIVE || portTestResult == 0)) {
+        // A failure with no error code is usually a host that is reachable but not ready to
+        // launch yet. Tell the caller to retry instead of tearing the session down.
+        if (errorCode == 0) {
             runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
@@ -1894,10 +1887,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                                 MoonBridge.stringifyPortFlags(portFlags, "\n");
                     }
 
-                    if (portTestResult != MoonBridge.ML_TEST_RESULT_INCONCLUSIVE && portTestResult != 0)  {
-                        dialogText += "\n\n" + getResources().getString(R.string.nettest_text_blocked);
-                    }
-
                     Dialog.displayDialog(Game.this, getResources().getString(R.string.conn_error_title), dialogText, true);
                 }
             }
@@ -1914,10 +1903,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      */
     @Override
     public void connectionTerminated(final int errorCode) {
-        // Perform a connection test if the failure could be due to a blocked port
-        // This does network I/O, so don't do it on the main thread.
+        // Which ports this failure implicates, so the dialog below can name them.
         final int portFlags = MoonBridge.getPortFlagsFromTerminationErrorCode(errorCode);
-        final int portTestResult = MoonBridge.testClientConnectivity(ServerHelper.CONNECTION_TEST_SERVER,443, portFlags);
 
         runOnUiThread(new Runnable() {
             @Override
@@ -1939,45 +1926,29 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     // Display the error dialog if it was an unexpected termination.
                     // Otherwise, just finish the activity immediately.
                     if (errorCode != MoonBridge.ML_ERROR_GRACEFUL_TERMINATION) {
-                        String message;
+                        String message = switch (errorCode) {
+                            case MoonBridge.ML_ERROR_NO_VIDEO_TRAFFIC ->
+                                    getResources().getString(R.string.no_video_received_error);
 
-                        if (portTestResult != MoonBridge.ML_TEST_RESULT_INCONCLUSIVE && portTestResult != 0) {
-                            // If we got a blocked result, that supersedes any other error message
-                            message = getResources().getString(R.string.nettest_text_blocked);
-                        }
-                        else {
-                            switch (errorCode) {
-                                case MoonBridge.ML_ERROR_NO_VIDEO_TRAFFIC:
-                                    message = getResources().getString(R.string.no_video_received_error);
-                                    break;
+                            case MoonBridge.ML_ERROR_NO_VIDEO_FRAME ->
+                                    getResources().getString(R.string.no_frame_received_error);
 
-                                case MoonBridge.ML_ERROR_NO_VIDEO_FRAME:
-                                    message = getResources().getString(R.string.no_frame_received_error);
-                                    break;
+                            case MoonBridge.ML_ERROR_UNEXPECTED_EARLY_TERMINATION,
+                                 MoonBridge.ML_ERROR_PROTECTED_CONTENT ->
+                                    getResources().getString(R.string.early_termination_error);
 
-                                case MoonBridge.ML_ERROR_UNEXPECTED_EARLY_TERMINATION:
-                                case MoonBridge.ML_ERROR_PROTECTED_CONTENT:
-                                    message = getResources().getString(R.string.early_termination_error);
-                                    break;
+                            case MoonBridge.ML_ERROR_FRAME_CONVERSION ->
+                                    getResources().getString(R.string.frame_conversion_error);
 
-                                case MoonBridge.ML_ERROR_FRAME_CONVERSION:
-                                    message = getResources().getString(R.string.frame_conversion_error);
-                                    break;
-
-                                default:
-                                    String errorCodeString;
-                                    // We'll assume large errors are hex values
-                                    if (Math.abs(errorCode) > 1000) {
-                                        errorCodeString = Integer.toHexString(errorCode);
-                                    }
-                                    else {
-                                        errorCodeString = Integer.toString(errorCode);
-                                    }
-                                    message = getResources().getString(R.string.conn_terminated_msg) + "\n\n" +
-                                            getResources().getString(R.string.error_code_prefix) + " " + errorCodeString;
-                                    break;
+                            default -> {
+                                // We'll assume large errors are hex values
+                                String errorCodeString = Math.abs(errorCode) > 1000
+                                        ? Integer.toHexString(errorCode)
+                                        : Integer.toString(errorCode);
+                                yield getResources().getString(R.string.conn_terminated_msg) + "\n\n" +
+                                        getResources().getString(R.string.error_code_prefix) + " " + errorCodeString;
                             }
-                        }
+                        };
 
                         if (portFlags != 0) {
                             message += "\n\n" + getResources().getString(R.string.check_ports_msg) + "\n" +

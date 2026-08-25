@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One row of the in-stream game menu.
+
+  Replaces android.R.layout.simple_list_item_1, which is sized for a phone held in the hand: at
+  television viewing distance its rows are both hard to read and hard to hit accurately with a
+  D-pad, and this menu is only ever reached from a controller.
+
+  Behaviour is unchanged - this is a row layout and nothing else. The menu's construction,
+  ordering and actions in GameMenu are untouched.
+
+  No background and no focus treatment: rows in an AlertDialog list are selected by the dialog's
+  own list selector, and adding a second highlight on top of it would draw two.
+-->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:minHeight="@dimen/rail_item_height"
+    android:gravity="center_vertical"
+    android:paddingStart="@dimen/space_5"
+    android:paddingEnd="@dimen/space_5"
+    android:paddingTop="@dimen/space_3"
+    android:paddingBottom="@dimen/space_3"
+    android:textAppearance="@style/TextAppearance.Moonlight.Rail" />

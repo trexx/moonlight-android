@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Television overrides. Both supported boxes - the Shield TV and the Homatics Box R 4K - match
+  this qualifier, so in practice these are the values that ship; values/dimens.xml is what a
+  phone or a ChromeOS window would get.
+
+  Two things change on a television:
+
+  1. Overscan. Sets still crop the edges of the picture, so the safe area is inset. 5% of a 1080p
+     frame is 27px vertically, and the 48dp/27dp here is the conventional Android TV safe area
+     rather than a measurement of either box. This replaces the runtime UiModeManager padding
+     that UiHelper.notifyNewRootView() used to apply - a resource qualifier gets it right before
+     the first layout pass instead of after it.
+
+  2. Viewing distance. Everything is read from across a room rather than at arm's length, so
+     tiles and rail items grow. The scale factor is roughly 1.4x, which is what brings a 150dp
+     tile up to the angular size a phone's 150dp tile has in the hand.
+-->
+<resources>
+
+    <dimen name="screen_padding_horizontal">48dp</dimen>
+    <dimen name="screen_padding_vertical">27dp</dimen>
+
+    <dimen name="rail_width_collapsed">88dp</dimen>
+    <dimen name="rail_width_expanded">260dp</dimen>
+    <dimen name="rail_item_height">64dp</dimen>
+    <dimen name="rail_icon_size">32dp</dimen>
+    <!-- 88dp less the rail's 2 x space_2 padding. See values/dimens.xml. -->
+    <dimen name="rail_icon_column">72dp</dimen>
+
+    <dimen name="host_tile_width">200dp</dimen>
+    <dimen name="host_tile_icon_size">96dp</dimen>
+    <dimen name="host_tile_badge_size">52dp</dimen>
+
+    <dimen name="app_tile_width_large">200dp</dimen>
+    <dimen name="app_tile_height_large">267dp</dimen>
+    <dimen name="app_tile_width_small">140dp</dimen>
+    <dimen name="app_tile_height_small">187dp</dimen>
+    <dimen name="app_tile_badge_size">56dp</dimen>
+
+    <dimen name="tile_corner_radius">10dp</dimen>
+    <dimen name="tile_focus_ring_width">4dp</dimen>
+    <dimen name="tile_focus_lift">12dp</dimen>
+    <dimen name="tile_spacing">14dp</dimen>
+
+</resources>

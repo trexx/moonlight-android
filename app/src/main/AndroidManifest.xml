@@ -85,8 +85,11 @@
             android:name="android.game_mode_config"
             android:resource="@xml/game_mode_config" />
 
+        <!-- The browse screen, and the launcher entry. Hosts and their apps were two activities
+             until they were merged; a launcher shortcut or the TV channel now names the host to
+             open through the UUID extra instead of stacking a second screen on top. -->
         <activity
-            android:name=".PcView"
+            android:name=".BrowseActivity"
             android:exported="true"
             android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
@@ -134,12 +137,6 @@
             android:resizeableActivity="false"
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
-        </activity>
-        <activity
-            android:name=".AppView"
-            android:resizeableActivity="false"
-            android:enableOnBackInvokedCallback="true"
-            android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
         </activity>
         <activity
             android:name=".preferences.StreamSettings"

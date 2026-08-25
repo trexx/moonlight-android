@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The palette. Every colour the browsing UI uses is named here; nothing else in res/ should
+  carry a literal hex value.
+
+  Tuned for a television in a dark room, which is the only place this fork runs. Two consequences
+  worth knowing before adjusting anything:
+
+  - No surface is pure black. Televisions with local dimming bloom around bright elements on a
+    pure black field, and elevation is invisible without a lit surface to cast onto. #0E1013 is
+    dark enough to disappear in a dark room and still lets the raised tile read as raised.
+  - The accent is bright enough to survive a TV's own picture processing. Set boxes ship with
+    contrast and saturation pushed well past reference, and a mid-tone accent turns to mud.
+-->
+<resources>
+
+    <!-- Backgrounds, darkest to lightest. surface is the window; surface_variant is a tile at
+         rest; surface_raised is a tile with focus. -->
+    <color name="surface">#FF0E1013</color>
+    <color name="surface_variant">#FF191C21</color>
+    <color name="surface_raised">#FF262B33</color>
+
+    <!-- Foregrounds. on_surface_variant is for supporting text: section headers, host names
+         under an unfocused tile. It holds 7:1 against surface_variant. -->
+    <color name="on_surface">#FFF2F4F7</color>
+    <color name="on_surface_variant">#FF9AA3B0</color>
+
+    <!-- Lime, after com.limelight. Used for selection, the focus ring and the running-app badge -
+         nothing else, so that a lime element always means "this is where you are" or "this is
+         live". -->
+    <color name="accent">#FF7DD44B</color>
+    <color name="accent_dim">#FF4E8A2E</color>
+
+    <!-- Deliberately lighter than the accent. The ring sits directly against box art, which can
+         be any colour at all, so it needs to read against a bright green screenshot too. -->
+    <color name="focus_ring">#FFC6F58A</color>
+
+    <!-- Behind the label band at the foot of a box art tile, so the name stays legible over
+         whatever the artwork puts there. -->
+    <color name="scrim">#CC000000</color>
+
+</resources>

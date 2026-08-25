@@ -130,8 +130,11 @@ public class GameMenu {
         AlertDialog.Builder builder = new AlertDialog.Builder(game);
         builder.setTitle(title);
 
+        // A row layout of our own rather than android.R.layout.simple_list_item_1, which is sized
+        // for a phone in the hand. This menu is only ever driven by a controller from across a
+        // room. See game_menu_item.xml.
         final ArrayAdapter<String> actions =
-                new ArrayAdapter<>(game, android.R.layout.simple_list_item_1);
+                new ArrayAdapter<>(game, R.layout.game_menu_item);
 
         for (MenuOption option : options) {
             actions.add(option.label());

@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  One destination in the navigation rail. Inflated by BrowseActivity rather than <include>d
+  repeatedly, because each copy needs its own icon and label and <include> cannot supply either.
+
+  Focusable in its own right - unlike the app grid's cells, this is a plain view in a plain
+  LinearLayout, so android:stateListAnimator works here and the framework moves focus between
+  items with no help.
+
+  The icon sits in a column exactly as wide as the collapsed rail's content area, and this view
+  has NO horizontal padding of its own. Both halves are load-bearing, and each was got wrong once:
+
+    - Padding cannot centre the icon. Symmetric 24dp either side of a 32dp icon needs 80dp inside
+      a rail that offers 72dp, so every icon lost its right-hand edge.
+
+    - Padding cannot survive alongside the column either, even once the icon is centred by the
+      column instead. ViewGroup.clipToPadding defaults to TRUE, so a paddingEnd here clips the
+      children to the content box - and the column is deliberately the FULL item width, so the
+      last 24dp of it got sliced off. That cost the "add" disc a visible chord while leaving the
+      gear, whose rightmost ink is a shallow tooth, looking fine: the same bug, visible on one
+      icon and not the other.
+
+  So the trailing space for the label lives on the label, as a margin. If horizontal padding is
+  ever added back here, rail_icon_column has to shrink by the same amount or the clipping returns.
+
+  Sizing the column this way also has the side benefit that the icons do not shift when the rail
+  expands - only the labels arrive.
+
+  The focus animator is rail-specific: a match_parent row cannot be scaled the way a tile can.
+  See rail_item_focus.xml.
+
+  The label is present at all widths and simply clipped while the rail is collapsed. Animating a
+  width the text is already laid out for is what lets ChangeBounds do the whole expansion; adding
+  and removing the TextView instead would re-measure the text on every focus change.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="@dimen/rail_item_height"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:layout_marginBottom="@dimen/space_2"
+    android:background="@drawable/rail_item_background"
+    android:stateListAnimator="@animator/rail_item_focus"
+    android:focusable="true"
+    android:clickable="true">
+
+    <ImageView
+        android:id="@+id/railIcon"
+        android:importantForAccessibility="no"
+        android:layout_width="@dimen/rail_icon_column"
+        android:layout_height="@dimen/rail_icon_size"
+        android:scaleType="fitCenter" />
+
+    <TextView
+        android:id="@+id/railLabel"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="@dimen/space_2"
+        android:layout_marginEnd="@dimen/space_5"
+        android:singleLine="true"
+        android:textAppearance="@style/TextAppearance.Moonlight.Rail" />
+
+</LinearLayout>

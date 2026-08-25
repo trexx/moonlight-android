@@ -214,14 +214,16 @@ how regressions get reintroduced.
 
 ## Modernisation
 
-Source and target level are **Java 25**. Of the modern constructs, only `var` is currently used
-anywhere in this codebase (`UsbDriverService`, `XboxWirelessDongle`) — switch expressions,
-pattern-matching `instanceof`, text blocks and records appear nowhere yet. Nothing is known to be
-broken; they simply have not been reached for.
+Source and target level are **Java 25**. Of the modern constructs, three are in use: `var`
+(`UsbDriverService`, `XboxWirelessDongle`), records (`GameMenu.MenuOption`,
+`ComputerDetails.AddressTuple`) and switch expressions (`BrowseState`). Pattern-matching
+`instanceof` and text blocks appear nowhere yet. Nothing is known to be broken; they simply have
+not been reached for.
 
 That means the first use of one is also its first test of the toolchain. Build and run the tests
-before leaning on it widely — records in particular rely on D8 desugaring below API 33, which
-this project has never exercised.
+before leaning on it widely. Records rely on D8 desugaring below API 33 and now ship in a release
+build, so that path is exercised — but neither record is on a per-frame path, and nothing has
+verified their behaviour on the Shield at API 30 beyond the app running.
 
 Most of this codebase is inherited from upstream Moonlight and written in a much older style.
 Modernise what you touch, where it makes the code clearer:

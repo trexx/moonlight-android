@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Navigation rail item background.
+
+  The rail has two independent states and both have to be visible at once: which destination is
+  *selected* (where you are) and which item has *focus* (where the D-pad is). Moving focus down
+  the rail without pressing anything must not make the current destination ambiguous, which is
+  why selected and focused get different treatments rather than sharing one highlight.
+
+    focused           -> filled with the accent; the strongest thing on screen
+    selected, unfocused -> a muted fill, enough to locate the current destination
+    neither           -> transparent
+
+  Order matters: the framework takes the first matching item, so state_focused has to precede
+  state_selected or a focused item sitting on the current destination would draw as merely
+  selected.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="@dimen/tile_corner_radius" />
+            <solid android:color="@color/accent" />
+        </shape>
+    </item>
+
+    <item android:state_pressed="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="@dimen/tile_corner_radius" />
+            <solid android:color="@color/accent_dim" />
+        </shape>
+    </item>
+
+    <item android:state_selected="true">
+        <shape android:shape="rectangle">
+            <corners android:radius="@dimen/tile_corner_radius" />
+            <solid android:color="@color/surface_raised" />
+        </shape>
+    </item>
+
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/transparent" />
+        </shape>
+    </item>
+
+</selector>

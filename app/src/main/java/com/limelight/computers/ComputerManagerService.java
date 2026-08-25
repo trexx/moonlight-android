@@ -41,7 +41,7 @@ import org.xmlpull.v1.XmlPullParserException;
  * often, and app lists are refreshed on a slower cycle than server info.
  *
  * <p>A service rather than activity state so that host state survives navigation between
- * {@code PcView} and {@code AppView} without every host being re-polled from scratch.
+ * {@code BrowseActivity} without every host being re-polled from scratch.
  */
 public class ComputerManagerService extends Service {
     private static final int SERVERINFO_POLLING_PERIOD_MS = 1500;

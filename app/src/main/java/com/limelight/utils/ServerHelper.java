@@ -4,7 +4,7 @@ import android.app.Activity;
 import android.content.Intent;
 import android.widget.Toast;
 
-import com.limelight.AppView;
+import com.limelight.BrowseActivity;
 import com.limelight.Game;
 import com.limelight.R;
 import com.limelight.ShortcutTrampoline;
@@ -14,7 +14,6 @@ import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.HostHttpResponseException;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
-import com.limelight.nvstream.jni.MoonBridge;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -24,12 +23,10 @@ import java.net.UnknownHostException;
 import java.security.cert.CertificateEncodingException;
 
 /**
- * Host and app actions shared between {@code PcView} and {@code AppView}: building launch intents,
- * starting streams, quitting the running app and running the network test.
+ * Host and app actions shared between {@code BrowseActivity}: building launch intents,
+ * starting streams and quitting the running app.
  */
 public class ServerHelper {
-    public static final String CONNECTION_TEST_SERVER = "android.conntest.moonlight-stream.org";
-
     /**
      * @return the address the host was last reachable at
      * @throws IOException if it has no known-good address, meaning it is offline
@@ -44,8 +41,8 @@ public class ServerHelper {
     /** @return an intent that opens this host's app list, for a launcher shortcut */
     public static Intent createPcShortcutIntent(Activity parent, ComputerDetails computer) {
         Intent i = new Intent(parent, ShortcutTrampoline.class);
-        i.putExtra(AppView.NAME_EXTRA, computer.name);
-        i.putExtra(AppView.UUID_EXTRA, computer.uuid);
+        i.putExtra(BrowseActivity.NAME_EXTRA, computer.name);
+        i.putExtra(BrowseActivity.UUID_EXTRA, computer.uuid);
         i.setAction(Intent.ACTION_DEFAULT);
         return i;
     }
@@ -53,8 +50,8 @@ public class ServerHelper {
     /** @return an intent that streams this app directly, for a launcher shortcut */
     public static Intent createAppShortcutIntent(Activity parent, ComputerDetails computer, NvApp app) {
         Intent i = new Intent(parent, ShortcutTrampoline.class);
-        i.putExtra(AppView.NAME_EXTRA, computer.name);
-        i.putExtra(AppView.UUID_EXTRA, computer.uuid);
+        i.putExtra(BrowseActivity.NAME_EXTRA, computer.name);
+        i.putExtra(BrowseActivity.UUID_EXTRA, computer.uuid);
         i.putExtra(Game.EXTRA_APP_NAME, app.getAppName());
         i.putExtra(Game.EXTRA_APP_ID, ""+app.getAppId());
         i.putExtra(Game.EXTRA_APP_HDR, app.isHdrSupported());
@@ -93,39 +90,6 @@ public class ServerHelper {
             return;
         }
         parent.startActivity(createStartIntent(parent, app, computer, managerBinder));
-    }
-
-    /** Runs the connection test that reports which ports are blocked, off the UI thread. */
-    public static void doNetworkTest(final Activity parent) {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                SpinnerDialog spinnerDialog = SpinnerDialog.displayDialog(parent,
-                        parent.getResources().getString(R.string.nettest_title_waiting),
-                        parent.getResources().getString(R.string.nettest_text_waiting),
-                        false);
-
-                int ret = MoonBridge.testClientConnectivity(CONNECTION_TEST_SERVER, 443, MoonBridge.ML_PORT_FLAG_ALL);
-                spinnerDialog.dismiss();
-
-                String dialogSummary;
-                if (ret == MoonBridge.ML_TEST_RESULT_INCONCLUSIVE) {
-                    dialogSummary = parent.getResources().getString(R.string.nettest_text_inconclusive);
-                }
-                else if (ret == 0) {
-                    dialogSummary = parent.getResources().getString(R.string.nettest_text_success);
-                }
-                else {
-                    dialogSummary = parent.getResources().getString(R.string.nettest_text_failure);
-                    dialogSummary += MoonBridge.stringifyPortFlags(ret, "\n");
-                }
-
-                Dialog.displayDialog(parent,
-                        parent.getResources().getString(R.string.nettest_title_done),
-                        dialogSummary,
-                        false);
-            }
-        }).start();
     }
 
     /** Asks the host to quit the running app, off the UI thread. */

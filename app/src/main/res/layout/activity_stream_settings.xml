@@ -1,8 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Container for the settings fragment, which StreamSettings commits into this view by id.
+
+  Empty by design - the preference list is built by the framework PreferenceFragment from
+  res/xml/preferences.xml. What this adds is the screen's edge padding, including the television
+  overscan inset, which the fragment has no way to apply for itself. The ground colour comes from
+  the theme's windowBackground; painting it here as well would be overdraw over the whole screen.
+-->
 <RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:id="@+id/stream_settings"
+    android:paddingStart="@dimen/screen_padding_horizontal"
+    android:paddingEnd="@dimen/screen_padding_horizontal"
+    android:paddingTop="@dimen/screen_padding_vertical"
+    android:paddingBottom="@dimen/screen_padding_vertical"
     tools:context=".preferences.StreamSettings">
 
 </RelativeLayout>

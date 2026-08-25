@@ -1,31 +1,61 @@
 <?xml version="1.0" encoding="utf-8"?>
-<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="150dp"
-    android:layout_height="200dp"
-    android:padding="10dp">
+<!--
+  One app in the grid. Box art fills the cell, with the name over a gradient at the foot.
+
+  Size is set in code, not here: app_tile_width_large / _small is a user preference (small icon
+  mode), and a preference cannot be a resource qualifier. The values here are the large defaults
+  so the layout editor and the first measure pass have something sane; AppGridAdapter overwrites
+  both on bind. See AppGridAdapter.updateLayoutWithPreferences.
+
+  No android:focusable and no android:stateListAnimator, unlike host_tile.xml. GridView has no
+  setItemsCanFocus, so its cells never receive focus and neither attribute would ever fire; the
+  ring comes from the GridView's listSelector and the lift is driven from
+  BrowseActivity's OnItemSelectedListener. activity_browse.xml carries the full reasoning.
+
+  There is deliberately no grid_spinner here. The host tile has one because a host's reachability
+  is unknown until it is probed; an app's artwork simply arrives late, and CachedAppAssetLoader
+  fades it in over the placeholder rather than showing a spinner.
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="@dimen/app_tile_width_large"
+    android:layout_height="@dimen/app_tile_height_large"
+    android:background="@drawable/tile_background">
+
     <ImageView
         android:id="@+id/grid_image"
         android:importantForAccessibility="no"
-        android:cropToPadding="false"
-        android:scaleType="fitXY"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
-    </ImageView>
-    <ImageView
-        android:id="@+id/grid_overlay"
-        android:importantForAccessibility="no"
-        android:layout_centerHorizontal="true"
-        android:layout_marginTop="10dp"
-        android:layout_width="50dp"
-        android:layout_height="50dp">
-    </ImageView>
+        android:layout_height="match_parent"
+        android:cropToPadding="false"
+        android:scaleType="centerCrop" />
+
+    <!-- Sized generously: two lines of the tile text appearance plus its padding. A gradient
+         shorter than the label it backs is worse than none, because the descenders fall off
+         the bottom of it. -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="72dp"
+        android:layout_gravity="bottom"
+        android:background="@drawable/tile_label_scrim" />
+
     <TextView
         android:id="@+id/grid_text"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:layout_below="@id/grid_overlay"
-        android:layout_margin="5dp"
-        android:gravity="center"
-        android:textSize="18sp">
-    </TextView>
-</RelativeLayout>
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:padding="@dimen/space_2"
+        android:gravity="bottom|start"
+        android:maxLines="2"
+        android:ellipsize="end"
+        android:textAppearance="@style/TextAppearance.Moonlight.Tile" />
+
+    <!-- The running-app badge, and the marker on an app hidden from the normal list. -->
+    <ImageView
+        android:id="@+id/grid_overlay"
+        android:importantForAccessibility="no"
+        android:layout_width="@dimen/app_tile_badge_size"
+        android:layout_height="@dimen/app_tile_badge_size"
+        android:layout_gravity="top|center_horizontal"
+        android:layout_marginTop="@dimen/space_4" />
+
+</FrameLayout>

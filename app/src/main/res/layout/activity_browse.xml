@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The browse screen: navigation rail, a band of hosts, and the selected host's apps.
+
+  Replaces activity_pc_view.xml (and its layout-land twin) and activity_app_view.xml. Hosts and
+  apps were separate activities, so switching host meant backing out of the app grid; here the
+  band stays on screen and one press of "up" reaches it.
+
+  == Why the band is fixed and the grid scrolls ==
+
+  GridView has no addHeaderView() - that is ListView - and putting a GridView inside a
+  ScrollView destroys its recycling, which matters because an app list runs to hundreds of
+  entries. So the two do not scroll together: the host band is pinned above a grid that scrolls
+  under it. Hosts number one to a handful, so the band needs no recycling of its own and is a
+  plain LinearLayout inside a HorizontalScrollView.
+
+  == Why focus is handled two different ways ==
+
+  Rail items and host tiles are ordinary focusable views, so they use android:stateListAnimator
+  and android:foreground and the framework does the rest.
+
+  GridView cells cannot: GridView has no setItemsCanFocus (only ListView does), so its children
+  never take focus and any state_focused drawable or animator on them would be dead. The grid
+  therefore draws its ring with android:listSelector, whose drawable state does follow focus, and
+  BrowseActivity animates the lift from OnItemSelectedListener. Keep the two in step by eye - the
+  same dimens drive both.
+
+  clipChildren and clipToPadding are false throughout the content column so a lifted tile is not
+  sliced off at the edge of its container, and so translationZ can raise it over its neighbours.
+
+  A RelativeLayout root rather than a horizontal LinearLayout, so that the content column's width
+  comes from the rail's position instead of from a layout weight. The column already spends a
+  weight internally on the grid, and nesting one weight inside another costs a second measure
+  pass on every layout - including every frame of the rail's expansion.
+
+  No background here: the theme's windowBackground is already @color/surface, and painting it
+  twice is overdraw across the whole screen.
+-->
+<RelativeLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    tools:context=".BrowseActivity">
+
+    <!-- Populated by BrowseActivity.buildRail() from rail_item.xml. Width animates between
+         rail_width_collapsed and rail_width_expanded as focus enters and leaves it. -->
+    <LinearLayout
+        android:id="@+id/navRail"
+        android:layout_width="@dimen/rail_width_collapsed"
+        android:layout_height="match_parent"
+        android:layout_alignParentStart="true"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentBottom="true"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/space_2"
+        android:paddingEnd="@dimen/space_2"
+        android:paddingTop="@dimen/screen_padding_vertical"
+        android:paddingBottom="@dimen/screen_padding_vertical"
+        android:background="@color/surface_variant"
+        android:clipToPadding="false"
+        android:clipChildren="false" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_toEndOf="@id/navRail"
+        android:layout_alignParentTop="true"
+        android:layout_alignParentBottom="true"
+        android:layout_alignParentEnd="true"
+        android:baselineAligned="false"
+        android:orientation="vertical"
+        android:paddingStart="@dimen/space_5"
+        android:paddingEnd="@dimen/screen_padding_horizontal"
+        android:paddingTop="@dimen/screen_padding_vertical"
+        android:paddingBottom="@dimen/screen_padding_vertical"
+        android:clipToPadding="false"
+        android:clipChildren="false">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="@dimen/space_2"
+            android:text="@string/section_hosts"
+            android:textAppearance="@style/TextAppearance.Moonlight.Section" />
+
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:scrollbars="none"
+            android:clipToPadding="false"
+            android:clipChildren="false">
+
+            <LinearLayout
+                android:id="@+id/hostBand"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:clipToPadding="false"
+                android:clipChildren="false" />
+
+        </HorizontalScrollView>
+
+        <TextView
+            android:id="@+id/appSectionLabel"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_5"
+            android:layout_marginBottom="@dimen/space_2"
+            android:textAppearance="@style/TextAppearance.Moonlight.Section" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            android:clipToPadding="false"
+            android:clipChildren="false">
+
+            <!-- columnWidth is overwritten in code from app_tile_width_large / _small, since
+                 which one applies is a user preference. drawSelectorOnTop puts the ring over the
+                 box art rather than behind it, where a stroke-only drawable would be invisible.
+
+                 stretchMode is spacingWidth, not spacingWidthUniform: uniform also pads the
+                 grid's outer edges, which indented the first column and left the app tiles out
+                 of line with the host band and both section labels above them. Spreading the
+                 leftover width between the columns only keeps column one flush with everything
+                 else in the content area. gravity=start for the same reason - a cell wider than
+                 its tile must not re-centre it. -->
+            <GridView
+                android:id="@+id/appGrid"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:numColumns="auto_fit"
+                android:columnWidth="@dimen/app_tile_width_large"
+                android:horizontalSpacing="@dimen/tile_spacing"
+                android:verticalSpacing="@dimen/tile_spacing"
+                android:stretchMode="spacingWidth"
+                android:listSelector="@drawable/tile_focus_ring"
+                android:drawSelectorOnTop="true"
+                android:focusable="true"
+                android:focusableInTouchMode="true"
+                android:clipToPadding="false"
+                android:clipChildren="false"
+                android:gravity="start" />
+
+            <!-- One message view for every state that is not "here are the apps": no hosts yet,
+                 nothing selected, host offline, host unpaired, host still being probed. Which
+                 string it carries is decided by BrowseState.Content. -->
+            <TextView
+                android:id="@+id/contentMessage"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:paddingStart="@dimen/screen_padding_horizontal"
+                android:paddingEnd="@dimen/screen_padding_horizontal"
+                android:gravity="center"
+                android:textAppearance="@style/TextAppearance.Moonlight.Empty" />
+
+        </FrameLayout>
+
+    </LinearLayout>
+
+</RelativeLayout>
