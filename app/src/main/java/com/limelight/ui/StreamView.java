@@ -183,6 +183,32 @@ public class StreamView extends SurfaceView {
                 }
                 return super.deleteSurroundingText(beforeLength, afterLength);
             }
+
+            @Override
+            public boolean setComposingText(CharSequence text, int newCursorPosition) {
+                // Deliberately not super: BaseInputConnection parks composing text in a scratch
+                // Editable, and outside full-editor mode it flushes that buffer back into this
+                // view as key events the moment composition ends. Since commitText above never
+                // lets it clear the buffer, that flush retyped the last composed word on the host
+                // - which is what backspace looked like it was doing, because ending a composition
+                // is exactly what an IME does when you backspace out of one. Nothing may be left
+                // in that Editable, so the previews never reach it.
+                if (inputCallbacks != null && inputCallbacks.handleComposingText(text)) {
+                    return true;
+                }
+                return super.setComposingText(text, newCursorPosition);
+            }
+
+            @Override
+            public boolean finishComposingText() {
+                // The composition is now final. Since setComposingText above kept it away from
+                // BaseInputConnection, this is the only chance to send it for an IME that
+                // finalises a word this way rather than by committing it.
+                if (inputCallbacks != null && inputCallbacks.handleFinishComposingText()) {
+                    return true;
+                }
+                return super.finishComposingText();
+            }
         };
     }
 
@@ -192,5 +218,7 @@ public class StreamView extends SurfaceView {
         boolean handleKeyDown(KeyEvent event);
         boolean handleCommitText(CharSequence text);
         boolean handleDeleteSurroundingText(int beforeLength, int afterLength);
+        boolean handleComposingText(CharSequence text);
+        boolean handleFinishComposingText();
     }
 }

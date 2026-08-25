@@ -35,6 +35,7 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamView;
 import com.limelight.utils.Dialog;
+import com.limelight.utils.ImeComposition;
 import com.limelight.utils.ImeTextBuffer;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
@@ -152,6 +153,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // code units into the number of characters the host has to lose. Dropped when the keyboard
     // closes, since the next one opens over text this can no longer account for.
     private final ImeTextBuffer imeTextBuffer = new ImeTextBuffer();
+
+    // The word the keyboard is still composing. Held here rather than in the InputConnection for
+    // the reason ImeComposition documents: BaseInputConnection replays its own copy back at us.
+    private final ImeComposition imeComposition = new ImeComposition();
 
     // Last soft keyboard visibility seen by the window insets listener, so the buffer above is
     // dropped once per dismissal rather than on every insets change.
@@ -313,6 +318,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 // because this listener fires on every insets change during a stream.
                 if (imeWasVisible && !imeVisible) {
                     imeTextBuffer.clear();
+
+                    // Anything still being composed when the keyboard was dismissed was never
+                    // finalised, so it is not text the user asked to send.
+                    imeComposition.reset();
                 }
                 imeWasVisible = imeVisible;
             }
@@ -1214,11 +1223,49 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     /** {@inheritDoc} */
     @Override
     public boolean handleCommitText(CharSequence text) {
-        if (conn == null || text == null) {
+        if (conn == null) {
             return false;
         }
+
+        // A commit is the finished form of whatever was being composed, so the composition is
+        // discarded here rather than sent as well.
+        return sendImeText(imeComposition.commit(text));
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean handleComposingText(CharSequence text) {
+        if (conn == null) {
+            return false;
+        }
+
+        // Previews are not typed. Only the finished word is.
+        imeComposition.composing(text);
+        return true;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean handleFinishComposingText() {
+        if (conn == null) {
+            return false;
+        }
+        return sendImeText(imeComposition.finish());
+    }
+
+    /**
+     * Sends text the IME has finalised, as keystrokes wherever the characters have keys.
+     *
+     * @return true, so the caller can report the callback handled - a null or empty run is still
+     *         handled, it simply has nothing to send
+     */
+    private boolean sendImeText(String text) {
+        if (text == null) {
+            return true;
+        }
+
         imeTextBuffer.append(text);
-        enqueueImeInput(TextKeyPlanner.planText(text.toString()));
+        enqueueImeInput(TextKeyPlanner.planText(text));
         return true;
     }
 
@@ -1424,7 +1471,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     /**
      * Handles the batched character events Android still sends for text that has no keycode,
-     * forwarding them to the host as UTF-8 text.
+     * forwarding them through the same path as text the IME commits.
      */
     private boolean handleKeyMultiple(KeyEvent event) {
         // We can receive keys from a software keyboard that don't correspond to any existing
@@ -1439,8 +1486,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
 
-        conn.sendUtf8Text(event.getCharacters());
-        return true;
+        // Routed through the same path as committed text rather than straight to sendUtf8Text:
+        // these are soft keyboard characters, and a game can only see the ones that arrive as
+        // keystrokes. It also keeps them in order with anything already queued.
+        return handleCommitText(event.getCharacters());
     }
 
     /** @return the context for this pointer index, or null if we track fewer fingers than that */
@@ -1867,6 +1916,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             imeInputQueue.clear();
             imeDrainScheduled = false;
             imeTextBuffer.clear();
+            imeComposition.reset();
 
             // Update GameManager state to indicate we're no longer in game
             UiHelper.notifyStreamEnded(this);

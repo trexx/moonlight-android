@@ -71,6 +71,18 @@ feature checks.
       exercise commit and deletion back to back against `ImeTextBuffer`.
 - [ ] **Backspace deletes on the host** (approximated as backspaces, so watch for it over- or
       under-deleting after autocorrect).
+- [ ] **Backspace deletes rather than types.** The reported symptom was the opposite: pressing
+      backspace made the last word appear again. `BaseInputConnection` keeps composing text in a
+      scratch `Editable` and, outside full-editor mode, flushes it back into the view as key
+      events the moment composition ends — which is exactly what an IME does when you backspace
+      out of a word. `StreamView` now intercepts `setComposingText`/`finishComposingText` so
+      nothing is ever left in that buffer. Type a word, press backspace, and confirm one
+      character goes and none arrive.
+- [ ] **A word finalised without being committed still arrives.** Type a word and move focus or
+      press Enter rather than typing a space — some IMEs finalise with `finishComposingText`
+      instead of `commitText`, and that path now carries the text itself.
+- [ ] **A word is not typed twice.** The common IME sequence is compose, commit, finish; the
+      commit supersedes the composition, so finishing afterwards must send nothing.
 - [ ] **Backspace after an emoji deletes one character, not two.** The IME counts in UTF-16
       code units and a surrogate pair is two of them; `ImeTextBuffer` resolves that against what
       was actually typed. Then reopen the keyboard over text already on the host and backspace
