@@ -50,8 +50,32 @@ feature checks.
       `imeVisible` is set.
 - [ ] **Typed text reaches the host**, including a multi-byte character, swipe typing and
       autocorrect — those go through `commitText` rather than key events.
+- [ ] **Typed text reaches a *game*, not just Steam Big Picture.** This is the whole point of
+      `TextKeyPlanner`: text used to leave only as `LiSendUtf8TextEvent`, which the host injects
+      as Unicode character input. Chromium-based UIs consume that; DirectInput and Raw Input
+      games never see it. Test in an actual game's chat box or name field, not in Big Picture.
+- [ ] **Capitals and shifted punctuation arrive as themselves** — `!@#$` rather than `1234`, and
+      `A` rather than `a`. Shift is sent as a real key press, not only as the modifier byte.
+- [ ] **A run of capitals** (`HELLO`) arrives intact. Shift is held across the run rather than
+      tapped per letter, so a dropped release shows up here first.
+- [ ] **Shift is not left stuck on the host.** Type a capital, then immediately type lowercase,
+      then press a few gamepad buttons. Everything after a stuck shift arrives modified.
+- [ ] **Enter sends** in a game's chat box, and **Tab** moves between fields. Both used to go
+      out as text characters that nothing acted on.
+- [ ] **Emoji and CJK still arrive** in something that accepts them. They have no key, so they
+      still take the UTF-8 fallback — the path must not have been lost.
+- [ ] **A mixed commit arrives in order.** Type `café ok`: the accented character travels by
+      text and everything around it by key, so the failure mode is the host assembling it as
+      `caf ok` + `é` at the end.
+- [ ] **Autocorrect and swipe typing still behave.** Both replace what was just typed, so they
+      exercise commit and deletion back to back against `ImeTextBuffer`.
 - [ ] **Backspace deletes on the host** (approximated as backspaces, so watch for it over- or
       under-deleting after autocorrect).
+- [ ] **Backspace after an emoji deletes one character, not two.** The IME counts in UTF-16
+      code units and a surrogate pair is two of them; `ImeTextBuffer` resolves that against what
+      was actually typed. Then reopen the keyboard over text already on the host and backspace
+      again: with nothing remembered it deliberately falls back to one keystroke per code unit,
+      so check both sides of that.
 - [ ] **Back dismisses the keyboard** rather than opening the game menu or ending the stream.
 - [X] **Input returns to the host once the keyboard is dismissed.** The important regression:
       `imeVisible` is driven by the window insets listener, so if it ever sticks on, *all*

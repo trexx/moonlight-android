@@ -19,7 +19,8 @@ import android.view.inputmethod.InputConnection;
  *   <li>Key events intercepted before the IME sees them, so the host receives them intact -
  *       except while the soft keyboard is up, when the IME gets first refusal
  *       ({@link #setImeVisible(boolean)}).</li>
- *   <li>An {@link InputConnection} that turns soft keyboard text into host input.</li>
+ *   <li>An {@link InputConnection} that turns soft keyboard text into host input - as real
+ *       keystrokes wherever the character has a key, since that is all a game can see.</li>
  * </ul>
  */
 public class StreamView extends SurfaceView {
