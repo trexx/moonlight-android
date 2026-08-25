@@ -118,7 +118,6 @@ public class BrowseActivity extends Activity {
     private final static int HOST_QUIT_ID = 5;
     private final static int HOST_DETAILS_ID = 6;
     private final static int FULL_APP_LIST_ID = 7;
-    private final static int TEST_NETWORK_ID = 8;
 
     // App context menu. A separate range so onContextItemSelected can dispatch on the id alone
     // and never confuse a host action for an app one.
@@ -1100,7 +1099,6 @@ public class BrowseActivity extends Activity {
 
         // Orders are distinct so the sequence is defined; several entries shared an order before,
         // which left their relative order down to insertion.
-        menu.add(Menu.NONE, TEST_NETWORK_ID, 6, getResources().getString(R.string.pcview_menu_test_network));
         menu.add(Menu.NONE, DELETE_ID, 8, getResources().getString(R.string.pcview_menu_delete_pc));
         menu.add(Menu.NONE, HOST_DETAILS_ID, 9, getResources().getString(R.string.pcview_menu_details));
     }
@@ -1224,10 +1222,6 @@ public class BrowseActivity extends Activity {
 
             case HOST_DETAILS_ID:
                 Dialog.displayDialog(this, getResources().getString(R.string.title_details), details.toString(), false);
-                return true;
-
-            case TEST_NETWORK_ID:
-                ServerHelper.doNetworkTest(this);
                 return true;
 
             default:

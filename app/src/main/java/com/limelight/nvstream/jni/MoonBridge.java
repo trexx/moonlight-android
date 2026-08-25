@@ -85,7 +85,6 @@ public class MoonBridge {
     public static final int ML_PORT_INDEX_UDP_48000 = 10;
     public static final int ML_PORT_INDEX_UDP_48010 = 11;
 
-    public static final int ML_PORT_FLAG_ALL = 0xFFFFFFFF;
     public static final int ML_PORT_FLAG_TCP_47984 = 0x0001;
     public static final int ML_PORT_FLAG_TCP_47989 = 0x0002;
     public static final int ML_PORT_FLAG_TCP_48010 = 0x0004;
@@ -93,8 +92,6 @@ public class MoonBridge {
     public static final int ML_PORT_FLAG_UDP_47999 = 0x0200;
     public static final int ML_PORT_FLAG_UDP_48000 = 0x0400;
     public static final int ML_PORT_FLAG_UDP_48010 = 0x0800;
-
-    public static final int ML_TEST_RESULT_INCONCLUSIVE = 0xFFFFFFFF;
 
     public static final byte SS_KBE_FLAG_NON_NORMALIZED = 0x01;
 
@@ -498,8 +495,6 @@ public class MoonBridge {
     public static native long[] getRTPAudioStats();
 
     public static native long[] getRTPVideoStats();
-
-    public static native int testClientConnectivity(String testServerHostName, int referencePort, int testFlags);
 
     public static native int getPortFlagsFromStage(int stage);
 

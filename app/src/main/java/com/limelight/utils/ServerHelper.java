@@ -14,7 +14,6 @@ import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.HostHttpResponseException;
 import com.limelight.nvstream.http.NvApp;
 import com.limelight.nvstream.http.NvHTTP;
-import com.limelight.nvstream.jni.MoonBridge;
 
 import org.xmlpull.v1.XmlPullParserException;
 
@@ -25,11 +24,9 @@ import java.security.cert.CertificateEncodingException;
 
 /**
  * Host and app actions shared between {@code BrowseActivity}: building launch intents,
- * starting streams, quitting the running app and running the network test.
+ * starting streams and quitting the running app.
  */
 public class ServerHelper {
-    public static final String CONNECTION_TEST_SERVER = "android.conntest.moonlight-stream.org";
-
     /**
      * @return the address the host was last reachable at
      * @throws IOException if it has no known-good address, meaning it is offline
@@ -93,39 +90,6 @@ public class ServerHelper {
             return;
         }
         parent.startActivity(createStartIntent(parent, app, computer, managerBinder));
-    }
-
-    /** Runs the connection test that reports which ports are blocked, off the UI thread. */
-    public static void doNetworkTest(final Activity parent) {
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                SpinnerDialog spinnerDialog = SpinnerDialog.displayDialog(parent,
-                        parent.getResources().getString(R.string.nettest_title_waiting),
-                        parent.getResources().getString(R.string.nettest_text_waiting),
-                        false);
-
-                int ret = MoonBridge.testClientConnectivity(CONNECTION_TEST_SERVER, 443, MoonBridge.ML_PORT_FLAG_ALL);
-                spinnerDialog.dismiss();
-
-                String dialogSummary;
-                if (ret == MoonBridge.ML_TEST_RESULT_INCONCLUSIVE) {
-                    dialogSummary = parent.getResources().getString(R.string.nettest_text_inconclusive);
-                }
-                else if (ret == 0) {
-                    dialogSummary = parent.getResources().getString(R.string.nettest_text_success);
-                }
-                else {
-                    dialogSummary = parent.getResources().getString(R.string.nettest_text_failure);
-                    dialogSummary += MoonBridge.stringifyPortFlags(ret, "\n");
-                }
-
-                Dialog.displayDialog(parent,
-                        parent.getResources().getString(R.string.nettest_title_done),
-                        dialogSummary,
-                        false);
-            }
-        }).start();
     }
 
     /** Asks the host to quit the running app, off the UI thread. */
