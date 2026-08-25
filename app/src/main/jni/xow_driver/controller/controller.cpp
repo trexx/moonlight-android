@@ -402,8 +402,37 @@ void Controller::statusReceived(uint8_t id, const StatusData *status)
     notifyJavaBattery(type, level, charge);
 }
 
-void Controller::serialNumberReceived(const SerialData *serial)
+/*
+ * Whether a message addressed to 'id' is this pad's own.
+ *
+ * This class models one physical controller, so input, the guide button and the serial number only
+ * mean anything from device 0. A sub-device sending them is not a malformed packet - a chatpad is a
+ * sub-device that sends input reports, and xone drives one - it is simply something this driver
+ * does not model, and taking it as the pad's own would report a chatpad's keys as stick movement.
+ *
+ * Reported in debug builds rather than dropped in silence, for the same reason
+ * logAccessoryPacket() exists: "no sub-device ever sent input" is only worth anything if it can be
+ * distinguished from "nobody looked".
+ */
+bool Controller::isPrimary(uint8_t id, const char *what)
 {
+    if (id == DEVICE_ID_CONTROLLER)
+    {
+        return true;
+    }
+
+    Log::debug("Ignoring %s from sub-device %u", what, (unsigned)id);
+
+    return false;
+}
+
+void Controller::serialNumberReceived(uint8_t id, const SerialData *serial)
+{
+    if (!isPrimary(id, "serial number"))
+    {
+        return;
+    }
+
     const std::string number(
         serial->serialNumber,
         sizeof(serial->serialNumber)
@@ -420,10 +449,17 @@ void Controller::serialNumberReceived(const SerialData *serial)
     }                                   \
 } while(0);
 
-void Controller::guideButtonPressed(const GuideButtonData *button)
+void Controller::guideButtonPressed(uint8_t id, const GuideButtonData *button)
 {
+    if (!isPrimary(id, "guide button"))
+    {
+        return;
+    }
+
     SET_BUTTON_STATUS(SPECIAL_BUTTON_FLAG, button->pressed);
-    inputReceived(nullptr);
+
+    // Already established as the pad's, so this reports as the pad rather than re-checking
+    inputReceived(DEVICE_ID_CONTROLLER, nullptr);
 }
 
 void Controller::updateButtonStatus(const GipDevice::InputData *input) {
@@ -450,8 +486,12 @@ void Controller::updateButtonStatus(const GipDevice::InputData *input) {
 }
 #undef SET_BUTTON_STATUS
 
-void Controller::inputReceived(const InputData *input)
+void Controller::inputReceived(uint8_t id, const InputData *input)
 {
+    if (!isPrimary(id, "input")) {
+        return;
+    }
+
     if(input) {
         updateButtonStatus(input);
     }
@@ -837,8 +877,18 @@ void Controller::waitForMetadata()
     }
 }
 
-void Controller::audioSamplesReceived(const AudioSamplesData *samples)
+void Controller::audioSamplesReceived(uint8_t id, const AudioSamplesData *samples)
 {
+    /*
+     * The audio sub-device's, not the pad's, and not another sub-device's. The flow rate carried
+     * here paces a transport that can honour it, so taking it from the wrong device would be
+     * pacing the audio stream by something unrelated to it.
+     */
+    if (id != audioDeviceId)
+    {
+        return;
+    }
+
     // How many bytes of render data the pad wants in each message (MS-GIPUSB Table 69). It nudges
     // this up and down to absorb the difference between its clock and ours, and per 3.2.5.1.5 that
     // is "the mechanism GIP devices use to eliminate pops and clicks in audio".
@@ -936,19 +986,39 @@ bool Controller::supportsAudioOut() const
      * once the security handshake has completed (MS-GIPUSB 2.2.1.4). Asking device 0 was always
      * going to answer no, whatever was plugged into the jack.
      */
-    if (audioDeviceId == 0)
+    if (audioDeviceId == 0 || audioDeviceFormats.size() < METADATA_AUDIO_FORMAT_LENGTH)
     {
         return false;
     }
 
-    // Render is the second of each capture/render pair
-    for (size_t i = 1; i < audioDeviceFormats.size(); i += METADATA_AUDIO_FORMAT_LENGTH)
+    /*
+     * The *first* pair only, because the first pair is what setAudioEnabled() will propose - 2.2.11
+     * has the host take the device's first advertised configuration rather than choose among them.
+     *
+     * This used to scan every pair, which let the two disagree: a pad advertising 48 kHz stereo
+     * anywhere in its list was offered in the menu, and then sent whatever its first pair happened
+     * to be. Answering a question about pair 3 when pair 1 is the one that will be used is how a
+     * menu ends up promising audio the stream cannot feed.
+     *
+     * Deliberately not fixed the other way round, by choosing the pair that suits us. AUDIO.md
+     * records what that cost: proposing anything but the first pair retuned the render path to
+     * 24 kHz mono and back on every connect, degrading the pad a step each time.
+     *
+     * Render is the second of each capture/render pair.
+     */
+    if (audioDeviceFormats[1] == AUDIO_FORMAT_48KHZ_STEREO)
     {
-        if (audioDeviceFormats[i] == AUDIO_FORMAT_48KHZ_STEREO)
-        {
-            return true;
-        }
+        return true;
     }
+
+    /*
+     * Said out loud, because no pad seen here reaches it. Both advertise 09/10 first, so this
+     * branch is unexercised and would otherwise be a silent refusal on hardware nobody has - which
+     * is exactly the kind of thing that gets debugged from the wrong end. If this ever prints, the
+     * question to answer is whether 2.2.11's "first configuration" rule really is absolute.
+     */
+    Log::info("Audio device %u leads with format %02x/%02x, not 48 kHz stereo; not offering audio",
+              (unsigned)audioDeviceId, audioDeviceFormats[0], audioDeviceFormats[1]);
 
     return false;
 }

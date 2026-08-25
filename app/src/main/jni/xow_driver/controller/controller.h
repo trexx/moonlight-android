@@ -283,9 +283,12 @@ private:
     /* GIP events */
     void deviceAnnounced(uint8_t id, const AnnounceData *announce) override;
     void statusReceived(uint8_t id, const StatusData *status) override;
-    void guideButtonPressed(const GuideButtonData *button) override;
-    void serialNumberReceived(const SerialData *serial) override;
-    void inputReceived(const InputData *input) override;
+    void guideButtonPressed(uint8_t id, const GuideButtonData *button) override;
+    void serialNumberReceived(uint8_t id, const SerialData *serial) override;
+    void inputReceived(uint8_t id, const InputData *input) override;
+
+    /* @return whether a message addressed to 'id' is this pad's own; see the definition. */
+    static bool isPrimary(uint8_t id, const char *what);
     void identifyReceived(uint8_t id, const IdentifyData *identify,
                           const uint8_t *payload, size_t length) override;
     void authCompleted(const uint8_t *sessionKey, size_t length) override;
@@ -387,7 +390,7 @@ private:
 
     /* Audio producer/consumer, built on the same shape as the rumble pair above */
     void processAudio();
-    void audioSamplesReceived(const AudioSamplesData *samples) override;
+    void audioSamplesReceived(uint8_t id, const AudioSamplesData *samples) override;
 
     void audioControlReceived(uint8_t id, const uint8_t *data, size_t length) override;
 
