@@ -33,7 +33,6 @@
          shorter than the label it backs is worse than none, because the descenders fall off
          the bottom of it. -->
     <View
-        android:id="@+id/grid_label_scrim"
         android:layout_width="match_parent"
         android:layout_height="72dp"
         android:layout_gravity="bottom"

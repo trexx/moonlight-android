@@ -77,7 +77,6 @@
         android:clipChildren="false">
 
         <TextView
-            android:id="@+id/hostSectionLabel"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginBottom="@dimen/space_2"
@@ -85,7 +84,6 @@
             android:textAppearance="@style/TextAppearance.Moonlight.Section" />
 
         <HorizontalScrollView
-            android:id="@+id/hostBandScroll"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:scrollbars="none"
@@ -119,7 +117,14 @@
 
             <!-- columnWidth is overwritten in code from app_tile_width_large / _small, since
                  which one applies is a user preference. drawSelectorOnTop puts the ring over the
-                 box art rather than behind it, where a stroke-only drawable would be invisible. -->
+                 box art rather than behind it, where a stroke-only drawable would be invisible.
+
+                 stretchMode is spacingWidth, not spacingWidthUniform: uniform also pads the
+                 grid's outer edges, which indented the first column and left the app tiles out
+                 of line with the host band and both section labels above them. Spreading the
+                 leftover width between the columns only keeps column one flush with everything
+                 else in the content area. gravity=start for the same reason - a cell wider than
+                 its tile must not re-centre it. -->
             <GridView
                 android:id="@+id/appGrid"
                 android:layout_width="match_parent"
@@ -128,14 +133,14 @@
                 android:columnWidth="@dimen/app_tile_width_large"
                 android:horizontalSpacing="@dimen/tile_spacing"
                 android:verticalSpacing="@dimen/tile_spacing"
-                android:stretchMode="spacingWidthUniform"
+                android:stretchMode="spacingWidth"
                 android:listSelector="@drawable/tile_focus_ring"
                 android:drawSelectorOnTop="true"
                 android:focusable="true"
                 android:focusableInTouchMode="true"
                 android:clipToPadding="false"
                 android:clipChildren="false"
-                android:gravity="center" />
+                android:gravity="start" />
 
             <!-- One message view for every state that is not "here are the apps": no hosts yet,
                  nothing selected, host offline, host unpaired, host still being probed. Which

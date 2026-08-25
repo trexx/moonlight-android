@@ -2,10 +2,11 @@ package com.limelight.grid;
 
 import android.content.Context;
 import android.graphics.BitmapFactory;
+import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.BaseAdapter;
 import android.widget.ImageView;
-import android.widget.ProgressBar;
 import android.widget.TextView;
 
 
@@ -33,10 +34,18 @@ import java.util.Set;
  * <p>Box art is fetched through {@link com.limelight.grid.assets.CachedAppAssetLoader}, whose
  * loads are cancelled when cells are recycled — a grid that scrolls faster than the network would
  * otherwise queue work for cells that are long gone.
+ *
+ * <p>Extends {@link BaseAdapter} directly. There used to be a {@code GenericGridAdapter} between
+ * the two, holding the cell plumbing this shared with the host grid; the host grid is now a plain
+ * LinearLayout of focusable tiles with nothing to recycle, so the base class had one subclass and
+ * carried a progress-spinner argument that was permanently null here.
  */
-@SuppressWarnings("unchecked")
-public class AppGridAdapter extends GenericGridAdapter<AppObject> {
+public class AppGridAdapter extends BaseAdapter {
     private static final int ART_WIDTH_PX = 300;
+
+    private final Context context;
+    private final LayoutInflater inflater;
+    private final ArrayList<AppObject> itemList = new ArrayList<>();
 
     private final ComputerDetails computer;
     private final String uniqueId;
@@ -58,7 +67,8 @@ public class AppGridAdapter extends GenericGridAdapter<AppObject> {
 
     /** @param showHiddenApps include apps the user has hidden, for the settings-driven view */
     public AppGridAdapter(Context context, PreferenceConfiguration prefs, ComputerDetails computer, String uniqueId, boolean showHiddenApps) {
-        super(context, R.layout.app_grid_item);
+        this.context = context;
+        this.inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
 
         this.computer = computer;
         this.uniqueId = uniqueId;
@@ -173,16 +183,53 @@ public class AppGridAdapter extends GenericGridAdapter<AppObject> {
         allApps.remove(app);
     }
 
-    /** {@inheritDoc} Also cancels any box art loads still queued for the removed cells. */
-    @Override
+    /** Removes every item. */
     public void clear() {
-        super.clear();
+        itemList.clear();
         allApps.clear();
     }
 
-    /** {@inheritDoc} Binds name and box art, starting an asynchronous load if it isn't cached. */
+    /** {@inheritDoc} */
     @Override
-    public void populateView(View parentView, ImageView imgView, ProgressBar prgView, TextView txtView, ImageView overlayView, AppObject obj) {
+    public int getCount() {
+        return itemList.size();
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public Object getItem(int i) {
+        return itemList.get(i);
+    }
+
+    /** {@inheritDoc} Position is the ID; apps have no stable identity of their own. */
+    @Override
+    public long getItemId(int i) {
+        return i;
+    }
+
+    /** {@inheritDoc} Inflates or recycles a cell, then binds it. */
+    @Override
+    public View getView(int i, View convertView, ViewGroup viewGroup) {
+        if (convertView == null) {
+            convertView = inflater.inflate(R.layout.app_grid_item, viewGroup, false);
+        }
+
+        populateView(convertView,
+                convertView.findViewById(R.id.grid_image),
+                convertView.findViewById(R.id.grid_text),
+                convertView.findViewById(R.id.grid_overlay),
+                itemList.get(i));
+
+        return convertView;
+    }
+
+    /**
+     * Binds one app to the recycled views for its cell, starting an asynchronous box art load if
+     * it is not already cached.
+     *
+     * @param overlayView badge drawn over the artwork, for the app that is currently running
+     */
+    private void populateView(View parentView, ImageView imgView, TextView txtView, ImageView overlayView, AppObject obj) {
         // Cell size is a preference, not a layout, so it is applied here rather than by inflating
         // a second copy of the layout at a different scale.
         ViewGroup.LayoutParams params = parentView.getLayoutParams();
@@ -208,8 +255,9 @@ public class AppGridAdapter extends GenericGridAdapter<AppObject> {
         loader.populateImageView(obj.app, imgView, txtView);
 
         if (obj.isRunning) {
-            // Show the play button overlay
-            overlayView.setImageResource(R.drawable.ic_play);
+            // Show the running badge. Deliberately not a plain white glyph: it is drawn over box
+            // art, which is frequently pale enough to swallow one. See ic_badge_running.xml.
+            overlayView.setImageResource(R.drawable.ic_badge_running);
             overlayView.setVisibility(View.VISIBLE);
         }
         else {

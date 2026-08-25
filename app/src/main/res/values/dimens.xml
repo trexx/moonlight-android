@@ -24,6 +24,11 @@
     <dimen name="rail_width_expanded">220dp</dimen>
     <dimen name="rail_item_height">56dp</dimen>
     <dimen name="rail_icon_size">28dp</dimen>
+    <!-- The icon's column, and the reason rail items carry no start padding. It must equal
+         rail_width_collapsed minus the rail's own horizontal padding (2 x space_2): the icon is
+         centred in this column, so anything wider pushes it off the right edge of a collapsed
+         rail, and anything narrower leaves it off-centre. Keep the three in step. -->
+    <dimen name="rail_icon_column">56dp</dimen>
 
     <!-- Host tiles, in the fixed band above the app grid. -->
     <dimen name="host_tile_width">150dp</dimen>

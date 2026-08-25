@@ -25,6 +25,8 @@
     <dimen name="rail_width_expanded">260dp</dimen>
     <dimen name="rail_item_height">64dp</dimen>
     <dimen name="rail_icon_size">32dp</dimen>
+    <!-- 88dp less the rail's 2 x space_2 padding. See values/dimens.xml. -->
+    <dimen name="rail_icon_column">72dp</dimen>
 
     <dimen name="host_tile_width">200dp</dimen>
     <dimen name="host_tile_icon_size">96dp</dimen>

@@ -34,7 +34,6 @@ import com.limelight.utils.UiHelper;
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.Service;
-import android.content.ActivityNotFoundException;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
@@ -42,7 +41,6 @@ import android.content.SharedPreferences;
 import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
-import android.net.Uri;
 import android.opengl.GLSurfaceView;
 import android.os.Build;
 import android.os.Bundle;
@@ -121,7 +119,6 @@ public class BrowseActivity extends Activity {
     private final static int HOST_DETAILS_ID = 6;
     private final static int FULL_APP_LIST_ID = 7;
     private final static int TEST_NETWORK_ID = 8;
-    private final static int MANAGEMENT_PAGE_ID = 9;
 
     // App context menu. A separate range so onContextItemSelected can dispatch on the id alone
     // and never confuse a host action for an app one.
@@ -303,16 +300,14 @@ public class BrowseActivity extends Activity {
     // ------------------------------------------------------------------------------------------
 
     /**
-     * Fills the rail. Three destinations, inflated rather than declared in the layout because each
-     * needs its own icon and label and {@code <include>} can supply neither.
+     * Fills the rail. Inflated rather than declared in the layout because each item needs its own
+     * icon and label and {@code <include>} can supply neither.
+     *
+     * <p>Only the two destinations that leave this screen. A "Hosts" entry was tried and removed:
+     * the host band is already on screen directly above the grid and a press of "up" reaches it,
+     * so a rail item that only moved focus there was a third way to do nothing new.
      */
     private void buildRail() {
-        addRailItem(R.drawable.ic_computer, R.string.section_hosts, new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                focusHostBand();
-            }
-        });
         addRailItem(R.drawable.ic_add, R.string.rail_add_pc, new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -528,19 +523,6 @@ public class BrowseActivity extends Activity {
             }
         }
         return null;
-    }
-
-    /** Moves focus to the selected host, or the first one, and scrolls it into view. */
-    private void focusHostBand() {
-        View target = browseState.getSelectedUuid() != null
-                ? findHostTile(browseState.getSelectedUuid())
-                : (hostBand.getChildCount() > 0 ? hostBand.getChildAt(0) : null);
-
-        if (target != null) {
-            // requestFocus alone scrolls the band: taking focus walks up the parent chain, and
-            // the HorizontalScrollView brings its focused descendant on screen itself.
-            target.requestFocus();
-        }
     }
 
     // ------------------------------------------------------------------------------------------
@@ -1116,12 +1098,8 @@ public class BrowseActivity extends Activity {
             }
         }
 
-        // Orders are distinct so the sequence is defined. Management page and network test both
-        // sat at 5 before, which left their relative order down to insertion.
-        //
-        // Sunshine serves its web UI one port above the HTTP port
-        menu.add(Menu.NONE, MANAGEMENT_PAGE_ID, 5, getResources().getString(R.string.pcview_menu_management_page));
-
+        // Orders are distinct so the sequence is defined; several entries shared an order before,
+        // which left their relative order down to insertion.
         menu.add(Menu.NONE, TEST_NETWORK_ID, 6, getResources().getString(R.string.pcview_menu_test_network));
         menu.add(Menu.NONE, DELETE_ID, 8, getResources().getString(R.string.pcview_menu_delete_pc));
         menu.add(Menu.NONE, HOST_DETAILS_ID, 9, getResources().getString(R.string.pcview_menu_details));
@@ -1246,18 +1224,6 @@ public class BrowseActivity extends Activity {
 
             case HOST_DETAILS_ID:
                 Dialog.displayDialog(this, getResources().getString(R.string.title_details), details.toString(), false);
-                return true;
-
-            case MANAGEMENT_PAGE_ID:
-                if (details.activeAddress != null) {
-                    String url = "https://" + details.activeAddress.address() + ":" +
-                            (details.activeAddress.port() + 1);
-                    try {
-                        startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
-                    } catch (ActivityNotFoundException e) {
-                        Toast.makeText(this, getResources().getString(R.string.error_no_browser), Toast.LENGTH_LONG).show();
-                    }
-                }
                 return true;
 
             case TEST_NETWORK_ID:

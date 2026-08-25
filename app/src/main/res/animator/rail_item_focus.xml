@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Focus treatment for navigation rail items: the lift, without the scale.
+
+  Rail items cannot use animator/tile_focus.xml, which the tiles use. A tile is an island with
+  space around it, so growing it by 8% is free. A rail item is match_parent inside a rail that is
+  only a few dp wider than its own content, so the same 8% pushes it past the rail's padding and
+  off the left edge of the screen - visibly, at the expanded width, where 8% of 260dp is 20dp of
+  overhang against 8dp of padding.
+
+  Nothing is lost by dropping the scale here: rail_item_background fills a focused item with the
+  accent colour, which is a far stronger signal than a few dp of growth, and unlike a tile there
+  is no artwork underneath that a fill would obscure.
+
+  Durations match tile_focus.xml so focus moving between the rail and the tiles feels like one
+  mechanism rather than two.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item android:state_focused="true">
+        <objectAnimator
+            android:propertyName="translationZ"
+            android:valueTo="@dimen/tile_focus_lift"
+            android:valueType="floatType"
+            android:duration="150"
+            android:interpolator="@android:interpolator/fast_out_slow_in" />
+    </item>
+
+    <item>
+        <objectAnimator
+            android:propertyName="translationZ"
+            android:valueTo="0dp"
+            android:valueType="floatType"
+            android:duration="200"
+            android:interpolator="@android:interpolator/fast_out_linear_in" />
+    </item>
+
+</selector>
