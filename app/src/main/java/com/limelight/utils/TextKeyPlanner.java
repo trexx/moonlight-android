@@ -5,7 +5,9 @@ import com.limelight.nvstream.input.KeyboardPacket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Turns soft keyboard input into the sequence of events to send the host.
@@ -44,10 +46,41 @@ public final class TextKeyPlanner {
     public record Text(String text) implements Step {}
 
     /**
+     * A step and when to send it, as a millisecond offset from the start of the plan.
+     *
+     * @param offsetMs when to send this step, relative to the first step in the same plan
+     */
+    public record Timed(long offsetMs, Step step) {}
+
+    /**
      * Payload limit for one text event. The control stream has no flow control of its own, so
-     * larger commits are split and paced by the caller.
+     * larger commits are split and paced by {@link #pace(List)}.
      */
     public static final int UTF8_CHUNK_SIZE = 512;
+
+    /**
+     * How long a key stays down. A keypress with no duration is invisible to a game that samples
+     * input once per frame, which is the same way the whole soft keyboard used to fail. 25ms
+     * matches the delay {@code GameMenu.sendKeys} has always used for the same reason.
+     */
+    public static final int KEY_DWELL_MS = 25;
+
+    /**
+     * How long after one key goes down the next may follow.
+     *
+     * <p>Shorter than {@link #KEY_DWELL_MS} on purpose, and that is the whole point of
+     * {@link #pace(List)}: a person typing presses the next key before releasing the last, so
+     * keystrokes overlap rather than queueing. Waiting for each release before starting the next
+     * press made every character cost the dwell twice, and a dictated sentence arrives as one
+     * commit of forty of them.
+     */
+    public static final int KEY_GAP_MS = 10;
+
+    /**
+     * Spacing between text events, bounded by what the control stream will take rather than by
+     * anything the host has to observe.
+     */
+    public static final int TEXT_CHUNK_INTERVAL_MS = 15;
 
     // Windows virtual key codes. Duplicated from KeyboardTranslator rather than imported: that
     // class pulls in android.hardware.input.InputManager and cannot load in a JVM test.
@@ -235,6 +268,84 @@ public final class TextKeyPlanner {
         }
 
         return steps;
+    }
+
+    /**
+     * Turns a plan into a timeline, overlapping keystrokes the way a person typing does.
+     *
+     * <p>Each key still holds for {@link #KEY_DWELL_MS}, because that is what a game polling once
+     * a frame needs to see. What changes is that the next key goes down {@link #KEY_GAP_MS} after
+     * the last one rather than waiting for its release, so a word costs roughly the gap per
+     * character instead of the dwell twice over.
+     *
+     * <p>Two things are never overlapped:
+     * <ul>
+     *   <li><b>A key against itself.</b> {@code "hello"} presses L twice; the first release has to
+     *       land before the second press, or the host sees one long press and types one L.</li>
+     *   <li><b>Anything across a shift transition or a text event.</b> A shifted character that
+     *       started before shift went down, or after it came up, arrives in the wrong case, and a
+     *       text event that overtook a keystroke arrives out of order. Both act as barriers: they
+     *       wait for every key already scheduled to be released.</li>
+     * </ul>
+     *
+     * @return the steps in the order they should be sent, each with its offset from the first.
+     *         Sorted by offset; steps sharing an offset keep their order from {@code steps}.
+     */
+    public static List<Timed> pace(List<Step> steps) {
+        List<Timed> timeline = new ArrayList<>();
+
+        // When the next key may go down, and when the last step scheduled so far lands. They
+        // differ precisely because presses overlap releases - which is the point.
+        long cursor = 0;
+        long lastScheduled = 0;
+
+        // When each key was last released, so it is never pressed again while still down.
+        Map<Integer, Long> released = new HashMap<>();
+
+        // The release offset for the key currently down, filled in when its press is scheduled.
+        // The planner always emits a key's up immediately after its down, so one is enough.
+        long pendingRelease = 0;
+
+        for (Step step : steps) {
+            switch (step) {
+                case Text text -> {
+                    long at = Math.max(cursor, lastScheduled);
+                    timeline.add(new Timed(at, text));
+                    lastScheduled = at;
+                    cursor = at + TEXT_CHUNK_INTERVAL_MS;
+                }
+                case Key key when key.windowsKeyCode() == VK_LSHIFT -> {
+                    long at = Math.max(cursor, lastScheduled);
+                    timeline.add(new Timed(at, key));
+                    lastScheduled = at;
+                    cursor = at + KEY_GAP_MS;
+                }
+                case Key key when key.pressed() -> {
+                    // Never while it is still down: a repeated letter has to see its own release
+                    // first, and the gap keeps the two unambiguous rather than simultaneous.
+                    Long lastRelease = released.get(key.windowsKeyCode());
+                    long at = lastRelease == null ? cursor
+                            : Math.max(cursor, lastRelease + KEY_GAP_MS);
+
+                    timeline.add(new Timed(at, key));
+                    pendingRelease = at + KEY_DWELL_MS;
+                    lastScheduled = Math.max(lastScheduled, pendingRelease);
+                    cursor = at + KEY_GAP_MS;
+                }
+                case Key key -> {
+                    timeline.add(new Timed(pendingRelease, key));
+                    released.put(key.windowsKeyCode(), pendingRelease);
+                    lastScheduled = Math.max(lastScheduled, pendingRelease);
+                }
+            }
+        }
+
+        // Releases are scheduled when their press is, so they are added out of order. Sorting is
+        // stable, which is what keeps a release and the press that displaced it in the right order
+        // when the barrier above puts them on the same offset.
+        timeline.sort((a, b) -> Long.compare(a.offsetMs(), b.offsetMs()));
+
+        return timeline;
     }
 
     /**
