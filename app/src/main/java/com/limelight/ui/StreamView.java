@@ -20,7 +20,8 @@ import android.view.inputmethod.InputConnection;
  *       except while the soft keyboard is up, when the IME gets first refusal
  *       ({@link #setImeVisible(boolean)}).</li>
  *   <li>An {@link InputConnection} that turns soft keyboard text into host input - as real
- *       keystrokes wherever the character has a key, since that is all a game can see.</li>
+ *       keystrokes wherever the character has a key, since that is all a game can see, and asking
+ *       the IME for as little cleverness as it will agree to.</li>
  * </ul>
  */
 public class StreamView extends SurfaceView {
@@ -163,9 +164,19 @@ public class StreamView extends SurfaceView {
      */
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        // Basic text editor flags - we don't need extract UI or an enter action
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT;
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI;
+        // NO_SUGGESTIONS asks the IME to stop composing, autocorrecting and auto-capitalising.
+        // All three assume an editor that can be read back and rewritten, and there is none here:
+        // autocorrect works by deleting a word and retyping it, and auto-capitalisation sends
+        // shifts nobody pressed. Gboard honours this inconsistently and often keeps composing
+        // anyway, which is why ImeComposition handles that case rather than relying on the flag.
+        //
+        // The stronger lever, TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, does stop Gboard composing -
+        // and takes its voice key and glide typing with it, so it is deliberately not used.
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+
+        // No extract UI or enter action, and nothing typed at a game trains the user's keyboard.
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
+                | EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;
 
         return new BaseInputConnection(this, false) {
             @Override
