@@ -1885,6 +1885,50 @@ device is ever added.
 - [ ] **Shield TV: unchanged.** The `ifeq` is scoped to `armeabi-v7a`, so `arm64-v8a` should be
       byte-identical apart from unrelated changes. Confirm a stream still runs.
 
+## 21. xow driver JNI binding
+
+`xow_driver_jni.cpp` now exports only `JNI_OnLoad` and binds its twenty entry points with
+`RegisterNatives`, where before each was an exported `Java_com_limelight_binding_input_driver_*`
+symbol resolved by the runtime's name mangling. `GipCrypto::init()` takes the class instead of
+calling `FindClass` on a hardcoded name. Verified in the built libraries for both ABIs: one
+exported `JNI_OnLoad`, no `Java_*` symbols, and exactly four `com/limelight` strings — the block
+of class names at the top of the file.
+
+Nothing on a per-frame or per-report path changed. Once bound, a registered native and a mangled
+one are the same function pointer; only the one-time resolution differs, and it moves from first
+call to `System.loadLibrary()`.
+
+What cannot be checked off a device is the class-initialisation order at load time. `FindClass`
+initialises the class it returns, so binding `GipController` runs its static initialiser, which
+calls `System.loadLibrary("xow-driver")` again on the thread already inside `JNI_OnLoad`. ART is
+documented to recognise that by thread id and return success rather than deadlock, logging
+`recursive attempt to load library`. Three classes here each load the library, so whichever the
+app touches first takes that path for the other two.
+
+- [ ] **Either device: the library loads at all.** Plug in the wireless adapter or a wired pad and
+      confirm no `UnsatisfiedLinkError` and no hang. The recursion above, if ART did not handle it,
+      would present as a hang inside the static initialiser, not a crash.
+      ```bash
+      adb shell setprop persist.log.tag '""'
+      adb logcat -d | grep -aiE "xow-driver|recursive attempt|UnsatisfiedLink"
+      adb shell setprop persist.log.tag S
+      ```
+      The `recursive attempt to load library` line is expected and is not a fault.
+- [ ] **Either device: every entry point still binds.** A signature that drifted now fails at load
+      rather than at first call, so a clean load proves all twenty. `Crypto: GipCrypto ready`
+      confirms the crypto class resolved too — it is logged from `JNI_OnLoad` now, not from the
+      first controller connect.
+- [ ] **Wireless adapter: a pad still pairs and reports.** The security handshake is the only
+      caller of `GipCrypto`, so pairing is what proves the class reference survived the move off
+      `registerNative()`. Rumble and headphone audio exercise the rest of the table.
+- [ ] **Wired pad: the static entry points bind.** `XboxWiredGipController`'s four natives are
+      `static`, which `RegisterNatives` handles identically but which the mangled-name path
+      reached through a different lookup. Confirm a cabled pad still enumerates.
+- [ ] **Release build, not just debug.** `assembleRelease` and `lintRelease` pass and the release
+      library exports the same single `JNI_OnLoad`, but that only proves it builds. R8 keeps the
+      whole `driver` package, and the tables are matched by method name at runtime, so a release
+      APK still has to be run on hardware to prove the binding holds under shrinking.
+
 ---
 
 ## Hardware still needed
