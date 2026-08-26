@@ -596,8 +596,12 @@ public class NvConnection {
     }
 
     /**
-     * Sends text directly, bypassing keycodes entirely. Used for soft keyboard input, where the
-     * characters produced don't necessarily correspond to any key the host would recognise.
+     * Sends text directly, bypassing keycodes entirely.
+     *
+     * <p>The fallback for soft keyboard characters that have no key on a US QWERTY layout - CJK,
+     * emoji, anything needing a dead key. Everything else goes out as keystrokes instead, because
+     * the host injects this as Unicode character input and a game reading DirectInput or Raw Input
+     * never sees it. See {@link com.limelight.utils.TextKeyPlanner}.
      */
     public void sendUtf8Text(final String text) {
         if (!isMonkey) {

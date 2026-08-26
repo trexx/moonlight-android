@@ -35,8 +35,11 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamView;
 import com.limelight.utils.Dialog;
+import com.limelight.utils.ImeComposition;
+import com.limelight.utils.ImeTextBuffer;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
+import com.limelight.utils.TextKeyPlanner;
 import com.limelight.utils.UiHelper;
 
 import android.annotation.SuppressLint;
@@ -82,7 +85,6 @@ import java.io.ByteArrayInputStream;
 import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.List;
@@ -130,25 +132,64 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     private static final int THREE_FINGER_TAP_THRESHOLD = 300;
 
-    // Soft-keyboard text input. The control stream has a payload limit, so committed
-    // text is split on UTF-8 code point boundaries and drained on a timer.
-    private static final int UTF8_CHUNK_SIZE = 512;
-    private static final int UTF8_CHUNK_INTERVAL_MS = 15;
-    private final Queue<String> commitTextQueue = new ArrayDeque<>();
-    private final Handler commitTextHandler = new Handler(Looper.getMainLooper());
+    // Soft-keyboard input, planned by TextKeyPlanner and drained on a timer. One queue for
+    // keystrokes, fallback text and deletions alike, because they have to reach the host in the
+    // order the IME produced them - a deletion that overtook the text it was deleting would
+    // eat whatever was on the host already.
 
-    private final Runnable flushCommitTextQueue = new Runnable() {
+    // Pacing for a fallback text event, which is bounded by what the control stream will take
+    // rather than by anything the host has to observe.
+    private static final int UTF8_CHUNK_INTERVAL_MS = 15;
+
+    // Dwell between a key down and its up. A keypress with no duration is invisible to a game
+    // that samples input once per frame, which is the same way the whole soft keyboard used to
+    // fail. 25ms matches the delay GameMenu.sendKeys has always used for the same reason.
+    private static final int KEY_STEP_INTERVAL_MS = 25;
+
+    private final Queue<TextKeyPlanner.Step> imeInputQueue = new ArrayDeque<>();
+    private final Handler imeInputHandler = new Handler(Looper.getMainLooper());
+
+    // What the keyboard has typed, kept only so a deletion can be turned from the IME's UTF-16
+    // code units into the number of characters the host has to lose. Dropped when the keyboard
+    // closes, since the next one opens over text this can no longer account for.
+    private final ImeTextBuffer imeTextBuffer = new ImeTextBuffer();
+
+    // The word the keyboard is still composing. Held here rather than in the InputConnection for
+    // the reason ImeComposition documents: BaseInputConnection replays its own copy back at us.
+    private final ImeComposition imeComposition = new ImeComposition();
+
+    // Last soft keyboard visibility seen by the window insets listener, so the buffer above is
+    // dropped once per dismissal rather than on every insets change.
+    private boolean imeWasVisible;
+
+    // Whether a drain is already pacing itself through the queue. Enqueuing must not restart it,
+    // or a commit arriving mid-keystroke would collapse the dwell above to nothing.
+    private boolean imeDrainScheduled;
+
+    private final Runnable drainImeInputQueue = new Runnable() {
         @Override
         public void run() {
-            String chunk = commitTextQueue.poll();
-            if (chunk == null) {
+            TextKeyPlanner.Step step = imeInputQueue.poll();
+            if (step == null) {
+                imeDrainScheduled = false;
                 return;
             }
+
             if (conn != null) {
-                conn.sendUtf8Text(chunk);
+                switch (step) {
+                    case TextKeyPlanner.Key key -> conn.sendKeyboardInput(
+                            KeyboardTranslator.toWireKeycode(key.windowsKeyCode()),
+                            key.pressed() ? KeyboardPacket.KEY_DOWN : KeyboardPacket.KEY_UP,
+                            key.modifiers(), (byte) 0);
+                    case TextKeyPlanner.Text text -> conn.sendUtf8Text(text.text());
+                }
             }
-            if (!commitTextQueue.isEmpty()) {
-                commitTextHandler.postDelayed(this, UTF8_CHUNK_INTERVAL_MS);
+
+            if (imeInputQueue.isEmpty()) {
+                imeDrainScheduled = false;
+            }
+            else {
+                imeInputHandler.postDelayed(this, delayAfter(step));
             }
         }
     };
@@ -270,7 +311,19 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             // intercepting keys ahead of the IME. Null-checked because this listener is
             // registered before setContentView() has run.
             if (streamView != null) {
-                streamView.setImeVisible(insets.isVisible(WindowInsets.Type.ime()));
+                boolean imeVisible = insets.isVisible(WindowInsets.Type.ime());
+                streamView.setImeVisible(imeVisible);
+
+                // Forget what was typed once the keyboard goes away. Acted on at the transition
+                // because this listener fires on every insets change during a stream.
+                if (imeWasVisible && !imeVisible) {
+                    imeTextBuffer.clear();
+
+                    // Anything still being composed when the keyboard was dismissed was never
+                    // finalised, so it is not text the user asked to send.
+                    imeComposition.reset();
+                }
+                imeWasVisible = imeVisible;
             }
 
             return v.onApplyWindowInsets(insets);
@@ -1170,10 +1223,49 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     /** {@inheritDoc} */
     @Override
     public boolean handleCommitText(CharSequence text) {
-        if (conn == null || text == null) {
+        if (conn == null) {
             return false;
         }
-        enqueueCommitText(text.toString());
+
+        // A commit is the finished form of whatever was being composed, so the composition is
+        // discarded here rather than sent as well.
+        return sendImeText(imeComposition.commit(text));
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean handleComposingText(CharSequence text) {
+        if (conn == null) {
+            return false;
+        }
+
+        // Previews are not typed. Only the finished word is.
+        imeComposition.composing(text);
+        return true;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    public boolean handleFinishComposingText() {
+        if (conn == null) {
+            return false;
+        }
+        return sendImeText(imeComposition.finish());
+    }
+
+    /**
+     * Sends text the IME has finalised, as keystrokes wherever the characters have keys.
+     *
+     * @return true, so the caller can report the callback handled - a null or empty run is still
+     *         handled, it simply has nothing to send
+     */
+    private boolean sendImeText(String text) {
+        if (text == null) {
+            return true;
+        }
+
+        imeTextBuffer.append(text);
+        enqueueImeInput(TextKeyPlanner.planText(text));
         return true;
     }
 
@@ -1184,52 +1276,42 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
 
-        // The host has no notion of our IME's buffer, so approximate a deletion with
-        // the equivalent number of backspaces.
-        if (beforeLength > 0) {
-            short backspaceCode = keyboardTranslator.translate(KeyEvent.KEYCODE_DEL, -1);
-            for (int i = 0; i < beforeLength; i++) {
-                conn.sendKeyboardInput(backspaceCode, KeyboardPacket.KEY_DOWN, (byte)0, (byte)0);
-                conn.sendKeyboardInput(backspaceCode, KeyboardPacket.KEY_UP, (byte)0, (byte)0);
-            }
-        }
+        // afterLength is passed through as-is: our cursor is always at the end of what was typed,
+        // so there is never anything after it to have counted in the first place. It used to be
+        // dropped silently, which under-deleted on the rare IME that does use it.
+        enqueueImeInput(TextKeyPlanner.planDeletion(imeTextBuffer.removeBefore(beforeLength), afterLength));
         return true;
     }
 
     /**
-     * Splits committed IME text into control-stream-sized chunks and starts draining them.
+     * Queues planned soft-keyboard events and starts the drain if it is not already running.
      *
-     * <p>Split on UTF-8 code point boundaries: a chunk that ends mid-sequence would arrive at the
-     * host as mojibake. The queue is drained on a timer rather than sent at once because the
-     * control stream has a payload limit and no flow control of its own.
+     * <p>Deliberately does not restart a drain that is already pacing itself: the gap between
+     * steps is a keystroke's dwell time, and cancelling a pending callback to post immediately
+     * would collapse it. Text that arrives mid-drain simply joins the back of the queue.
      */
-    private void enqueueCommitText(String text) {
-        if (text.isEmpty()) {
+    private void enqueueImeInput(List<TextKeyPlanner.Step> steps) {
+        if (steps.isEmpty()) {
             return;
         }
 
-        byte[] utf8 = text.getBytes(StandardCharsets.UTF_8);
-        int offset = 0;
-        while (offset < utf8.length) {
-            int end = Math.min(offset + UTF8_CHUNK_SIZE, utf8.length);
+        imeInputQueue.addAll(steps);
 
-            // Never split inside a multi-byte sequence
-            while (end < utf8.length && (utf8[end] & 0xC0) == 0x80) {
-                end--;
-            }
-            if (end <= offset) {
-                break;
-            }
-
-            commitTextQueue.add(new String(utf8, offset, end - offset, StandardCharsets.UTF_8));
-            offset = end;
+        if (!imeDrainScheduled) {
+            imeDrainScheduled = true;
+            imeInputHandler.post(drainImeInputQueue);
         }
+    }
 
-        // Start draining if the timer isn't already running
-        if (!commitTextQueue.isEmpty()) {
-            commitTextHandler.removeCallbacks(flushCommitTextQueue);
-            commitTextHandler.post(flushCommitTextQueue);
-        }
+    /**
+     * @return how long to wait after sending this step. Keystrokes need the dwell a game can see;
+     *         text events only need to stay inside what the control stream will take.
+     */
+    private static int delayAfter(TextKeyPlanner.Step step) {
+        return switch (step) {
+            case TextKeyPlanner.Key ignored -> KEY_STEP_INTERVAL_MS;
+            case TextKeyPlanner.Text ignored -> UTF8_CHUNK_INTERVAL_MS;
+        };
     }
 
     /** {@inheritDoc} Forwards a key press to the host unless it is a client shortcut. */
@@ -1389,7 +1471,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     /**
      * Handles the batched character events Android still sends for text that has no keycode,
-     * forwarding them to the host as UTF-8 text.
+     * forwarding them through the same path as text the IME commits.
      */
     private boolean handleKeyMultiple(KeyEvent event) {
         // We can receive keys from a software keyboard that don't correspond to any existing
@@ -1404,8 +1486,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
 
-        conn.sendUtf8Text(event.getCharacters());
-        return true;
+        // Routed through the same path as committed text rather than straight to sendUtf8Text:
+        // these are soft keyboard characters, and a game can only see the ones that arrive as
+        // keystrokes. It also keeps them in order with anything already queued.
+        return handleCommitText(event.getCharacters());
     }
 
     /** @return the context for this pointer index, or null if we track fewer fingers than that */
@@ -1824,6 +1908,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             connecting = connected = false;
 
             controllerHandler.stop();
+
+            // Drop anything the soft keyboard still had in flight. A plan is paced out over tens
+            // of milliseconds per keystroke, so a commit made just before disconnecting would
+            // otherwise keep posting key events at a connection that is being torn down.
+            imeInputHandler.removeCallbacks(drainImeInputQueue);
+            imeInputQueue.clear();
+            imeDrainScheduled = false;
+            imeTextBuffer.clear();
+            imeComposition.reset();
 
             // Update GameManager state to indicate we're no longer in game
             UiHelper.notifyStreamEnded(this);
