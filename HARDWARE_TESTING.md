@@ -64,6 +64,22 @@ feature checks.
       out as text characters that nothing acted on.
 - [ ] **Emoji and CJK still arrive** in something that accepts them. They have no key, so they
       still take the UTF-8 fallback — the path must not have been lost.
+- [ ] **A doubled letter arrives twice.** Type `hello` and `aaa`. Keystrokes now overlap - the
+      next key goes down 10 ms after the last rather than waiting 25 ms for its release - and the
+      one thing that must never overlap is a key with itself, because the host would read two
+      presses as one long one and type a single letter.
+- [ ] **A long phrase arrives in a fraction of the time, and intact.** `the quick brown fox jumps
+      over it` measured 1625 ms serial against 345 ms paced. Dictate or type something that long
+      and watch for dropped or reordered characters rather than for the clock.
+- [ ] **Capitals survive the overlap.** Shift is a barrier in the timeline, so nothing may start
+      before it goes down or finish after it comes up. A lowercase letter appearing in the middle
+      of `HELLO`, or a stray capital after it, means the barrier leaked.
+- [ ] **Typing continuously loses nothing.** A commit arriving mid-drain is appended after
+      whatever is still going out rather than merged into it. Type fast, or swipe several words in
+      a row, and check the host's text matches character for character.
+- [ ] **A game still sees each keypress.** The 25 ms dwell is unchanged, but two keys can now be
+      down at once, which no previous version of this path ever produced. Worth one check in a
+      game that acts on key-down rather than on text.
 - [ ] **A mixed commit arrives in order.** Type `café ok`: the accented character travels by
       text and everything around it by key, so the failure mode is the host assembling it as
       `caf ok` + `é` at the end.

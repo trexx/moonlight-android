@@ -61,6 +61,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.hardware.display.DisplayManager;
 import android.view.Display;
 import android.view.InputDevice;
@@ -137,17 +138,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // order the IME produced them - a deletion that overtook the text it was deleting would
     // eat whatever was on the host already.
 
-    // Pacing for a fallback text event, which is bounded by what the control stream will take
-    // rather than by anything the host has to observe.
-    private static final int UTF8_CHUNK_INTERVAL_MS = 15;
+    // When to send one planned step. TextKeyPlanner decides the spacing; this is the same
+    // timeline rebased onto the clock Handler posts against.
+    private record ScheduledStep(long uptimeMs, TextKeyPlanner.Step step) {}
 
-    // Dwell between a key down and its up. A keypress with no duration is invisible to a game
-    // that samples input once per frame, which is the same way the whole soft keyboard used to
-    // fail. 25ms matches the delay GameMenu.sendKeys has always used for the same reason.
-    private static final int KEY_STEP_INTERVAL_MS = 25;
-
-    private final Queue<TextKeyPlanner.Step> imeInputQueue = new ArrayDeque<>();
+    private final Queue<ScheduledStep> imeInputQueue = new ArrayDeque<>();
     private final Handler imeInputHandler = new Handler(Looper.getMainLooper());
+
+    // When the last step already queued lands, so text arriving mid-drain is appended after it
+    // rather than on top of it.
+    private long imeQueueEndTime;
 
     // What the keyboard has typed, kept only so a deletion can be turned from the IME's UTF-16
     // code units into the number of characters the host has to lose. Dropped when the keyboard
@@ -169,14 +169,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private final Runnable drainImeInputQueue = new Runnable() {
         @Override
         public void run() {
-            TextKeyPlanner.Step step = imeInputQueue.poll();
-            if (step == null) {
+            ScheduledStep scheduled = imeInputQueue.poll();
+            if (scheduled == null) {
                 imeDrainScheduled = false;
                 return;
             }
 
             if (conn != null) {
-                switch (step) {
+                switch (scheduled.step()) {
                     case TextKeyPlanner.Key key -> conn.sendKeyboardInput(
                             KeyboardTranslator.toWireKeycode(key.windowsKeyCode()),
                             key.pressed() ? KeyboardPacket.KEY_DOWN : KeyboardPacket.KEY_UP,
@@ -185,11 +185,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 }
             }
 
-            if (imeInputQueue.isEmpty()) {
+            ScheduledStep next = imeInputQueue.peek();
+            if (next == null) {
                 imeDrainScheduled = false;
             }
             else {
-                imeInputHandler.postDelayed(this, delayAfter(step));
+                // postAtTime, not postDelayed: the steps overlap, so what matters is when each one
+                // lands rather than how long since the last. Both use uptimeMillis().
+                imeInputHandler.postAtTime(this, next.uptimeMs());
             }
         }
     };
@@ -1286,32 +1289,29 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     /**
      * Queues planned soft-keyboard events and starts the drain if it is not already running.
      *
-     * <p>Deliberately does not restart a drain that is already pacing itself: the gap between
-     * steps is a keystroke's dwell time, and cancelling a pending callback to post immediately
-     * would collapse it. Text that arrives mid-drain simply joins the back of the queue.
+     * <p>Deliberately does not restart a drain that is already pacing itself. A commit arriving
+     * mid-keystroke is appended after whatever is still going out, not folded into it: overlapping
+     * two independent plans could press a key that the earlier one still holds down, which is the
+     * one thing {@link TextKeyPlanner#pace(List)} exists to prevent within a plan.
      */
     private void enqueueImeInput(List<TextKeyPlanner.Step> steps) {
         if (steps.isEmpty()) {
             return;
         }
 
-        imeInputQueue.addAll(steps);
+        List<TextKeyPlanner.Timed> timeline = TextKeyPlanner.pace(steps);
+
+        long base = Math.max(SystemClock.uptimeMillis(),
+                imeQueueEndTime + TextKeyPlanner.KEY_GAP_MS);
+        for (TextKeyPlanner.Timed timed : timeline) {
+            imeInputQueue.add(new ScheduledStep(base + timed.offsetMs(), timed.step()));
+        }
+        imeQueueEndTime = base + timeline.get(timeline.size() - 1).offsetMs();
 
         if (!imeDrainScheduled) {
             imeDrainScheduled = true;
-            imeInputHandler.post(drainImeInputQueue);
+            imeInputHandler.postAtTime(drainImeInputQueue, base);
         }
-    }
-
-    /**
-     * @return how long to wait after sending this step. Keystrokes need the dwell a game can see;
-     *         text events only need to stay inside what the control stream will take.
-     */
-    private static int delayAfter(TextKeyPlanner.Step step) {
-        return switch (step) {
-            case TextKeyPlanner.Key ignored -> KEY_STEP_INTERVAL_MS;
-            case TextKeyPlanner.Text ignored -> UTF8_CHUNK_INTERVAL_MS;
-        };
     }
 
     /** {@inheritDoc} Forwards a key press to the host unless it is a client shortcut. */
@@ -1915,6 +1915,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             imeInputHandler.removeCallbacks(drainImeInputQueue);
             imeInputQueue.clear();
             imeDrainScheduled = false;
+            imeQueueEndTime = 0;
             imeTextBuffer.clear();
             imeComposition.reset();
 

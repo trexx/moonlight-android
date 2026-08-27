@@ -4,6 +4,7 @@ import com.limelight.nvstream.input.KeyboardPacket;
 import com.limelight.utils.TextKeyPlanner.Key;
 import com.limelight.utils.TextKeyPlanner.Step;
 import com.limelight.utils.TextKeyPlanner.Text;
+import com.limelight.utils.TextKeyPlanner.Timed;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -12,7 +13,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import java.nio.charset.StandardCharsets;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -351,6 +354,190 @@ class TextKeyPlannerTest {
             }
         }
         return count;
+    }
+
+    @Nested
+    @DisplayName("pace()")
+    class Pace {
+
+        private static final int VK_LSHIFT = 0xA0;
+
+        @Test
+        @DisplayName("holds a key for the dwell a game can see")
+        void holdsAKeyForTheDwell() {
+            List<Timed> timeline = TextKeyPlanner.pace(TextKeyPlanner.planText("a"));
+
+            assertEquals(2, timeline.size());
+            assertEquals(0, timeline.get(0).offsetMs());
+            assertEquals(TextKeyPlanner.KEY_DWELL_MS, timeline.get(1).offsetMs());
+        }
+
+        @Test
+        @DisplayName("presses the next key before releasing the last, the way typing does")
+        void overlapsKeystrokes() {
+            List<Timed> timeline = TextKeyPlanner.pace(TextKeyPlanner.planText("hi"));
+
+            // H down, I down, H up, I up - the second press lands inside the first key's dwell
+            assertTrue(timeline.get(1).step() instanceof Key key && key.pressed(),
+                    "the second key goes down before anything comes up");
+            assertEquals(TextKeyPlanner.KEY_GAP_MS, timeline.get(1).offsetMs());
+        }
+
+        @Test
+        @DisplayName("costs less than waiting for every release, which is the point")
+        void beatsWaitingForEachRelease() {
+            List<Step> plan = TextKeyPlanner.planText("hello");
+            List<Timed> timeline = TextKeyPlanner.pace(plan);
+
+            long serial = (long) plan.size() * TextKeyPlanner.KEY_DWELL_MS;
+
+            assertTrue(span(timeline) < serial,
+                    "paced " + span(timeline) + "ms against " + serial + "ms serial");
+        }
+
+        @Test
+        @DisplayName("never presses a key that is still down")
+        void neverPressesAHeldKey() {
+            // "hello" doubles the L, and a second press while the first is down reads on the host
+            // as one long press - one L instead of two.
+            assertKeysNeverOverlapThemselves(TextKeyPlanner.pace(TextKeyPlanner.planText("hello")));
+            assertKeysNeverOverlapThemselves(TextKeyPlanner.pace(TextKeyPlanner.planText("aaa")));
+            assertKeysNeverOverlapThemselves(TextKeyPlanner.pace(TextKeyPlanner.planText("mississippi")));
+        }
+
+        @Test
+        @DisplayName("separates a repeated key's release from its next press")
+        void separatesARepeatedKey() {
+            List<Timed> timeline = TextKeyPlanner.pace(TextKeyPlanner.planText("aa"));
+
+            assertNotEquals(timeline.get(1).offsetMs(), timeline.get(2).offsetMs(),
+                    "the release and the next press must not land on the same instant");
+        }
+
+        @Test
+        @DisplayName("does not let a keystroke escape the shift hold")
+        void shiftIsABarrier() {
+            // "Ab": shift down, A, shift up, b. If A's release slipped past the shift release, or
+            // b's press started before it, the host would get the wrong case.
+            List<Timed> timeline = TextKeyPlanner.pace(TextKeyPlanner.planText("Ab"));
+
+            long shiftDown = offsetOf(timeline, VK_LSHIFT, true);
+            long shiftUp = offsetOf(timeline, VK_LSHIFT, false);
+
+            assertTrue(offsetOf(timeline, 'A', true) >= shiftDown, "A pressed after shift went down");
+            assertTrue(offsetOf(timeline, 'A', false) <= shiftUp, "A released before shift came up");
+            assertTrue(offsetOf(timeline, 'B', true) >= shiftUp, "b pressed after shift came up");
+        }
+
+        @Test
+        @DisplayName("holds shift across a run rather than through each letter separately")
+        void shiftHoldsAcrossARun() {
+            List<Timed> timeline = TextKeyPlanner.pace(TextKeyPlanner.planText("HELLO"));
+
+            assertEquals(0, offsetOf(timeline, VK_LSHIFT, true), "one press, at the start");
+            assertTrue(offsetOf(timeline, VK_LSHIFT, false) >= offsetOf(timeline, 'O', false),
+                    "and one release, after the last letter is done");
+        }
+
+        @Test
+        @DisplayName("does not let a text event overtake the keystrokes before it")
+        void textIsABarrier() {
+            // "caf\u00e9" - the accented character has no key, so it travels as text and must land
+            // after every keystroke before it has finished.
+            List<Timed> timeline = TextKeyPlanner.pace(TextKeyPlanner.planText("caf\u00e9"));
+
+            long text = -1;
+            long lastKey = -1;
+            for (Timed timed : timeline) {
+                if (timed.step() instanceof Text) {
+                    text = timed.offsetMs();
+                }
+                else if (text == -1) {
+                    lastKey = Math.max(lastKey, timed.offsetMs());
+                }
+            }
+
+            assertTrue(text >= lastKey, "text at " + text + "ms, last keystroke at " + lastKey + "ms");
+        }
+
+        @Test
+        @DisplayName("paces backspaces without ever overlapping one with itself")
+        void pacesDeletions() {
+            List<Timed> timeline = TextKeyPlanner.pace(TextKeyPlanner.planDeletion(3, 0));
+
+            assertEquals(6, timeline.size());
+            assertKeysNeverOverlapThemselves(timeline);
+        }
+
+        @Test
+        @DisplayName("hands back the steps in the order they should be sent")
+        void isSortedByOffset() {
+            List<Timed> timeline = TextKeyPlanner.pace(TextKeyPlanner.planText("Hello there!"));
+
+            for (int i = 1; i < timeline.size(); i++) {
+                assertTrue(timeline.get(i - 1).offsetMs() <= timeline.get(i).offsetMs(),
+                        "step " + i + " goes backwards in time");
+            }
+        }
+
+        @Test
+        @DisplayName("releases every key it presses, whatever the pacing does to the order")
+        void releasesEveryKey() {
+            List<Timed> timeline = TextKeyPlanner.pace(TextKeyPlanner.planText("Hello there!"));
+
+            Set<Integer> held = new HashSet<>();
+            for (Timed timed : timeline) {
+                if (timed.step() instanceof Key key) {
+                    if (key.pressed()) {
+                        held.add(key.windowsKeyCode());
+                    }
+                    else {
+                        held.remove(key.windowsKeyCode());
+                    }
+                }
+            }
+
+            assertTrue(held.isEmpty(), "left holding " + held);
+        }
+
+        @Test
+        @DisplayName("paces an empty plan to nothing")
+        void pacesAnEmptyPlan() {
+            assertEquals(List.of(), TextKeyPlanner.pace(List.of()));
+        }
+
+        /** Fails if any key is pressed a second time before the first press was released. */
+        private static void assertKeysNeverOverlapThemselves(List<Timed> timeline) {
+            Set<Integer> held = new HashSet<>();
+            for (Timed timed : timeline) {
+                if (timed.step() instanceof Key key) {
+                    if (key.pressed()) {
+                        assertTrue(held.add(key.windowsKeyCode()),
+                                "key " + key.windowsKeyCode() + " pressed again while still down");
+                    }
+                    else {
+                        held.remove(key.windowsKeyCode());
+                    }
+                }
+            }
+        }
+
+        /** @return when the given transition of the given key happens, or -1 if it never does */
+        private static long offsetOf(List<Timed> timeline, int windowsKeyCode, boolean pressed) {
+            for (Timed timed : timeline) {
+                if (timed.step() instanceof Key key
+                        && key.windowsKeyCode() == windowsKeyCode
+                        && key.pressed() == pressed) {
+                    return timed.offsetMs();
+                }
+            }
+            return -1;
+        }
+
+        /** @return how long the whole timeline takes */
+        private static long span(List<Timed> timeline) {
+            return timeline.get(timeline.size() - 1).offsetMs();
+        }
     }
 
     /** @return true if every key the plan presses is released by the end of it */
