@@ -164,15 +164,15 @@ public class StreamView extends SurfaceView {
      */
     @Override
     public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
-        // NO_SUGGESTIONS asks the IME to stop composing, autocorrecting and auto-capitalising.
-        // All three assume an editor that can be read back and rewritten, and there is none here:
-        // autocorrect works by deleting a word and retyping it, and auto-capitalisation sends
-        // shifts nobody pressed. Gboard honours this inconsistently and often keeps composing
-        // anyway, which is why ImeComposition handles that case rather than relying on the flag.
+        // Plain text, and no more than that. TYPE_TEXT_FLAG_NO_SUGGESTIONS was tried here to ask
+        // the IME to stop composing, autocorrecting and auto-capitalising - all three assume an
+        // editor that can be read back and rewritten, and there is none here. Gboard on the
+        // supported boxes ignored it completely, so it is gone rather than left in place looking
+        // like it does something. ImeComposition is what actually handles composed text.
         //
-        // The stronger lever, TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, does stop Gboard composing -
-        // and takes its voice key and glide typing with it, so it is deliberately not used.
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS;
+        // The lever that does work, TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, takes Gboard's voice key
+        // and glide typing with it, so it is deliberately not used either.
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT;
 
         // No extract UI or enter action, and nothing typed at a game trains the user's keyboard.
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI

@@ -55,14 +55,12 @@ feature checks.
       `imeVisible` is set.
 - [ ] **Typed text reaches the host**, including a multi-byte character, swipe typing and
       autocorrect — those go through `commitText` rather than key events.
-- [ ] **Autocorrect and auto-capitalisation are gone, or at least quieter.** `inputType` now
-      carries `TYPE_TEXT_FLAG_NO_SUGGESTIONS`. Gboard honours it inconsistently, so the question
-      is what it actually does here: does the suggestion strip disappear, does the first letter of
-      a sentence still capitalise itself, does a typo still get rewritten a word later?
-- [ ] **Is Gboard still composing?** Type a word slowly and watch whether characters reach the
-      host one at a time or all at once when you press space. All at once means composing survived
-      the flag — which is fine, `ImeComposition` handles it — but record the answer either way,
-      because it decides whether the flag was worth setting.
+- [X] **`TYPE_TEXT_FLAG_NO_SUGGESTIONS` does nothing on Gboard here — do not re-add it.** It was
+      set to ask the IME to stop composing, autocorrecting and auto-capitalising, and made no
+      observable difference on the supported boxes. It has been removed rather than left in place
+      looking like it does something. `ImeComposition` is what actually handles composed text, and
+      it does so correctly, so nothing is lost. The lever that would work,
+      `TYPE_TEXT_VARIATION_VISIBLE_PASSWORD`, takes Gboard's voice key and glide typing with it.
 - [ ] **Nothing typed at a game reaches the keyboard's dictionary.** `IME_FLAG_NO_PERSONALIZED_LEARNING`
       is now set. Type a nonsense word into a game, then start typing it in a different app and
       confirm it is not suggested.
