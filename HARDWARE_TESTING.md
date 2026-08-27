@@ -1947,6 +1947,58 @@ app touches first takes that path for the other two.
 
 ---
 
+## 22. The soft keyboard owns the d-pad completely — measured
+
+An on-screen key bar was proposed for the keys Gboard does not have: Esc, Tab, the F-keys, arrows
+and latching modifiers. It was to appear alongside the soft keyboard and be reached with the
+remote's d-pad. **It cannot be, and this section exists so the idea is not tried again the same
+way.**
+
+Measured on the Shield TV (API 30, Gboard), with a probe build carrying a focusable button at the
+bottom of `activity_game.xml` and a log line in `StreamView.onKeyPreIme` and `Game.handleKeyDown`.
+Verified with both injected events and physical presses of the remote's d-pad:
+
+```
+Probe: onKeyPreIme keyCode=20 action=0 imeVisible=true    <- d-pad down reaches our window
+Probe: onKeyPreIme keyCode=20 action=1 imeVisible=true
+                                                          <- handleKeyDown never fires
+```
+
+Eleven real presses in a row, all identical. `mCurrentFocus` stayed on `com.limelight.Game` and
+`mInputMethodTarget` on the same window throughout, so the IME window is *not* stealing focus —
+the events genuinely arrive at our view. `StreamView.onKeyPreIme` stands aside while
+`imeVisible` is set, Gboard consumes every one of them, and nothing comes back. The probe button
+never gained focus.
+
+**The general consequence is bigger than the key bar.** `onKeyPreIme` routes every key either to
+the IME, while the keyboard is up, or to the host, while it is not. There is no third path for
+local UI. A bar pinned from the game menu would be no more reachable than an IME-attached one: with
+the keyboard down, the d-pad goes straight to the game. So **any on-screen control that has to be
+driven from the remote needs an explicit input mode** — a reserved key that `onKeyPreIme` refuses
+to stand aside for, which then consumes the d-pad to drive the control — not merely a focusable
+view. Adding the view alone produces something that cannot be reached at all.
+
+Touch is unaffected: this only concerns devices with no touchscreen, which is both supported boxes.
+
+## 23. `LimeLog.info()` is stripped from debug builds too
+
+`proguard-rules.pro` carries `-assumenosideeffects class com.limelight.LimeLog { info }`, and
+`minifyEnabled = true` is set for the **debug** build type as well as release. R8 therefore removes
+`LimeLog.info()` calls from a debug build, along with the string concatenation feeding them.
+
+That is exactly what the rule is for, and the saving is real. It is worth recording because the
+rule's own comment talks only about release builds, and because the failure mode is silent: a
+debug-only probe added with `LimeLog.info()` compiles, installs, runs, and logs nothing at all,
+which reads precisely like instrumentation that is not firing. Two hours went into that during §22.
+
+**Anything that must log from a debug build has to call `android.util.Log` directly.**
+`LimeLog.warning()` and `severe()` are not stripped and remain usable.
+
+Unrelated to the Homatics' `persist.log.tag=S`, which silences logcat at the device level — see
+the Profiling section of `CLAUDE.md`. The Shield needs no such property change; it logs normally.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |

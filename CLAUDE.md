@@ -163,6 +163,14 @@ Instrument new features through the existing surfaces rather than inventing new 
   so the scheduler can pick frequencies. If you add work to the frame path, it belongs inside
   the measured window.
 
+**`LimeLog.info()` does not survive R8, in either build type.** `proguard-rules.pro` assumes it
+has no side effects, and `minifyEnabled` is on for debug as well as release, so the call and the
+string concatenation feeding it are both removed. That is deliberate and worth keeping — but it
+means a debug-only probe written with `LimeLog.info()` logs nothing while looking like
+instrumentation that failed to fire. Call `android.util.Log` directly for that;
+`LimeLog.warning()` and `severe()` are not stripped. `HARDWARE_TESTING.md` section 23 has the
+case that found it.
+
 **Reading any of it back on the Homatics takes one step first.** The box ships with
 `persist.log.tag=S`, which silences the whole main logcat buffer — not just this app. Even
 `adb shell log -t TAG msg` from the shell lands nothing, and only a few whitelisted tags (HDMI,
