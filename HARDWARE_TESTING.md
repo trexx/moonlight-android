@@ -1980,19 +1980,33 @@ view. Adding the view alone produces something that cannot be reached at all.
 
 Touch is unaffected: this only concerns devices with no touchscreen, which is both supported boxes.
 
-## 23. `LimeLog.info()` is stripped from debug builds too
+## 23. `LimeLog.info()` was stripped from debug builds too — fixed
 
-`proguard-rules.pro` carries `-assumenosideeffects class com.limelight.LimeLog { info }`, and
-`minifyEnabled = true` is set for the **debug** build type as well as release. R8 therefore removes
-`LimeLog.info()` calls from a debug build, along with the string concatenation feeding them.
+`proguard-rules.pro` carried `-assumenosideeffects class com.limelight.LimeLog { info }`, and
+`minifyEnabled = true` is set for the **debug** build type as well as release, so R8 removed
+`LimeLog.info()` from debug builds along with the string concatenation feeding it. The rule's own
+comment says "from release builds", so this was an accident of both build types sharing one rules
+file, not a decision.
 
-That is exactly what the rule is for, and the saving is real. It is worth recording because the
-rule's own comment talks only about release builds, and because the failure mode is silent: a
-debug-only probe added with `LimeLog.info()` compiles, installs, runs, and logs nothing at all,
-which reads precisely like instrumentation that is not firing. Two hours went into that during §22.
+The failure mode is silent, which is what made it expensive: a debug-only probe written with
+`LimeLog.info()` compiles, installs, runs and logs nothing at all — indistinguishable from
+instrumentation that is not firing. It cost two rebuild cycles during §22 before the rule was
+found.
 
-**Anything that must log from a debug build has to call `android.util.Log` directly.**
-`LimeLog.warning()` and `severe()` are not stripped and remain usable.
+**The casualty was the benchmark harness.** `MediaCodecDecoderRenderer.logStreamSummary()` is
+`BuildConfig.DEBUG` gated *and* written with `LimeLog.info()`, so it emitted nothing in either
+build type for as long as it existed, while `Game` dutifully called it at the end of every stream.
+The end-of-stream totals that `CLAUDE.md` tells you to benchmark against were never once printed.
+
+Fixed by moving the rule to `proguard-rules-release.pro`, applied to the release build only. Debug
+builds now log as intended and `logStreamSummary` works. Nothing changes for release: the same
+rule, the same saving.
+
+- [ ] **The end-of-stream summary actually prints.** Run a debug build, stream briefly, disconnect,
+      and confirm a `Stream summary [...]` line in logcat with non-zero frame counts.
+- [ ] **Release still strips it.** `assembleRelease` then confirm no `LimeLog.info` output in a
+      release run — the size and DEX-count comparison CI reports against master should not move
+      either.
 
 Unrelated to the Homatics' `persist.log.tag=S`, which silences logcat at the device level — see
 the Profiling section of `CLAUDE.md`. The Shield needs no such property change; it logs normally.

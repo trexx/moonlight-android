@@ -163,13 +163,14 @@ Instrument new features through the existing surfaces rather than inventing new 
   so the scheduler can pick frequencies. If you add work to the frame path, it belongs inside
   the measured window.
 
-**`LimeLog.info()` does not survive R8, in either build type.** `proguard-rules.pro` assumes it
-has no side effects, and `minifyEnabled` is on for debug as well as release, so the call and the
-string concatenation feeding it are both removed. That is deliberate and worth keeping — but it
-means a debug-only probe written with `LimeLog.info()` logs nothing while looking like
-instrumentation that failed to fire. Call `android.util.Log` directly for that;
-`LimeLog.warning()` and `severe()` are not stripped. `HARDWARE_TESTING.md` section 23 has the
-case that found it.
+**`LimeLog.info()` is stripped from release builds by R8**, along with the string concatenation
+feeding it — that is what `proguard-rules-release.pro` is for, and it is why `warning()` and
+`severe()` are the ones that make a field report readable. It applies to **release only**. It used
+to apply to debug too, because both build types shared one rules file and `minifyEnabled` is set on
+both, which made debug builds silent in exactly the place you go looking when something is wrong
+and left `logStreamSummary()` printing nothing for its entire existence. `HARDWARE_TESTING.md`
+section 23 has that case. If you add a rule that strips or rewrites code, put it in the release
+file unless you mean it to apply to debug as well.
 
 **Reading any of it back on the Homatics takes one step first.** The box ships with
 `persist.log.tag=S`, which silences the whole main logcat buffer — not just this app. Even

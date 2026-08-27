@@ -2696,8 +2696,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * {@code RendererException}, which is built on a crash, or the post-stream latency toast, which
      * rounds to milliseconds and cannot be read back off the device.
      *
-     * <p>Totals rather than the overlay's per-second window: the overlay forces GPU composition on
-     * this hardware, so it changes frame timing as well as measuring it.
+     * <p>Totals rather than the overlay's per-second window: the overlay still perturbs what it
+     * measures - it adds a layer to the composition pass and its formatting costs the decode
+     * thread - so a comparison taken from it is a comparison of two different workloads. It does
+     * not force GPU composition, whatever this comment used to claim: the Tegra composer routes
+     * every layer through a scratch buffer regardless, so there is no per-frame plane to lose.
+     * {@code HARDWARE_TESTING.md} section 14 carries the dumps.
      */
     public void logStreamSummary(String label) {
         if (!BuildConfig.DEBUG) {

@@ -2,20 +2,6 @@
 # mapping file, since builds are made from source by anyone running this fork.
 -dontobfuscate
 
-# Strip informational logging from release builds.
-#
-# LimeLog calls android.util.Log directly, so the call itself is cheap. The cost this rule
-# removes is at the call site: 182 of the 245 call sites are LimeLog.info() and most build their
-# message by string concatenation, so the argument is allocated whether or not anything
-# consumes it. Assuming info() has no side effects lets R8 drop the call and then
-# dead-code-eliminate the StringBuilder chain feeding it.
-#
-# warning() and severe() are deliberately NOT stripped - they are what makes a field crash
-# report readable, and there are only 63 of them.
--assumenosideeffects class com.limelight.LimeLog {
-    public static void info(java.lang.String);
-}
-
 # Our code
 # The USB drivers are reached from native code by name, so R8 cannot see those references: the
 # xow driver calls back into XboxWirelessDongle and GipController, resolves GipCrypto's statics,
