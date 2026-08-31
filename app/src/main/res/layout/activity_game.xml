@@ -62,4 +62,38 @@
         android:preferKeepClear="true"
         android:visibility="gone" />
 
+    <!--
+      Local echo of the word the soft keyboard is still composing, sat just above the keyboard
+      itself. The keyboard covers the bottom of the picture, which is where a game's chat box
+      lives, so without this you cannot see what you are entering. Only pending text: anything
+      committed has already gone to the host as keystrokes.
+
+      A TextView rather than anything interactive, deliberately: it is never focused and never
+      navigated. The soft keyboard owns the d-pad completely while it is up - StreamView stands
+      aside for it - so anything here that needed focus could not be reached at all.
+
+      Translucent, like the overlays above: measured on the Shield, a layer over the SurfaceView
+      costs nothing, because the Tegra composer routes every layer through a scratch buffer
+      regardless. See the comment above performanceOverlay.
+
+      Single line with the ellipsis at the start, so the tail stays visible - that is where the
+      cursor is.
+    -->
+    <TextView
+        android:id="@+id/imePreviewOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:singleLine="true"
+        android:ellipsize="start"
+        android:textAppearance="?android:attr/textAppearanceLarge"
+        android:background="#B0000000"
+        android:focusable="false"
+        android:preferKeepClear="true"
+        android:visibility="gone" />
+
 </merge>

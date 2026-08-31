@@ -35,6 +35,7 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamView;
 import com.limelight.utils.Dialog;
+import com.limelight.utils.ImePreview;
 import com.limelight.utils.ImeTextModel;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
@@ -77,6 +78,7 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
+import android.view.ViewGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -156,6 +158,15 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // Whether a reconcile is already posted. Coalescing them is what lets a deletion and the
     // composition that replaces it be seen together rather than sent one after the other.
     private boolean imeReconcileScheduled;
+
+    // Local echo of the word still being composed, so the keyboard covering the bottom of the
+    // picture does not also cover what is being typed into it. Never focused - see the layout
+    // comment.
+    private TextView imePreviewOverlay;
+
+    // Bottom margin currently applied to the echo, so the insets listener only re-lays it out when
+    // the keyboard actually changes size rather than on every insets change during a stream.
+    private int imePreviewInset = -1;
 
     private final Runnable reconcileImeText = new Runnable() {
         @Override
@@ -335,6 +346,17 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 boolean imeVisible = insets.isVisible(WindowInsets.Type.ime());
                 streamView.setImeVisible(imeVisible);
 
+                // Sit the echo directly on top of the keyboard, at whatever height it chose.
+                int imeInset = imeVisible ? insets.getInsets(WindowInsets.Type.ime()).bottom : 0;
+                if (imeInset != imePreviewInset) {
+                    imePreviewInset = imeInset;
+
+                    ViewGroup.MarginLayoutParams params =
+                            (ViewGroup.MarginLayoutParams) imePreviewOverlay.getLayoutParams();
+                    params.bottomMargin = imeInset;
+                    imePreviewOverlay.setLayoutParams(params);
+                }
+
                 // Forget what was typed once the keyboard goes away. Acted on at the transition
                 // because this listener fires on every insets change during a stream.
                 if (imeWasVisible && !imeVisible) {
@@ -344,6 +366,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     imeTextModel.reset();
                 }
                 imeWasVisible = imeVisible;
+
+                refreshImePreview();
             }
 
             return v.onApplyWindowInsets(insets);
@@ -412,6 +436,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         notificationOverlayView = findViewById(R.id.notificationOverlay);
 
         performanceOverlayView = findViewById(R.id.performanceOverlay);
+
+        imePreviewOverlay = findViewById(R.id.imePreviewOverlay);
 
         inputCaptureProvider = InputCaptureManager.getInputCaptureProvider(this);
 
@@ -1248,7 +1274,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
 
         imeTextModel.commit(text);
-        scheduleImeReconcile();
+        onImeTextChanged();
         return true;
     }
 
@@ -1263,7 +1289,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // only because the model compares rather than replays: this names the whole word so far,
         // and what goes out is the character that changed.
         imeTextModel.composing(text);
-        scheduleImeReconcile();
+        onImeTextChanged();
         return true;
     }
 
@@ -1274,8 +1300,47 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
         imeTextModel.finishComposing();
-        scheduleImeReconcile();
+        onImeTextChanged();
         return true;
+    }
+
+    /**
+     * Called whenever the IME has changed the text it intends the host to hold.
+     *
+     * <p>Two things follow, at different speeds. The echo is redrawn immediately, because it is
+     * feedback to someone mid-keystroke. The keystrokes themselves wait, for the reason below.
+     */
+    private void onImeTextChanged() {
+        refreshImePreview();
+        scheduleImeReconcile();
+    }
+
+    /**
+     * Redraws the echo of the line being typed.
+     *
+     * <p>Shows what the host is being driven to hold, which the model knows rather than guesses:
+     * every keystroke is sent by comparing against it, so the strip and the field agree by
+     * construction rather than by two paths happening to stay in step. The keyboard covers the
+     * bottom of the picture and a game's chat box with it, which is the only reason this is worth
+     * drawing at all - the host has the same text, you just cannot see it.
+     *
+     * <p>Hidden when the line is empty, so the keyboard does not put a blank bar over the picture.
+     *
+     * <p>Runs on IME callbacks and on the insets listener. Never on a frame path.
+     */
+    private void refreshImePreview() {
+        if (imePreviewOverlay == null) {
+            return;
+        }
+
+        String preview = imeWasVisible ? ImePreview.build(imeTextModel.text()) : "";
+        if (preview.isEmpty()) {
+            imePreviewOverlay.setVisibility(View.GONE);
+            return;
+        }
+
+        imePreviewOverlay.setText(preview);
+        imePreviewOverlay.setVisibility(View.VISIBLE);
     }
 
     /**
@@ -1306,7 +1371,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // Recorded, not acted on: whether this costs the host anything depends on what the IME
         // does next, which is not known until the callbacks stop arriving.
         imeTextModel.delete(beforeLength, afterLength);
-        scheduleImeReconcile();
+        onImeTextChanged();
         return true;
     }
 
@@ -1967,6 +2032,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             imeInputHandler.removeCallbacks(reconcileImeText);
             imeReconcileScheduled = false;
             imeTextModel.reset();
+            refreshImePreview();
 
             // Update GameManager state to indicate we're no longer in game
             UiHelper.notifyStreamEnded(this);

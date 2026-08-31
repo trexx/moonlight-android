@@ -155,6 +155,27 @@ feature checks.
       characters, so one press removes the emoji whole. Then reopen the keyboard over text already
       on the host and backspace again: the model forgets on dismissal, so it can only delete what
       it put there — it will not reach back into text it never sent.
+- [ ] **The echo shows the line you are typing**, on a strip sitting directly on top of the
+      keyboard. This is why the video is not moved or shrunk to clear the keyboard: the problem was
+      never seeing the picture, it was seeing what you are entering.
+- [ ] **The strip and the host's field agree, character for character.** They should, by
+      construction — the strip shows the same line the model drives the host towards, and every
+      keystroke is worked out by comparing against it. Type into something whose field you can see
+      (Big Picture's search box works) and check the two never diverge, including through a
+      backspace and an autocorrect.
+- [ ] **A dictated phrase appears in the strip as it forms**, since interim voice results arrive as
+      composing text and composing text now counts.
+- [ ] **The strip empties when the field does.** Backspace a line away and confirm the strip goes
+      with it rather than holding the last word.
+- [ ] **The echo sits above the keyboard, not behind it**, on both boxes and at whatever height
+      Gboard chooses — it follows `WindowInsets.Type.ime()` rather than a fixed offset. Check with
+      the emoji picker open too, which is taller.
+- [ ] **The echo goes away when the keyboard does.**
+- [ ] **A long dictated phrase keeps its tail visible.** Speak past a screen width and confirm the
+      end stays on screen — that is where the cursor is.
+- [ ] **No frame cost while typing.** The echo is a translucent layer like the overlays, which
+      §14 measured as free on the Shield, and it redraws on IME callbacks rather than per frame.
+      Harvest `globalVideoStats` from the end-of-stream summary with and without a burst of typing.
 - [ ] **Back dismisses the keyboard** rather than opening the game menu or ending the stream.
 - [X] **Input returns to the host once the keyboard is dismissed.** The important regression:
       `imeVisible` is driven by the window insets listener, so if it ever sticks on, *all*
