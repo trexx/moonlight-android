@@ -205,6 +205,11 @@
     <string name="summary_checkbox_xb1_driver">Enables a built-in USB driver for devices without native Xbox controller support</string>
     <string name="title_checkbox_usb_bind_all">Override native Xbox gamepad support</string>
     <string name="summary_checkbox_usb_bind_all">Use Moonlight\'s USB driver for all supported gamepads, even if native Xbox controller support is present</string>
+    <string name="title_guide_button_led">Xbox button brightness</string>
+    <string name="guide_button_led_off">Off</string>
+    <string name="guide_button_led_dim">Dim</string>
+    <string name="guide_button_led_normal">Normal</string>
+    <string name="guide_button_led_bright">Bright</string>
     <string name="title_checkbox_wired_pad_audio">Headphone audio on cabled Xbox pads</string>
     <string name="summary_checkbox_wired_pad_audio">Use the full Xbox protocol driver for cabled controllers, so their headphone jack can play game audio. Experimental</string>
     <string name="title_checkbox_mouse_emulation">Mouse emulation via gamepad</string>

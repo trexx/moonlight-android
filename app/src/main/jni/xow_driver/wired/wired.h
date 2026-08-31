@@ -44,7 +44,7 @@ public:
      * mean the Java object had to exist before the native handle it is constructed from - which it
      * cannot, since the handle is a constructor argument.
      */
-    WiredController(int fd, JavaVM *jvm);
+    WiredController(int fd, JavaVM *jvm, uint8_t ledBrightness = 0x14);
     ~WiredController();
 
     /* Claims the device and starts the read thread. */
@@ -222,4 +222,7 @@ private:
     std::thread audioEventThread;
 
     JavaVM *jvm;
+
+    // Applied to the Controller built in start(), not here: there is no device to talk to yet
+    const uint8_t ledBrightness;
 };

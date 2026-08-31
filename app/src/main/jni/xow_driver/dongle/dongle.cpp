@@ -27,8 +27,10 @@
 Dongle::Dongle(
     std::unique_ptr<UsbDevice> usbDevice,
     jobject thiz,
-    JavaVM *jvm
-) : Mt76(std::move(usbDevice)), stopThreads(false),jthis(thiz), jvm(jvm)
+    JavaVM *jvm,
+    uint8_t ledBrightness
+) : Mt76(std::move(usbDevice)), stopThreads(false),jthis(thiz), jvm(jvm),
+    ledBrightness(ledBrightness)
 {
     Log::info("Dongle initialized");
 }
@@ -150,7 +152,7 @@ void Dongle::handleControllerConnect(Bytes address)
         address,
         std::placeholders::_1
     );
-    auto uptr = std::make_unique<Controller>(sendPacket);
+    auto uptr = std::make_unique<Controller>(sendPacket, ledBrightness);
     Controller *rawptr = uptr.get();
     controllers[wcid - 1] = std::move(uptr);
     clientAddresses[wcid - 1] = address;

@@ -75,6 +75,7 @@ public class PreferenceConfiguration {
     private static final String ENABLE_PERF_OVERLAY_STRING = "checkbox_enable_perf_overlay";
     private static final String BIND_ALL_USB_STRING = "checkbox_usb_bind_all";
     private static final String WIRED_PAD_AUDIO_STRING = "checkbox_wired_pad_audio";
+    static final String GUIDE_BUTTON_LED_PREF_STRING = "list_guide_button_led";
     private static final String MOUSE_EMULATION_STRING = "checkbox_mouse_emulation";
     private static final String ANALOG_SCROLLING_PREF_STRING = "analog_scrolling";
     private static final String MOUSE_NAV_BUTTONS_STRING = "checkbox_mouse_nav_buttons";
@@ -113,6 +114,8 @@ public class PreferenceConfiguration {
     private static final boolean DEFAULT_BIND_ALL_USB = false;
     // Off: claiming a cabled pad replaces a working kernel driver, which is the user's call
     private static final boolean DEFAULT_WIRED_PAD_AUDIO = false;
+    // "normal" reproduces the intensity the driver sent unconditionally before this was a setting
+    static final String DEFAULT_GUIDE_BUTTON_LED = "normal";
     private static final boolean DEFAULT_MOUSE_EMULATION = true;
     private static final String DEFAULT_ANALOG_STICK_FOR_SCROLLING = "right";
     private static final boolean DEFAULT_MOUSE_NAV_BUTTONS = false;
@@ -160,6 +163,11 @@ public class PreferenceConfiguration {
     public boolean bindAllUsb;
     /** Whether to drive cabled Xbox pads ourselves so their headphone jack can take audio. */
     public boolean wiredPadAudio;
+    /**
+     * Guide button LED intensity for Xbox pads this app drives, as the raw protocol value the
+     * pad expects. Only reaches a pad the GIP driver owns — see {@code UsbDriverService}.
+     */
+    public int guideButtonLed;
     public boolean mouseEmulation;
     public AnalogStickForScrolling analogStickForScrolling;
     public boolean mouseNavButtons;
@@ -378,6 +386,38 @@ public class PreferenceConfiguration {
         };
     }
 
+    /**
+     * Maps the stored preference value to the guide button LED intensity the pad expects.
+     *
+     * <p>The returned number is the protocol's own field, not a percentage of anything we chose:
+     * MS-GIPUSB 3.1.5.5.7 Table 41 defines the LED command's third payload byte as an intensity
+     * of 0 to 47 ({@code 0x2F}). Mapping presets to that value here, rather than in the driver,
+     * keeps the whole translation on the testable side of the JNI boundary — the native side
+     * only applies what it is handed.
+     *
+     * <p>Split out and static so it can be unit tested, following
+     * {@link #getEncryptionFlagsValue(String)}.
+     *
+     * @param value the stored string, or null if the preference has never been written
+     * @return the intensity to send, defaulting to the value the driver used before this setting
+     *         existed
+     */
+    static int getGuideButtonLedValue(String value) {
+        if (value == null) {
+            value = DEFAULT_GUIDE_BUTTON_LED;
+        }
+
+        return switch (value) {
+            case "off" -> 0x00;
+            case "dim" -> 0x0A;
+            // The spec's ceiling. xow believed the maximum was 0x20, so whether a pad honours
+            // anything above that is an open hardware question - see HARDWARE_TESTING.md 22.
+            case "bright" -> 0x2F;
+            // "normal", plus anything unrecognised
+            default -> 0x14;
+        };
+    }
+
     private static FormatOption getVideoFormatValue(Context context) {
         SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(context);
 
@@ -593,6 +633,8 @@ public class PreferenceConfiguration {
         config.enablePerfOverlay = prefs.getBoolean(ENABLE_PERF_OVERLAY_STRING, DEFAULT_ENABLE_PERF_OVERLAY);
         config.bindAllUsb = prefs.getBoolean(BIND_ALL_USB_STRING, DEFAULT_BIND_ALL_USB);
         config.wiredPadAudio = prefs.getBoolean(WIRED_PAD_AUDIO_STRING, DEFAULT_WIRED_PAD_AUDIO);
+        config.guideButtonLed = getGuideButtonLedValue(
+                prefs.getString(GUIDE_BUTTON_LED_PREF_STRING, DEFAULT_GUIDE_BUTTON_LED));
         config.mouseEmulation = prefs.getBoolean(MOUSE_EMULATION_STRING, DEFAULT_MOUSE_EMULATION);
         config.mouseNavButtons = prefs.getBoolean(MOUSE_NAV_BUTTONS_STRING, DEFAULT_MOUSE_NAV_BUTTONS);
         config.unlockFps = prefs.getBoolean(UNLOCK_FPS_STRING, DEFAULT_UNLOCK_FPS);

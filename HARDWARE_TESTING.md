@@ -1947,6 +1947,59 @@ app touches first takes that path for the other two.
 
 ---
 
+## 22. Guide button LED brightness
+
+The intensity the driver sends at `startDevice()` is now the user's setting rather than a
+hardcoded `0x14`, mapped from four presets in `PreferenceConfiguration.getGuideButtonLedValue()`:
+off `0x00`, dim `0x0A`, normal `0x14`, bright `0x2F`. `normal` is what the driver sent before, so
+an untouched install behaves exactly as it did.
+
+Two of those values are assertions about hardware that nothing off a device can settle.
+
+**The range.** xow's comment here said brightness ran `0x00` to `0x20`, and that is what the code
+was written against. MS-GIPUSB 3.1.5.5.7 Table 41 gives the intensity field as "0 - 47%" — so
+`0x2F`, not `0x20` — and xone caps at 50. The spec is the better authority and `bright` uses it,
+but no pad has been asked for a value above `0x20` here. A pad may honour it, clamp it silently,
+or reject the message.
+
+**The off pattern.** Zero brightness sends pattern `LED_OFF` rather than `LED_ON` at intensity
+zero, because Table 42 makes pattern and intensity separate fields. That table also marks every
+pattern except `On` as "not implemented by host" — which describes Microsoft's host, not the
+device, so what the pad's firmware does with `0x00` is unverified. xone exposes the blink and fade
+patterns through sysfs, which suggests pads accept them, but that is inference.
+
+The setting is read once in `UsbDriverService.onCreate()`, so a change applies when the service is
+next created — the next stream — not on re-plugging a pad. That is the existing behaviour of
+`bindAllUsb` and `wiredPadAudio`, and is intentional, but it makes the test procedure
+"change setting, leave the stream, start it again", not "change setting, re-plug".
+
+- [ ] **Wireless adapter: each preset visibly differs.** Set each of the four in turn, restarting
+      the stream between them, and look at the Xbox button. `dim` against `normal` is the pair most
+      likely to be indistinguishable; if it is, the preset is not worth keeping.
+- [ ] **`bright` is accepted at all.** The interesting failure is not "no brighter than normal" but
+      the pad ignoring or rejecting the message. The driver logs what it sent, so compare the log
+      against the pad:
+      ```bash
+      adb shell setprop persist.log.tag '""'
+      adb logcat -d | grep -a "Guide button LED set to"
+      adb shell setprop persist.log.tag S
+      ```
+      A `Failed to set initial LED mode` line instead means the pad refused it, and `bright` should
+      drop to `0x20`.
+- [ ] **`off` actually extinguishes it.** If the LED stays lit, the pad has ignored pattern `0x00`
+      and the preset is a lie — try `LED_ON` at intensity `0x00` instead and record which works.
+- [ ] **A pad that connects mid-stream picks the value up.** Pair a second pad after the stream has
+      started; it goes through the same `startDevice()` and should match the first.
+- [ ] **Cabled pad, wired GIP path.** Only reachable with `wiredPadAudio` on, and it is a different
+      transport (`WiredController`) carrying the same value. Worth one pass to prove the second
+      constructor path is wired up, not just the adapter's.
+- [ ] **Both ABIs.** The change is in the shared driver, but the Shield is `arm64-v8a` and the
+      Homatics `armeabi-v7a`, and only a run on each proves the JNI signature change
+      (`createDriver` is now `(II)J`) binds. A mismatch fails at library load, so the symptom would
+      be the adapter not starting at all rather than the LED misbehaving.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -1974,3 +2027,4 @@ app touches first takes that path for the other two.
 | §18.2 two-client check | A second Moonlight client against the same host |
 | §19 | Both target devices; the survey differs per SoC |
 | §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |
+| §22 LED presets | Any adapter pad; a second pad to check one connecting mid-stream, and a cabled pad for the wired path |

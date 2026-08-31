@@ -84,7 +84,15 @@ public:
 class Controller : public GipDevice
 {
 public:
-    Controller(SendPacket sendPacket);
+    /*
+     * @param ledBrightness guide button LED intensity to apply once the device starts, as the
+     *                      protocol's own 0 - 0x2F field. Taken at construction because
+     *                      startDevice() sends the LED command as soon as metadata arrives, which
+     *                      can be before the Java object for this pad exists - a setter would race
+     *                      that packet. The default reproduces the value the driver sent
+     *                      unconditionally before this was configurable.
+     */
+    Controller(SendPacket sendPacket, uint8_t ledBrightness = 0x14);
     ~Controller();
 
     /*
@@ -528,6 +536,13 @@ private:
      */
     AudioVolumeData audioVolumeReported = {};
     bool audioVolumeKnown = false;
+
+    /*
+     * Guide button LED intensity applied at startDevice(), from the user's setting. Const because
+     * it is fixed for the life of this pad: nothing re-sends the LED command, so changing it after
+     * the fact would leave the member and the hardware disagreeing.
+     */
+    const uint8_t ledBrightness;
 
     /*
      * The level in force, 0 - 100. Starts as a guess and is replaced by the device's own reported

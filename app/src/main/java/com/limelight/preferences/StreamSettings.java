@@ -308,6 +308,7 @@ public class StreamSettings extends Activity {
             if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST)) {
                 PreferenceCategory category =
                         (PreferenceCategory) findPreference("category_gamepad_settings");
+                category.removePreference(findPreference("list_guide_button_led"));
                 category.removePreference(findPreference("checkbox_wired_pad_audio"));
                 category.removePreference(findPreference("checkbox_usb_bind_all"));
                 category.removePreference(findPreference("checkbox_usb_driver"));

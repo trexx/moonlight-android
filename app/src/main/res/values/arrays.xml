@@ -67,6 +67,18 @@
         <item>neverh265</item>
     </string-array>
 
+    <string-array name="guide_button_led_names">
+        <item>@string/guide_button_led_off</item>
+        <item>@string/guide_button_led_dim</item>
+        <item>@string/guide_button_led_normal</item>
+        <item>@string/guide_button_led_bright</item>
+    </string-array>
+    <string-array name="guide_button_led_values" translatable="false">
+        <item>off</item>
+        <item>dim</item>
+        <item>normal</item>
+        <item>bright</item>
+    </string-array>
     <string-array name="mouse_mode_names">
         <item>@string/mouse_mode_relative</item>
         <item>@string/mouse_mode_trackpad</item>

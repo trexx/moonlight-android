@@ -33,7 +33,23 @@ namespace
     constexpr const char *WIRED_CLASS = "com/limelight/binding/input/driver/XboxWiredGipController";
     constexpr const char *CRYPTO_CLASS = "com/limelight/binding/input/driver/GipCrypto";
 
-    jlong createDriver(JNIEnv *env, jobject thiz, jint fd)
+    /*
+     * The guide button LED intensity the protocol accepts, 0 to 47 (MS-GIPUSB Table 41).
+     *
+     * Clamped rather than trusted on the way in, as setAudioVolume() clamps its percentage: the
+     * Java mapping cannot currently produce anything outside this, but a jint is a jint.
+     */
+    constexpr jint LED_BRIGHTNESS_MAX = 0x2F;
+
+    uint8_t clampLedBrightness(jint brightness)
+    {
+        if (brightness < 0) return 0;
+        if (brightness > LED_BRIGHTNESS_MAX) return LED_BRIGHTNESS_MAX;
+
+        return (uint8_t) brightness;
+    }
+
+    jlong createDriver(JNIEnv *env, jobject thiz, jint fd, jint ledBrightness)
     {
         auto usbDevice = std::make_unique<UsbDevice>(fd);
         JavaVM *jvm = nullptr;
@@ -41,7 +57,8 @@ namespace
         if(r != JNI_OK || jvm == nullptr) {
             return -1;
         }
-        auto dongle = new Dongle(std::move(usbDevice), env->NewGlobalRef(thiz), jvm);
+        auto dongle = new Dongle(std::move(usbDevice), env->NewGlobalRef(thiz), jvm,
+                                 clampLedBrightness(ledBrightness));
         return (jlong) dongle;
     }
 
@@ -179,7 +196,7 @@ namespace
      * transport level - one cable is one device, with no pairing, no client slots and no firmware to
      * load - while everything above GipDevice is common.
      */
-    jlong createWiredDriver(JNIEnv *env, jclass clazz, jint fd)
+    jlong createWiredDriver(JNIEnv *env, jclass clazz, jint fd, jint ledBrightness)
     {
         JavaVM *jvm = nullptr;
 
@@ -187,7 +204,7 @@ namespace
             return 0;
         }
 
-        return (jlong) new WiredController(fd, jvm);
+        return (jlong) new WiredController(fd, jvm, clampLedBrightness(ledBrightness));
     }
 
     jboolean startWiredDriver(JNIEnv *env, jclass clazz, jlong handle)
@@ -212,7 +229,7 @@ namespace
     }
 
     const JNINativeMethod DONGLE_METHODS[] = {
-        {"createDriver",          "(I)J",                      (void *) createDriver},
+        {"createDriver",          "(II)J",                     (void *) createDriver},
         {"startDriver",           "(JLjava/lang/String;)Z",    (void *) startDriver},
         {"setPairingModeNative",  "(JZ)Z",                     (void *) setPairingModeNative},
         {"stopDriver",            "(J)V",                      (void *) stopDriver},
@@ -234,7 +251,7 @@ namespace
     };
 
     const JNINativeMethod WIRED_METHODS[] = {
-        {"createWiredDriver",      "(I)J",  (void *) createWiredDriver},
+        {"createWiredDriver",      "(II)J", (void *) createWiredDriver},
         {"startWiredDriver",       "(J)Z",  (void *) startWiredDriver},
         {"wiredControllerHandle",  "(J)J",  (void *) wiredControllerHandle},
         {"destroyWiredDriver",     "(J)V",  (void *) destroyWiredDriver},

@@ -44,7 +44,13 @@
 class Dongle : public Mt76
 {
 public:
-    Dongle(std::unique_ptr<UsbDevice> usbDevice, jobject obj, JavaVM *jvm);
+    /*
+     * @param ledBrightness guide button LED intensity handed to every controller this adapter
+     *                      brings up, as the protocol's own field. Held rather than applied here:
+     *                      the adapter has no LED of its own, and pads appear asynchronously.
+     */
+    Dongle(std::unique_ptr<UsbDevice> usbDevice, jobject obj, JavaVM *jvm,
+           uint8_t ledBrightness = 0x14);
     ~Dongle();
 
     bool start(std::string);
@@ -81,6 +87,9 @@ private:
     JavaVM *jvm;
     std::vector<std::thread> threads;
     std::atomic<bool> stopThreads;
+
+    // Passed to each Controller as it is constructed; see the constructor's comment
+    const uint8_t ledBrightness;
 
     std::mutex controllerMutex;
     // Guards setPairing() only. Both read threads can reach pairing changes - one via the
