@@ -174,9 +174,17 @@ public class StreamView extends SurfaceView {
         // and glide typing with it, so it is deliberately not used either.
         outAttrs.inputType = InputType.TYPE_CLASS_TEXT;
 
-        // No extract UI or enter action, and nothing typed at a game trains the user's keyboard.
-        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI
-                | EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;
+        // Nothing typed at a game trains the user's keyboard, and that is the only request worth
+        // making here.
+        //
+        // IME_FLAG_NO_EXTRACT_UI used to be set as well and has been dropped. It suppresses the
+        // extracted-text field an IME shows *while fullscreen* - it does not stop the IME going
+        // fullscreen, which is what a streaming client would actually want - and the IME never
+        // goes fullscreen on either supported box, so it has never had anything to suppress. The
+        // platform calls it discouraged and names IME_FLAG_NO_FULLSCREEN as the replacement, but
+        // that has nothing to prevent here either. Neither belongs in the code until a device
+        // shows one of them mattering.
+        outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING;
 
         return new BaseInputConnection(this, false) {
             @Override

@@ -55,6 +55,13 @@ feature checks.
       `imeVisible` is set.
 - [ ] **Typed text reaches the host**, including a multi-byte character, swipe typing and
       autocorrect — those go through `commitText` rather than key events.
+- [X] **The IME never goes fullscreen on either box, so no flag is needed to stop it.**
+      `IME_FLAG_NO_EXTRACT_UI` was carried for years and has been dropped: it suppresses the
+      extracted-text field an IME shows *while fullscreen*, which never happens here, so it had
+      nothing to suppress. The platform documents it as discouraged and names
+      `IME_FLAG_NO_FULLSCREEN` as its replacement — but that would have nothing to prevent either.
+      If a device ever does show a fullscreen IME over the stream, `IME_FLAG_NO_FULLSCREEN` is the
+      flag to reach for, not `NO_EXTRACT_UI`.
 - [X] **`TYPE_TEXT_FLAG_NO_SUGGESTIONS` does nothing on Gboard here — do not re-add it.** It was
       set to ask the IME to stop composing, autocorrecting and auto-capitalising, and made no
       observable difference on the supported boxes. It has been removed rather than left in place
