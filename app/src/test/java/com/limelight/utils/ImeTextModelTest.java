@@ -16,7 +16,10 @@ import static org.junit.jupiter.api.Assertions.assertNull;
  * <p>The case that matters most is the one this class was written for. Gboard implements backspace
  * over a finished word by deleting the whole word and re-composing it a character shorter; sending
  * that literally costs five backspaces and four retyped letters for one keypress, and holding the
- * key buries the send queue. Reconciled, it costs one backspace. {@link Reconciling} pins that.
+ * key buries the send queue. Compared instead, it costs one backspace, sent at once.
+ * {@link Reconciling} pins that, along with the property that makes it possible: composing text
+ * counts towards the intended state, so a keystroke sends the character that changed and nothing
+ * else.
  */
 class ImeTextModelTest {
 
@@ -109,17 +112,38 @@ class ImeTextModelTest {
         }
 
         @Test
-        @DisplayName("holds while a word is still being composed")
-        void holdsWhileComposing() {
-            // Sending previews would type the word out one prefix at a time: h, he, hel.
+        @DisplayName("types a word being composed one character at a time")
+        void typesAComposingWordOneCharacterAtATime() {
+            // The property everything else rests on. Replaying the callbacks would type the word
+            // out one prefix at a time - h, he, hel - because each one names the whole word so
+            // far. Comparing sends only what changed.
             ImeTextModel model = new ImeTextModel();
+
+            model.composing("h");
+            assertEquals(new Edit(0, 0, "h"), model.reconcile());
+
+            model.composing("he");
+            assertEquals(new Edit(0, 0, "e"), model.reconcile());
+
             model.composing("hel");
+            assertEquals(new Edit(0, 0, "l"), model.reconcile());
+        }
+
+        @Test
+        @DisplayName("sends nothing when a composition is committed unchanged")
+        void sendsNothingWhenCommittingWhatWasComposed() {
+            // The characters are already there; committing only settles what they are.
+            ImeTextModel model = new ImeTextModel();
+            model.composing("hey");
+            model.reconcile();
+
+            model.commit("hey");
 
             assertNull(model.reconcile());
         }
 
         @Test
-        @DisplayName("collapses Gboard's delete-and-recompose to one backspace")
+        @DisplayName("collapses Gboard's delete-and-recompose to one backspace, at once")
         void collapsesDeleteAndRecompose() {
             // The fault this class exists for. The host has "hello"; one press of backspace
             // arrives as a deletion of the whole word followed by a composition of "hell".
@@ -129,10 +153,25 @@ class ImeTextModelTest {
 
             model.delete(5, 0);
             model.composing("hell");
-            assertNull(model.reconcile(), "the deletion is held, because something is replacing it");
 
-            model.commit("hell");
-            assertEquals(new Edit(1, 0, ""), model.reconcile(), "one backspace, not five and four letters");
+            assertEquals(new Edit(1, 0, ""), model.reconcile(),
+                    "one backspace, sent now - not five and four letters, and not withheld");
+        }
+
+        @Test
+        @DisplayName("takes a deletion off the composition before the text behind it")
+        void deletesFromTheCompositionFirst() {
+            // Backspacing inside a word being typed shortens the composition, and costs the host
+            // exactly the character that went.
+            ImeTextModel model = new ImeTextModel();
+            model.commit("say ");
+            model.composing("hey");
+            model.reconcile();
+
+            model.delete(1, 0);
+
+            assertEquals(new Edit(1, 0, ""), model.reconcile());
+            assertEquals("say he", model.text().toString());
         }
 
         @Test
@@ -148,9 +187,10 @@ class ImeTextModelTest {
         }
 
         @Test
-        @DisplayName("treats a commit as superseding the composition it finishes")
-        void commitSupersedesTheComposition() {
-            // Compose, commit, finish is the ordinary IME sequence. The word must go out once.
+        @DisplayName("types a word once across compose, commit and finish")
+        void typesAWordOnceAcrossTheWholeSequence() {
+            // Compose, commit, finish is the ordinary IME sequence, and the word must reach the
+            // host once however it is spelt out.
             ImeTextModel model = new ImeTextModel();
             model.composing("hey");
             model.commit("hey");
@@ -238,13 +278,14 @@ class ImeTextModelTest {
         }
 
         @Test
-        @DisplayName("shows the composing word without sending it")
-        void showsTheComposingWord() {
+        @DisplayName("reports the whole intended line, composing and committed alike")
+        void reportsTheWholeIntendedLine() {
+            // What the echo above the keyboard shows, and what the host is being driven towards.
             ImeTextModel model = new ImeTextModel();
+            model.commit("say ");
             model.composing("hel");
 
-            assertEquals("hel", model.composingText().toString());
-            assertNull(model.reconcile());
+            assertEquals("say hel", model.text().toString());
         }
     }
 }

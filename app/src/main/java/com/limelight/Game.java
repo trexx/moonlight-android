@@ -1259,9 +1259,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
 
-        // Never sent - the host would see the word typed out one prefix at a time. Reconciling is
-        // still scheduled, because arriving here is what tells a deletion queued this turn that
-        // something is about to replace what it removed.
+        // Counted like any other text, so the host tracks the keyboard as the word is typed. Safe
+        // only because the model compares rather than replays: this names the whole word so far,
+        // and what goes out is the character that changed.
         imeTextModel.composing(text);
         scheduleImeReconcile();
         return true;

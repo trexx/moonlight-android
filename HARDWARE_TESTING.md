@@ -111,11 +111,16 @@ feature checks.
       `caf ok` + `é` at the end.
 - [ ] **Autocorrect and swipe typing still behave.** Both replace what was just typed, so they
       exercise commit and deletion back to back against `ImeTextBuffer`.
-- [ ] **Backspace over a finished word costs one backspace, not a rewrite.** This is the fault the
-      reconciling model was written for: Gboard implements it by deleting the whole word and
-      re-composing it a character shorter, which used to go out literally as five backspaces and
-      four retyped letters. Type a word, commit it with a space, then backspace — the host should
-      lose one character promptly and nothing should flicker or be retyped.
+- [X] **Text appears on the host as it is typed, not a word at a time.** Composing text counts
+      towards the intended state, so each keystroke sends the one character that changed. Measured
+      on the Shield against Big Picture's search box: `hello` used to leave the field empty until
+      space was pressed.
+- [ ] **Backspace over a finished word costs one backspace, and takes effect at once.** This is the
+      fault the reconciling model was written for: Gboard implements it by deleting the whole word
+      and re-composing it a character shorter, which used to go out literally as five backspaces
+      and four retyped letters. Measured before this change: the host held `hello` while Gboard had
+      re-composed `hell`, so the press appeared to do nothing at all. Type a word, commit it with a
+      space, then backspace twice — the second press must remove a character promptly.
 - [ ] **Holding backspace keeps up.** The old cost per press was around 120 ms of queued
       keystrokes against a key repeating perhaps thirty times a second, so the queue could never
       drain and the host ended up with duplicated and truncated text. Hold it down over a sentence

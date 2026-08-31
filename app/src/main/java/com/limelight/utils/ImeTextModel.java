@@ -16,10 +16,13 @@ package com.limelight.utils;
  * {@link #reconcile()} works out the shortest way from one to the other. The same backspace becomes
  * one backspace, because that is all that actually changed.
  *
- * <p><b>A composition in flight suspends reconciling.</b> Composing text is never sent - the host
- * would see {@code "h"}, {@code "he"}, {@code "hel"} typed out one prefix at a time - so while a
- * word is being composed the host is deliberately a word behind, and a deletion that a composition
- * is about to replace never reaches it at all. That is what collapses the round trip.
+ * <p><b>Composing text counts.</b> A word part way through being typed is as much a statement of
+ * what the field should contain as a committed one, so it is included and the host tracks the
+ * keyboard live. That is only safe because of the comparison: replaying callbacks would have typed
+ * {@code "h"}, {@code "he"}, {@code "hel"} one prefix at a time, whereas comparing sends the single
+ * character that changed. It is also what makes backspace immediate - the deletion and the shorter
+ * composition that replaces it are one difference of one character, applied at once, rather than a
+ * word withheld until something commits.
  *
  * <p>Bounded, because a stream can outlast a great deal of typing. Trimming happens only when the
  * two strings agree, so the same characters leave both and the next comparison still lines up.
@@ -51,19 +54,20 @@ public final class ImeTextModel {
     }
 
     private final StringBuilder sent = new StringBuilder();
-    private final StringBuilder desired = new StringBuilder();
+    private final StringBuilder committed = new StringBuilder();
     private final StringBuilder composing = new StringBuilder();
+    private final StringBuilder intended = new StringBuilder();
     private int forwardDeletes;
 
     /** Records text the IME has committed, which supersedes any composition it finishes. */
     public void commit(CharSequence text) {
         composing.setLength(0);
         if (text != null) {
-            desired.append(text);
+            committed.append(text);
         }
     }
 
-    /** Records the word being composed. Never sent, only shown - see the class comment. */
+    /** Records the word being composed, which counts towards the intended text like any other. */
     public void composing(CharSequence text) {
         composing.setLength(0);
         if (text != null) {
@@ -73,19 +77,28 @@ public final class ImeTextModel {
 
     /** Accepts the composition as final, for an IME that ends a word without committing it. */
     public void finishComposing() {
-        desired.append(composing);
+        committed.append(composing);
         composing.setLength(0);
     }
 
     /**
-     * Records a deletion around the cursor, in the IME's own UTF-16 units. Nothing is worked out
-     * here: the conversion to keystrokes happens in {@link #reconcile()}, once it is known whether
-     * a composition is about to put the text back.
+     * Records a deletion around the cursor, in the IME's own UTF-16 units.
+     *
+     * <p>Taken off the end of the composition first, then off the committed text behind it, which
+     * is the order the characters sit in. Nothing is worked out here: the conversion to keystrokes
+     * happens in {@link #reconcile()}, once the IME has finished saying what it wants.
      */
     public void delete(int beforeLength, int afterLength) {
-        if (beforeLength > 0) {
-            desired.setLength(Math.max(desired.length() - beforeLength, 0));
+        int remaining = beforeLength;
+
+        int fromComposing = Math.min(remaining, composing.length());
+        composing.setLength(composing.length() - fromComposing);
+        remaining -= fromComposing;
+
+        if (remaining > 0) {
+            committed.setLength(Math.max(committed.length() - remaining, 0));
         }
+
         if (afterLength > 0) {
             forwardDeletes += afterLength;
         }
@@ -100,7 +113,7 @@ public final class ImeTextModel {
      * the host still holds a character it does not, and the next reconcile would type it back.
      */
     public void hostDeletedCharacter() {
-        dropLastCharacter(composing.length() != 0 ? composing : desired);
+        dropLastCharacter(composing.length() != 0 ? composing : committed);
         dropLastCharacter(sent);
     }
 
@@ -111,29 +124,23 @@ public final class ImeTextModel {
         }
     }
 
-    /** @return the word being composed, for showing the user what has not been sent yet */
-    public CharSequence composingText() {
-        return composing;
+    /** @return the text the field should contain, committed and composing alike */
+    public CharSequence text() {
+        intended.setLength(0);
+        return intended.append(committed).append(composing);
     }
 
     /**
      * Works out what to send, and assumes it has been.
      *
-     * @return the keystrokes to send, or null while a composition is still in flight or when the
-     *         host already has what it should
+     * @return the keystrokes to send, or null when the host already has what it should
      */
     public Edit reconcile() {
-        // Holding here is the whole point: a deletion the composition is about to replace must not
-        // go out, or the round trip costs a word instead of a character.
-        if (composing.length() != 0) {
-            return null;
-        }
-
-        Edit edit = between(sent, desired, forwardDeletes);
+        Edit edit = between(sent, text(), forwardDeletes);
         forwardDeletes = 0;
 
         sent.setLength(0);
-        sent.append(desired);
+        sent.append(intended);
         trim();
 
         return edit.isEmpty() ? null : edit;
@@ -142,7 +149,7 @@ public final class ImeTextModel {
     /** Forgets everything, for a keyboard that has gone away and a host we can no longer account for. */
     public void reset() {
         sent.setLength(0);
-        desired.setLength(0);
+        committed.setLength(0);
         composing.setLength(0);
         forwardDeletes = 0;
     }
@@ -188,10 +195,11 @@ public final class ImeTextModel {
             drop++;
         }
 
-        // Safe only because this runs with the two in agreement: the same characters leave both, so
-        // the next comparison still starts from the same place.
+        // Safe only because this runs with the host and the intent in agreement: the same
+        // characters leave both, so the next comparison still starts from the same place. The
+        // composition sits at the end, so only the committed text ahead of it is ever trimmed.
         sent.delete(0, drop);
-        desired.delete(0, drop);
+        committed.delete(0, Math.min(drop, committed.length()));
     }
 
     /** @return how much the host is believed to hold, in UTF-16 units */
