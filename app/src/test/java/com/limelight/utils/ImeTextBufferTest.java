@@ -109,6 +109,48 @@ class ImeTextBufferTest {
     }
 
     @Test
+    @DisplayName("drops one plain character for a deletion that arrived as a key event")
+    void removesLastPlainCharacter() {
+        ImeTextBuffer buffer = new ImeTextBuffer();
+        buffer.append("hello");
+        buffer.removeLastCharacter();
+
+        assertEquals(4, buffer.length());
+    }
+
+    @Test
+    @DisplayName("drops a surrogate pair whole, rather than splitting it")
+    void removesLastSurrogatePairWhole() {
+        // removeBefore(1) would take one code unit and leave an orphan behind, which is the
+        // reason this method exists at all.
+        ImeTextBuffer buffer = new ImeTextBuffer();
+        buffer.append("hi" + EMOJI);
+        buffer.removeLastCharacter();
+
+        assertEquals(2, buffer.length(), "\"hi\", with no half-emoji left over");
+    }
+
+    @Test
+    @DisplayName("does nothing when there is nothing left to drop")
+    void removesLastCharacterFromEmptyBuffer() {
+        ImeTextBuffer buffer = new ImeTextBuffer();
+        buffer.removeLastCharacter();
+
+        assertEquals(0, buffer.length());
+    }
+
+    @Test
+    @DisplayName("still measures the rest correctly after dropping the last character")
+    void measuresCorrectlyAfterRemovingLastCharacter() {
+        ImeTextBuffer buffer = new ImeTextBuffer();
+        buffer.append("a" + EMOJI + "b");
+        buffer.removeLastCharacter();
+
+        // "a" and the emoji remain: three code units, two characters
+        assertEquals(2, buffer.removeBefore(3));
+    }
+
+    @Test
     @DisplayName("keeps only the most recent text, so a long session cannot grow it")
     void boundsItsOwnGrowth() {
         ImeTextBuffer buffer = new ImeTextBuffer();

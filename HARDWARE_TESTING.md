@@ -40,16 +40,42 @@ feature checks.
       on again. This is the whole point of the feature.
 - [X] With the **performance overlay setting enabled**, the overlay is visible from stream
       start. (Deliberate deviation from upstream PR #1219, which deletes the setting.)
-- [X] **Toggle On-screen Keyboard** from the menu opens the IME. It runs on a focus retry
-      loop, so watch for it firing while the dialog still has focus. This used to do nothing
-      at all on a fresh install — it needed the since-removed "Soft keyboard text input"
-      setting — so check it on freshly cleared app data, not just a configured device.
+- [ ] **Toggle On-screen Keyboard** from the menu opens the IME, and opening it twice running
+      closes it the second time. Re-check: this moved off the deprecated
+      `InputMethodManager.toggleSoftInput()` — which declined the request depending on focus and
+      flipped blind — onto `WindowInsetsController.show`/`hide` driven by `imeWasVisible`, so it
+      now asks for a state rather than a flip and can no longer desync. It still runs behind
+      `GameMenu.runWithGameFocus`, so watch for it firing while the dialog still has focus. This
+      used to do nothing at all on a fresh install — it needed the since-removed "Soft keyboard
+      text input" setting — so check it on freshly cleared app data, not just a configured
+      device.
 - [X] **The d-pad drives the keyboard, not the stream behind it.** This is the fix for the
       original symptom: navigation used to move focus in the game while the keyboard sat
       there unfocused. `StreamView.onKeyPreIme()` now stands aside while
       `imeVisible` is set.
 - [ ] **Typed text reaches the host**, including a multi-byte character, swipe typing and
       autocorrect — those go through `commitText` rather than key events.
+- [X] **The IME never goes fullscreen on either box, so no flag is needed to stop it.**
+      `IME_FLAG_NO_EXTRACT_UI` was carried for years and has been dropped: it suppresses the
+      extracted-text field an IME shows *while fullscreen*, which never happens here, so it had
+      nothing to suppress. The platform documents it as discouraged and names
+      `IME_FLAG_NO_FULLSCREEN` as its replacement — but that would have nothing to prevent either.
+      If a device ever does show a fullscreen IME over the stream, `IME_FLAG_NO_FULLSCREEN` is the
+      flag to reach for, not `NO_EXTRACT_UI`.
+- [X] **`TYPE_TEXT_FLAG_NO_SUGGESTIONS` does nothing on Gboard here — do not re-add it.** It was
+      set to ask the IME to stop composing, autocorrecting and auto-capitalising, and made no
+      observable difference on the supported boxes. It has been removed rather than left in place
+      looking like it does something. `ImeComposition` is what actually handles composed text, and
+      it does so correctly, so nothing is lost. The lever that would work,
+      `TYPE_TEXT_VARIATION_VISIBLE_PASSWORD`, takes Gboard's voice key and glide typing with it.
+- [ ] **Nothing typed at a game reaches the keyboard's dictionary.** `IME_FLAG_NO_PERSONALIZED_LEARNING`
+      is now set. Type a nonsense word into a game, then start typing it in a different app and
+      confirm it is not suggested.
+- [ ] **Voice dictation reaches a game.** Gboard's mic sends interim results as composing text and
+      the final phrase as a commit, so it now arrives as real keystrokes rather than UTF-8 only.
+      Dictate a short phrase into a game's chat box. Watch for it arriving twice, arriving as the
+      partial phrase, or taking so long to type out that it looks stuck — a long phrase is one
+      commit paced at 25 ms a keystroke.
 - [ ] **Typed text reaches a *game*, not just Steam Big Picture.** This is the whole point of
       `TextKeyPlanner`: text used to leave only as `LiSendUtf8TextEvent`, which the host injects
       as Unicode character input. Chromium-based UIs consume that; DirectInput and Raw Input
@@ -99,6 +125,11 @@ feature checks.
       instead of `commitText`, and that path now carries the text itself.
 - [ ] **A word is not typed twice.** The common IME sequence is compose, commit, finish; the
       commit supersedes the composition, so finishing afterwards must send nothing.
+- [ ] **Backspace by key event keeps the record straight.** Some IMEs delete with a `KEYCODE_DEL`
+      key event rather than `deleteSurroundingText`, which bypasses the deletion callback entirely.
+      Type an emoji, backspace over some plain characters before it, then backspace over the emoji
+      and confirm it still takes one character rather than two. A *held* backspace is known to
+      drift — the host repeats at its own rate — so test taps, and note what a hold does.
 - [ ] **Backspace after an emoji deletes one character, not two.** The IME counts in UTF-16
       code units and a surrogate pair is two of them; `ImeTextBuffer` resolves that against what
       was actually typed. Then reopen the keyboard over text already on the host and backspace

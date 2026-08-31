@@ -78,7 +78,6 @@ import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -1385,6 +1384,16 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 return true;
             }
 
+            // Some IMEs delete with a key event instead of calling deleteSurroundingText - Gboard
+            // does it in certain fields - and that never reaches handleDeleteSurroundingText, so
+            // the record of what was typed has to be corrected here or it drifts and a later
+            // backspace over an emoji miscounts. A held backspace still drifts, since the host
+            // repeats at its own rate and the repeats above are eaten; dismissing the keyboard
+            // clears the buffer either way.
+            if (imeWasVisible && event.getKeyCode() == KeyEvent.KEYCODE_DEL) {
+                imeTextBuffer.removeLastCharacter();
+            }
+
             conn.sendKeyboardInput(translated, KeyboardPacket.KEY_DOWN, getModifierState(event),
                     keyboardTranslator.hasNormalizedMapping(event.getKeyCode(), event.getDeviceId()) ? 0 : MoonBridge.SS_KBE_FLAG_NON_NORMALIZED);
         }
@@ -1507,8 +1516,22 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     @Override
     public void toggleKeyboard() {
         LimeLog.info("Toggling keyboard overlay");
-        InputMethodManager inputManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
-        inputManager.toggleSoftInput(0, 0);
+
+        // Not InputMethodManager.toggleSoftInput(): it is deprecated, it declines the request
+        // depending on the focus state of the moment, and it flips blind - so it could desync from
+        // the keyboard actually on screen. imeWasVisible is the insets listener's own answer, so
+        // this asks for the state it wants rather than for a flip.
+        WindowInsetsController controller = getWindow().getInsetsController();
+        if (controller == null) {
+            return;
+        }
+
+        if (imeWasVisible) {
+            controller.hide(WindowInsets.Type.ime());
+        }
+        else {
+            controller.show(WindowInsets.Type.ime());
+        }
     }
 
     /**

@@ -68,6 +68,21 @@ public final class ImeTextBuffer {
         return codePoints;
     }
 
+    /**
+     * Drops the last character, for a deletion that arrived as a key event rather than through
+     * {@link #removeBefore(int)}.
+     *
+     * <p>Removes a whole character: {@code removeBefore(1)} would take a single UTF-16 code unit
+     * and split a surrogate pair in half, leaving the buffer holding an orphan.
+     */
+    public void removeLastCharacter() {
+        if (text.length() == 0) {
+            return;
+        }
+
+        text.setLength(text.offsetByCodePoints(text.length(), -1));
+    }
+
     /** Forgets everything typed so far. */
     public void clear() {
         text.setLength(0);
