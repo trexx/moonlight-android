@@ -32,6 +32,16 @@ public class XboxWirelessDongle {
     // Native driver instance, or -1 when not running
     private long driverHandle;
 
+    /*
+     * Guide button LED intensity handed to every pad this adapter brings up.
+     *
+     * Held here, and passed at driver creation rather than set on each pad afterwards, because the
+     * native side sends the LED command from startDevice() as soon as a pad's metadata arrives -
+     * which can be before the Java GipController for that pad exists. A setter called after
+     * construction would race that first packet and lose on a fast pairing.
+     */
+    private final int ledBrightness;
+
     // Live controllers by the native driver's slot index
     private Map<Integer, AbstractController> controllers = new HashMap<>();
 
@@ -46,12 +56,18 @@ public class XboxWirelessDongle {
         System.loadLibrary("xow-driver");
     }
 
-    /** @param connection an already-open connection, whose file descriptor is handed to the native driver */
-    public XboxWirelessDongle(UsbDevice device, UsbDeviceConnection connection, UsbDriverListener listener) {
+    /**
+     * @param connection    an already-open connection, whose file descriptor is handed to the native driver
+     * @param ledBrightness guide button LED intensity for this adapter's pads, as the raw protocol
+     *                      value — see {@code PreferenceConfiguration.getGuideButtonLedValue}
+     */
+    public XboxWirelessDongle(UsbDevice device, UsbDeviceConnection connection,
+                              UsbDriverListener listener, int ledBrightness) {
         this.device = device;
         this.connection = connection;
         this.listener = listener;
         this.driverHandle = -1;
+        this.ledBrightness = ledBrightness;
     }
 
     /**
@@ -68,7 +84,7 @@ public class XboxWirelessDongle {
         if(this.driverHandle != -1) {
             return false; //we already started;
         }
-        this.driverHandle = createDriver(connection.getFileDescriptor());
+        this.driverHandle = createDriver(connection.getFileDescriptor(), ledBrightness);
         boolean ok = startDriver(this.driverHandle, "");
         if(!ok) {
             LimeLog.info("xbox wireless dongle driver failed to start");
@@ -227,7 +243,7 @@ public class XboxWirelessDongle {
         this.listener.deviceRemoved(controller);
     }
 
-    private native long createDriver(int fd);
+    private native long createDriver(int fd, int ledBrightness);
     private native boolean startDriver(long handle, String fwPath);
     private native boolean setPairingModeNative(long handle, boolean enable);
     private native void stopDriver(long handle);

@@ -36,7 +36,7 @@ class Bytes;
  *   -> Identify             (metadata request)         Arrival -> Idle
  *   <- Identify             (metadata response)
  *   -> Set device state     (start)                    Idle -> Active
- *   -> LED mode: dim
+ *   -> LED mode: the configured guide button brightness
  *   -> Extended command     (get serial number)
  *   <- Extended command     (serial number response)
  *

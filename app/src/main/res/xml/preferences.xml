@@ -112,6 +112,18 @@
             android:title="@string/title_checkbox_wired_pad_audio"
             android:summary="@string/summary_checkbox_wired_pad_audio"
             android:defaultValue="false" />
+        <!-- Depends on the USB driver rather than on bind-all, because the wireless adapter is
+             claimed whatever bind-all says - Android has no driver for it - and its pads take the
+             LED command too. With the USB driver off nothing here is ever sent, which is why the
+             dependency exists at all rather than the setting silently doing nothing. -->
+        <ListPreference
+            android:key="list_guide_button_led"
+            android:dependency="checkbox_usb_driver"
+            android:title="@string/title_guide_button_led"
+            android:entries="@array/guide_button_led_names"
+            android:entryValues="@array/guide_button_led_values"
+            android:summary="%s"
+            android:defaultValue="normal" />
         <CheckBoxPreference
             android:key="checkbox_mouse_emulation"
             android:title="@string/title_checkbox_mouse_emulation"

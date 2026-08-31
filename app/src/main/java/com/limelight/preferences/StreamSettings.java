@@ -303,10 +303,13 @@ public class StreamSettings extends Activity {
                 category.removePreference(findPreference("checkbox_gamepad_motion_sensors"));
             }
 
-            // Hide USB driver options on devices without USB host support
+            // Hide USB driver options on devices without USB host support. Removed leaf-first, so
+            // nothing is briefly left depending on a preference that has already gone.
             if (!getActivity().getPackageManager().hasSystemFeature(PackageManager.FEATURE_USB_HOST)) {
                 PreferenceCategory category =
                         (PreferenceCategory) findPreference("category_gamepad_settings");
+                category.removePreference(findPreference("list_guide_button_led"));
+                category.removePreference(findPreference("checkbox_wired_pad_audio"));
                 category.removePreference(findPreference("checkbox_usb_bind_all"));
                 category.removePreference(findPreference("checkbox_usb_driver"));
             }

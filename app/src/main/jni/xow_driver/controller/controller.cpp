@@ -110,10 +110,12 @@
 #define RUMBLE_SCALE(magnitude) \
     static_cast<uint8_t>((static_cast<uint32_t>(magnitude) * RUMBLE_MAX_POWER) / UINT16_MAX)
 
+// Initialiser order follows declaration order in the header, which -Wreorder checks
 Controller::Controller(
-    SendPacket sendPacket
+    SendPacket sendPacket,
+    uint8_t ledBrightness
 ) : GipDevice(std::move(sendPacket)),
-    stopRumbleThread(false), jvm(nullptr), jthis(nullptr) {}
+    stopRumbleThread(false), ledBrightness(ledBrightness), jvm(nullptr), jthis(nullptr) {}
 
 Controller::~Controller()
 {
@@ -799,10 +801,19 @@ void Controller::startDevice()
 
     LedModeData ledMode = {};
 
-    // Dim the LED a little bit, like the original driver
-    // Brightness ranges from 0x00 to 0x20
-    ledMode.mode = LED_ON;
-    ledMode.brightness = 0x14;
+    /*
+     * Guide button brightness, from the user's setting.
+     *
+     * The range is 0x00 to 0x2F, not the 0x00 to 0x20 xow claimed here: MS-GIPUSB 3.1.5.5.7
+     * Table 41 gives the intensity field as "0 - 47%", and xone caps it at 50. Whether a pad
+     * actually honours anything above 0x20 is untested - see HARDWARE_TESTING.md 22.
+     *
+     * Pattern and intensity are separate fields (Table 42), so an intensity of zero on a lit
+     * pattern is not what the spec means by off. A zero brightness therefore selects the off
+     * pattern rather than a maximally dimmed on one.
+     */
+    ledMode.mode = ledBrightness == 0 ? LED_OFF : LED_ON;
+    ledMode.brightness = ledBrightness;
 
     if (!setLedMode(ledMode))
     {
@@ -810,6 +821,8 @@ void Controller::startDevice()
 
         return;
     }
+
+    Log::info("Guide button LED set to mode %d intensity 0x%02x", ledMode.mode, ledBrightness);
 
     if (!requestSerialNumber())
     {

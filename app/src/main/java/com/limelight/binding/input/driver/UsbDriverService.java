@@ -471,7 +471,8 @@ public class UsbDriverService extends Service implements UsbDriverListener {
             }
 
             if (XboxWirelessDongle.canClaimDevice(device)) {
-                var dongle = new XboxWirelessDongle(device, connection, this);
+                var dongle = new XboxWirelessDongle(device, connection, this,
+                                                    prefConfig.guideButtonLed);
                 if(!dongle.start()) {
                     connection.close();
                     return;
@@ -505,7 +506,8 @@ public class UsbDriverService extends Service implements UsbDriverListener {
 
             if (prefConfig.wiredPadAudio && XboxWiredGipController.canClaimDevice(device)) {
                 controller = XboxWiredGipController.create(device, connection,
-                                                           nextDeviceId++, this);
+                                                           nextDeviceId++, this,
+                                                           prefConfig.guideButtonLed);
 
                 // create() releases the interface but leaves the connection open on failure, which
                 // is exactly what the fallback needs - so fall back rather than giving up, and the

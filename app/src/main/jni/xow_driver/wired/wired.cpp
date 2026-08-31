@@ -19,7 +19,8 @@
 #define GIP_AUDIO_SAMPLES 0x60
 #include <vector>
 
-WiredController::WiredController(int fd, JavaVM *jvm) : jvm(jvm)
+WiredController::WiredController(int fd, JavaVM *jvm, uint8_t ledBrightness)
+    : jvm(jvm), ledBrightness(ledBrightness)
 {
     device = std::make_unique<UsbWiredDevice>(fd);
 }
@@ -45,7 +46,8 @@ bool WiredController::start()
     }
 
     gipController = std::make_unique<Controller>(
-        std::bind(&WiredController::sendPacket, this, std::placeholders::_1)
+        std::bind(&WiredController::sendPacket, this, std::placeholders::_1),
+        ledBrightness
     );
 
     /*
