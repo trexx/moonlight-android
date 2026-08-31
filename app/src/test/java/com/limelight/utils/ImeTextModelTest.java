@@ -238,6 +238,60 @@ class ImeTextModelTest {
         }
 
         @Test
+        @DisplayName("forgets a character the host lost to a key event, on both sides at once")
+        void forgetsACharacterDeletedByKeyEvent() {
+            // Some IMEs send KEYCODE_DEL rather than calling deleteSurroundingText, and that key
+            // reaches the host on its own. Dropping it from the intent alone would leave the
+            // comparison believing the host still holds it, and the next reconcile would type it
+            // back.
+            ImeTextModel model = new ImeTextModel();
+            model.commit("hello");
+            model.reconcile();
+
+            model.hostDeletedCharacter();
+
+            assertNull(model.reconcile(), "the host already did it - nothing left to send");
+            assertEquals("hell", model.text().toString());
+        }
+
+        @Test
+        @DisplayName("forgets a whole emoji, not half of one")
+        void forgetsAWholeEmoji() {
+            ImeTextModel model = new ImeTextModel();
+            model.commit("hi" + EMOJI);
+            model.reconcile();
+
+            model.hostDeletedCharacter();
+
+            assertEquals("hi", model.text().toString());
+            assertNull(model.reconcile());
+        }
+
+        @Test
+        @DisplayName("takes it off the composition when one is in progress")
+        void forgetsFromTheCompositionFirst() {
+            ImeTextModel model = new ImeTextModel();
+            model.commit("say ");
+            model.composing("hey");
+            model.reconcile();
+
+            model.hostDeletedCharacter();
+
+            assertEquals("say he", model.text().toString());
+            assertNull(model.reconcile());
+        }
+
+        @Test
+        @DisplayName("does nothing when there is nothing left to forget")
+        void forgetsNothingFromAnEmptyModel() {
+            ImeTextModel model = new ImeTextModel();
+            model.hostDeletedCharacter();
+
+            assertNull(model.reconcile());
+            assertEquals("", model.text().toString());
+        }
+
+        @Test
         @DisplayName("forgets the host once the keyboard has gone")
         void forgetsOnReset() {
             // The next keyboard opens over text this cannot account for, so reconciling against it
