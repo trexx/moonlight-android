@@ -35,8 +35,7 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.ui.GameGestures;
 import com.limelight.ui.StreamView;
 import com.limelight.utils.Dialog;
-import com.limelight.utils.ImeComposition;
-import com.limelight.utils.ImeTextBuffer;
+import com.limelight.utils.ImeTextModel;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
 import com.limelight.utils.TextKeyPlanner;
@@ -148,14 +147,34 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // rather than on top of it.
     private long imeQueueEndTime;
 
-    // What the keyboard has typed, kept only so a deletion can be turned from the IME's UTF-16
-    // code units into the number of characters the host has to lose. Dropped when the keyboard
-    // closes, since the next one opens over text this can no longer account for.
-    private final ImeTextBuffer imeTextBuffer = new ImeTextBuffer();
+    // What the keyboard means the host's field to contain, against what it has. Every IME callback
+    // updates the intent; the keystrokes to get there are worked out once per turn of the message
+    // loop, so a delete-and-retype round trip collapses to what actually changed. Dropped when the
+    // keyboard closes, since the next one opens over text this can no longer account for.
+    private final ImeTextModel imeTextModel = new ImeTextModel();
 
-    // The word the keyboard is still composing. Held here rather than in the InputConnection for
-    // the reason ImeComposition documents: BaseInputConnection replays its own copy back at us.
-    private final ImeComposition imeComposition = new ImeComposition();
+    // Whether a reconcile is already posted. Coalescing them is what lets a deletion and the
+    // composition that replaces it be seen together rather than sent one after the other.
+    private boolean imeReconcileScheduled;
+
+    private final Runnable reconcileImeText = new Runnable() {
+        @Override
+        public void run() {
+            imeReconcileScheduled = false;
+
+            ImeTextModel.Edit edit = imeTextModel.reconcile();
+            if (edit == null) {
+                return;
+            }
+
+            if (edit.backspaces() > 0 || edit.forwardDeletes() > 0) {
+                enqueueImeInput(TextKeyPlanner.planDeletion(edit.backspaces(), edit.forwardDeletes()));
+            }
+            if (!edit.insert().isEmpty()) {
+                enqueueImeInput(TextKeyPlanner.planText(edit.insert()));
+            }
+        }
+    };
 
     // Last soft keyboard visibility seen by the window insets listener, so the buffer above is
     // dropped once per dismissal rather than on every insets change.
@@ -319,11 +338,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 // Forget what was typed once the keyboard goes away. Acted on at the transition
                 // because this listener fires on every insets change during a stream.
                 if (imeWasVisible && !imeVisible) {
-                    imeTextBuffer.clear();
-
-                    // Anything still being composed when the keyboard was dismissed was never
-                    // finalised, so it is not text the user asked to send.
-                    imeComposition.reset();
+                    // Including what the host is believed to hold: the next keyboard opens over
+                    // text this can no longer account for, so reconciling against it would send
+                    // backspaces for characters nobody asked to remove.
+                    imeTextModel.reset();
                 }
                 imeWasVisible = imeVisible;
             }
@@ -1229,9 +1247,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
 
-        // A commit is the finished form of whatever was being composed, so the composition is
-        // discarded here rather than sent as well.
-        return sendImeText(imeComposition.commit(text));
+        imeTextModel.commit(text);
+        scheduleImeReconcile();
+        return true;
     }
 
     /** {@inheritDoc} */
@@ -1241,8 +1259,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
 
-        // Previews are not typed. Only the finished word is.
-        imeComposition.composing(text);
+        // Never sent - the host would see the word typed out one prefix at a time. Reconciling is
+        // still scheduled, because arriving here is what tells a deletion queued this turn that
+        // something is about to replace what it removed.
+        imeTextModel.composing(text);
+        scheduleImeReconcile();
         return true;
     }
 
@@ -1252,23 +1273,27 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         if (conn == null) {
             return false;
         }
-        return sendImeText(imeComposition.finish());
+        imeTextModel.finishComposing();
+        scheduleImeReconcile();
+        return true;
     }
 
     /**
-     * Sends text the IME has finalised, as keystrokes wherever the characters have keys.
+     * Works out and sends the keystrokes at the end of this turn of the message loop, once.
      *
-     * @return true, so the caller can report the callback handled - a null or empty run is still
-     *         handled, it simply has nothing to send
+     * <p>Posted rather than done here, and that delay is the fix rather than an optimisation: an
+     * IME delivers a compound change as several callbacks in a row, and Gboard's backspace over a
+     * finished word arrives as a deletion of the whole word followed immediately by a composition
+     * that puts most of it back. Acting on the deletion the moment it arrives sends the whole word
+     * away and types it again. Waiting until the callbacks stop lets the two cancel out.
      */
-    private boolean sendImeText(String text) {
-        if (text == null) {
-            return true;
+    private void scheduleImeReconcile() {
+        if (imeReconcileScheduled) {
+            return;
         }
 
-        imeTextBuffer.append(text);
-        enqueueImeInput(TextKeyPlanner.planText(text));
-        return true;
+        imeReconcileScheduled = true;
+        imeInputHandler.post(reconcileImeText);
     }
 
     /** {@inheritDoc} */
@@ -1278,10 +1303,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             return false;
         }
 
-        // afterLength is passed through as-is: our cursor is always at the end of what was typed,
-        // so there is never anything after it to have counted in the first place. It used to be
-        // dropped silently, which under-deleted on the rare IME that does use it.
-        enqueueImeInput(TextKeyPlanner.planDeletion(imeTextBuffer.removeBefore(beforeLength), afterLength));
+        // Recorded, not acted on: whether this costs the host anything depends on what the IME
+        // does next, which is not known until the callbacks stop arriving.
+        imeTextModel.delete(beforeLength, afterLength);
+        scheduleImeReconcile();
         return true;
     }
 
@@ -1385,13 +1410,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
 
             // Some IMEs delete with a key event instead of calling deleteSurroundingText - Gboard
-            // does it in certain fields - and that never reaches handleDeleteSurroundingText, so
-            // the record of what was typed has to be corrected here or it drifts and a later
-            // backspace over an emoji miscounts. A held backspace still drifts, since the host
-            // repeats at its own rate and the repeats above are eaten; dismissing the keyboard
-            // clears the buffer either way.
+            // does it in certain fields - and that never reaches handleDeleteSurroundingText. The
+            // keystroke below carries it to the host on its own, so the model is told the
+            // character has gone rather than asked to remove it. A held backspace still drifts,
+            // since the host repeats at its own rate and the repeats above are eaten; dismissing
+            // the keyboard resets the model either way.
             if (imeWasVisible && event.getKeyCode() == KeyEvent.KEYCODE_DEL) {
-                imeTextBuffer.removeLastCharacter();
+                imeTextModel.hostDeletedCharacter();
             }
 
             conn.sendKeyboardInput(translated, KeyboardPacket.KEY_DOWN, getModifierState(event),
@@ -1939,8 +1964,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             imeInputQueue.clear();
             imeDrainScheduled = false;
             imeQueueEndTime = 0;
-            imeTextBuffer.clear();
-            imeComposition.reset();
+            imeInputHandler.removeCallbacks(reconcileImeText);
+            imeReconcileScheduled = false;
+            imeTextModel.reset();
 
             // Update GameManager state to indicate we're no longer in game
             UiHelper.notifyStreamEnded(this);
