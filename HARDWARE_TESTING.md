@@ -111,6 +111,23 @@ feature checks.
       `caf ok` + `é` at the end.
 - [ ] **Autocorrect and swipe typing still behave.** Both replace what was just typed, so they
       exercise commit and deletion back to back against `ImeTextBuffer`.
+- [X] **Text appears on the host as it is typed, not a word at a time.** Composing text counts
+      towards the intended state, so each keystroke sends the one character that changed. Measured
+      on the Shield against Big Picture's search box: `hello` used to leave the field empty until
+      space was pressed.
+- [ ] **Backspace over a finished word costs one backspace, and takes effect at once.** This is the
+      fault the reconciling model was written for: Gboard implements it by deleting the whole word
+      and re-composing it a character shorter, which used to go out literally as five backspaces
+      and four retyped letters. Measured before this change: the host held `hello` while Gboard had
+      re-composed `hell`, so the press appeared to do nothing at all. Type a word, commit it with a
+      space, then backspace twice — the second press must remove a character promptly.
+- [ ] **Holding backspace keeps up.** The old cost per press was around 120 ms of queued
+      keystrokes against a key repeating perhaps thirty times a second, so the queue could never
+      drain and the host ended up with duplicated and truncated text. Hold it down over a sentence
+      and confirm the host follows.
+- [ ] **Autocorrect replaces rather than rewrites.** Type a word the keyboard will correct and
+      watch what the host receives: it should be backspaces to the point the two words diverge and
+      the rest typed, not the whole word deleted and retyped.
 - [ ] **Backspace deletes on the host** (approximated as backspaces, so watch for it over- or
       under-deleting after autocorrect).
 - [ ] **Backspace deletes rather than types.** The reported symptom was the opposite: pressing
@@ -125,16 +142,19 @@ feature checks.
       instead of `commitText`, and that path now carries the text itself.
 - [ ] **A word is not typed twice.** The common IME sequence is compose, commit, finish; the
       commit supersedes the composition, so finishing afterwards must send nothing.
-- [ ] **Backspace by key event keeps the record straight.** Some IMEs delete with a `KEYCODE_DEL`
+- [ ] **Backspace by key event keeps the model straight.** Some IMEs delete with a `KEYCODE_DEL`
       key event rather than `deleteSurroundingText`, which bypasses the deletion callback entirely.
-      Type an emoji, backspace over some plain characters before it, then backspace over the emoji
-      and confirm it still takes one character rather than two. A *held* backspace is known to
-      drift — the host repeats at its own rate — so test taps, and note what a hold does.
-- [ ] **Backspace after an emoji deletes one character, not two.** The IME counts in UTF-16
-      code units and a surrogate pair is two of them; `ImeTextBuffer` resolves that against what
-      was actually typed. Then reopen the keyboard over text already on the host and backspace
-      again: with nothing remembered it deliberately falls back to one keystroke per code unit,
-      so check both sides of that.
+      The host has already lost the character by the time we hear about it, so the model has to
+      forget it on both sides at once or the next comparison types it back. Type an emoji,
+      backspace over some plain characters before it, then backspace over the emoji and confirm it
+      still takes one character rather than two, and that nothing reappears afterwards. A *held*
+      backspace is known to drift — the host repeats at its own rate — so test taps, and note what
+      a hold does.
+- [ ] **Backspace after an emoji deletes one character, not two.** The IME counts in UTF-16 code
+      units and a surrogate pair is two of them; `ImeTextModel` counts the difference in
+      characters, so one press removes the emoji whole. Then reopen the keyboard over text already
+      on the host and backspace again: the model forgets on dismissal, so it can only delete what
+      it put there — it will not reach back into text it never sent.
 - [ ] **Back dismisses the keyboard** rather than opening the game menu or ending the stream.
 - [X] **Input returns to the host once the keyboard is dismissed.** The important regression:
       `imeVisible` is driven by the window insets listener, so if it ever sticks on, *all*
