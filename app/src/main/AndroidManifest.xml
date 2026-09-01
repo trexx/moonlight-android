@@ -138,10 +138,17 @@
             android:enableOnBackInvokedCallback="true"
             android:configChanges="mcc|mnc|locale|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection">
         </activity>
+        <!--
+          enableOnBackInvokedCallback is off here: Back has to walk out of a settings sub-screen
+          before it leaves the activity, and onBackPressed() is the one path that does that on both
+          boxes. The predictive-back callback that would replace it exists only from API 33, and the
+          Shield is API 30, so honouring it would mean two behaviours to keep in step for no gain on
+          a box driven by a remote's Back button.
+        -->
         <activity
             android:name=".preferences.StreamSettings"
             android:resizeableActivity="false"
-            android:enableOnBackInvokedCallback="true"
+            android:enableOnBackInvokedCallback="false"
             android:configChanges="mcc|mnc|touchscreen|keyboard|keyboardHidden|navigation|screenLayout|fontScale|uiMode|orientation|screenSize|smallestScreenSize|layoutDirection"
             android:label="Streaming Settings">
         </activity>

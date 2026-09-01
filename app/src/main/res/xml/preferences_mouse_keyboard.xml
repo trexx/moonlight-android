@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Mouse and keyboard - the touchscreen and pointer devices, as opposed to gamepads, which are in
+  preferences_controllers.xml. See PreferenceConfiguration.readPreferences() for how these keys
+  are interpreted - defaults declared here and defaults declared there must agree.
+-->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- Maps to PreferenceConfiguration.mouseMode, which selects the TouchContext
+         implementation in Game.applyMouseMode(). Migrated from the older
+         checkbox_touchscreen_trackpad boolean on first read. -->
+    <ListPreference
+        android:key="list_mouse_mode"
+        android:title="@string/title_mouse_mode"
+        android:entries="@array/mouse_mode_names"
+        android:entryValues="@array/mouse_mode_values"
+        android:summary="%s"
+        android:defaultValue="relative" />
+    <CheckBoxPreference
+        android:key="checkbox_mouse_nav_buttons"
+        android:title="@string/title_checkbox_mouse_nav_buttons"
+        android:summary="@string/summary_checkbox_mouse_nav_buttons"
+        android:defaultValue="false" />
+    <!-- Removed at runtime on a SHIELD, which supports raw mouse input in pointer capture mode. -->
+    <CheckBoxPreference
+        android:key="checkbox_absolute_mouse_mode"
+        android:title="@string/title_checkbox_absolute_mouse_mode"
+        android:summary="@string/summary_checkbox_absolute_mouse_mode"
+        android:defaultValue="false" />
+
+</PreferenceScreen>

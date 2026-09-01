@@ -1,3 +1,5 @@
+import org.gradle.api.tasks.PathSensitivity
+
 plugins {
     id 'com.android.application'
 }
@@ -155,6 +157,15 @@ java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(25)
     }
+}
+
+// SettingsTreeTest reads res/xml straight from the source tree, which Gradle cannot infer. Without
+// this the test task stays up to date across a preference XML edit and the guard silently does not
+// run - which is the one failure mode a guard must not have.
+tasks.withType(Test).configureEach {
+    inputs.dir('src/main/res/xml')
+            .withPropertyName('preferenceXml')
+            .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
 // Upstream fixes we depend on that have not merged yet are carried as patches against the

@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Video and display. See preferences.xml for how this screen is reached, and
+  PreferenceConfiguration.readPreferences() for how these keys are interpreted - defaults declared
+  here and defaults declared there must agree, since a preference the user has never touched is
+  read from the code-side default.
+
+  The seekbar: namespace belongs to com.limelight.preferences.SeekBarPreference. It adds min,
+  step, keyStep (the increment for a d-pad or keyboard press) and divisor (a display-only
+  divisor, so a value stored in Kbps can be shown in Mbps).
+
+  This is the only screen whose contents depend on what the hardware can decode, so it is the only
+  one that pays for MediaCodecHelper.initialize() and the decoder capability queries. See
+  StreamSettings.SettingsFragment.filterVideoScreen().
+-->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:seekbar="http://schemas.moonlight-stream.com/apk/res/seekbar">
+
+    <PreferenceCategory android:title="@string/category_video_stream"
+        android:key="category_video_stream">
+        <ListPreference
+            android:key="list_resolution"
+            android:title="@string/title_resolution_list"
+            android:summary="@string/summary_resolution_list"
+            android:entries="@array/resolution_names"
+            android:entryValues="@array/resolution_values"
+            android:defaultValue="1280x720" />
+        <ListPreference
+            android:key="list_fps"
+            android:title="@string/title_fps_list"
+            android:summary="@string/summary_fps_list"
+            android:entries="@array/fps_names"
+            android:entryValues="@array/fps_values"
+            android:defaultValue="60" />
+        <!-- Stored in Kbps and displayed in Mbps via divisor. The code-side default is not fixed:
+             getDefaultBitrate() computes it from the chosen resolution and frame rate. -->
+        <com.limelight.preferences.SeekBarPreference
+            android:key="seekbar_bitrate_kbps"
+            android:dialogMessage="@string/summary_seekbar_bitrate"
+            seekbar:min="500"
+            android:max="150000"
+            seekbar:step="500"
+            seekbar:keyStep="1000"
+            seekbar:divisor="1000"
+            android:summary="@string/summary_seekbar_bitrate"
+            android:text="@string/suffix_seekbar_bitrate_mbps"
+            android:title="@string/title_seekbar_bitrate" />
+        <ListPreference
+            android:key="video_format"
+            android:title="@string/title_video_format"
+            android:entries="@array/video_format_names"
+            android:entryValues="@array/video_format_values"
+            android:summary="@string/summary_video_format"
+            android:defaultValue="auto" />
+        <!-- Removed at runtime when the display does not report HDR10. -->
+        <CheckBoxPreference
+            android:key="checkbox_enable_hdr"
+            android:title="@string/title_enable_hdr"
+            android:summary="@string/summary_enable_hdr"
+            android:defaultValue="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/category_video_display"
+        android:key="category_video_display">
+        <!-- Maps to PreferenceConfiguration.framePacing. 'latency' presents frames as soon as they
+             decode; 'balanced' presents on vsync via the Choreographer path in
+             MediaCodecDecoderRenderer, trading up to a frame of latency for smoothness. -->
+        <ListPreference
+            android:key="frame_pacing"
+            android:title="@string/title_frame_pacing"
+            android:entries="@array/video_frame_pacing_names"
+            android:entryValues="@array/video_frame_pacing_values"
+            android:summary="@string/summary_frame_pacing"
+            android:defaultValue="latency" />
+        <ListPreference
+            android:key="list_video_scale_mode"
+            android:title="@string/title_video_scale_mode"
+            android:entries="@array/video_scale_mode_names"
+            android:entryValues="@array/video_scale_mode_values"
+            android:summary="%s"
+            android:defaultValue="fit" />
+        <!-- Lives beside the frame rate it unlocks: changing it rebuilds this screen so list_fps
+             is refiltered. See the change listener in StreamSettings. -->
+        <CheckBoxPreference
+            android:key="checkbox_unlock_fps"
+            android:title="@string/title_unlock_fps"
+            android:summary="@string/summary_unlock_fps"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_reduce_refresh_rate"
+            android:title="@string/title_checkbox_reduce_refresh_rate"
+            android:summary="@string/summary_checkbox_reduce_refresh_rate"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_enforce_display_mode"
+            android:title="@string/title_checkbox_enforce_display_mode"
+            android:summary="@string/summary_checkbox_enforce_display_mode"
+            android:defaultValue="false" />
+    </PreferenceCategory>
+
+</PreferenceScreen>
