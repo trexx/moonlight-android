@@ -4,6 +4,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.StringReader;
 import java.net.UnknownHostException;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 
@@ -13,6 +14,7 @@ import com.limelight.computers.ComputerManagerListener;
 import com.limelight.computers.ComputerManagerService;
 import com.limelight.grid.AppGridAdapter;
 import com.limelight.grid.AppObject;
+import com.limelight.grid.BrowseMenuLayout;
 import com.limelight.grid.BrowseState;
 import com.limelight.grid.assets.DiskAssetLoader;
 import com.limelight.nvstream.http.ComputerDetails;
@@ -26,6 +28,7 @@ import com.limelight.preferences.PreferenceConfiguration;
 import com.limelight.preferences.StreamSettings;
 import com.limelight.utils.CacheHelper;
 import com.limelight.utils.Dialog;
+import com.limelight.utils.MenuDialog;
 import com.limelight.utils.ServerHelper;
 import com.limelight.utils.ShortcutHelper;
 import com.limelight.utils.SpinnerDialog;
@@ -49,15 +52,10 @@ import android.preference.PreferenceManager;
 import android.transition.ChangeBounds;
 import android.transition.TransitionManager;
 import android.util.TypedValue;
-import android.view.ContextMenu;
-import android.view.ContextMenu.ContextMenuInfo;
 import android.view.LayoutInflater;
-import android.view.Menu;
-import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.AdapterView;
-import android.widget.AdapterView.AdapterContextMenuInfo;
 import android.widget.GridView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -86,8 +84,10 @@ import javax.microedition.khronos.opengles.GL10;
  * without a device.
  *
  * <p>Pairing, unpairing, waking and removing hosts, and starting, quitting and hiding apps, are
- * all driven from the two context menus, which is why so much of this class is menu and dialog
- * handling rather than view code.
+ * all driven from the host menu and the app menu, which is why so much of this class is menu and
+ * dialog handling rather than view code. Both are shown by {@link com.limelight.utils.MenuDialog},
+ * which the in-stream menu uses too, and the rows each offers are decided by
+ * {@link BrowseMenuLayout}, which is where they can be tested.
  *
  * <p>Latency: nothing here runs while a stream exists. The activity is torn down before
  * {@link Game} starts and rebuilt after it finishes.
@@ -109,24 +109,6 @@ public class BrowseActivity extends Activity {
     /** Remembers which host was being browsed, so a relaunch returns to it rather than guessing. */
     private final static String SELECTION_PREF_FILENAME = "BrowseSelection";
     private final static String SELECTION_PREF_KEY = "SelectedUuid";
-
-    // Host context menu.
-    private final static int PAIR_ID = 1;
-    private final static int UNPAIR_ID = 2;
-    private final static int DELETE_ID = 3;
-    private final static int HOST_RESUME_ID = 4;
-    private final static int HOST_QUIT_ID = 5;
-    private final static int HOST_DETAILS_ID = 6;
-    private final static int FULL_APP_LIST_ID = 7;
-
-    // App context menu. A separate range so onContextItemSelected can dispatch on the id alone
-    // and never confuse a host action for an app one.
-    private final static int APP_START_OR_RESUME_ID = 20;
-    private final static int APP_QUIT_ID = 21;
-    private final static int APP_START_WITH_QUIT_ID = 22;
-    private final static int APP_DETAILS_ID = 23;
-    private final static int APP_HIDE_ID = 24;
-    private final static int APP_CREATE_SHORTCUT_ID = 25;
 
     private LinearLayout navRail;
     private LinearLayout hostBand;
@@ -155,12 +137,6 @@ public class BrowseActivity extends Activity {
      * selection moves. See {@link #liftTile}.
      */
     private View liftedTile;
-
-    /**
-     * The host whose context menu is open. Host tiles are not adapter items, so a context menu
-     * raised from one carries no {@code AdapterContextMenuInfo} to identify it with.
-     */
-    private ComputerDetails contextMenuHost;
 
     private final ServiceConnection serviceConnection = new ServiceConnection() {
         public void onServiceConnected(ComponentName className, IBinder binder) {
@@ -426,7 +402,7 @@ public class BrowseActivity extends Activity {
     /**
      * Inflates an empty tile and attaches the handlers that do not depend on host state.
      *
-     * <p>The click handler resolves the host through the tile's tag rather than closing over a
+     * <p>Both handlers resolve the host through the tile's tag rather than closing over a
      * {@link ComputerDetails}, because every poll delivers a fresh instance and the tile outlives
      * all of them.
      */
@@ -439,12 +415,28 @@ public class BrowseActivity extends Activity {
             public void onClick(View v) {
                 ComputerDetails current = hostForTile(v);
                 if (current != null) {
-                    onHostClicked(current, v);
+                    onHostClicked(current);
                 }
             }
         });
 
-        registerForContextMenu(tile);
+        // Not registerForContextMenu: a framework context menu renders as a popup anchored to the
+        // gesture when the long press carried coordinates and as a centred dialog when it did not,
+        // so a tile long-pressed with a mouse and one long-pressed with the d-pad produced two
+        // different-looking menus - and neither matched the app grid's. Raising the menu ourselves
+        // means one presentation whatever the input device. See MenuDialog.
+        tile.setOnLongClickListener(new View.OnLongClickListener() {
+            @Override
+            public boolean onLongClick(View v) {
+                ComputerDetails current = hostForTile(v);
+                if (current == null) {
+                    return false;
+                }
+
+                showHostMenu(current);
+                return true;
+            }
+        });
 
         return tile;
     }
@@ -491,10 +483,10 @@ public class BrowseActivity extends Activity {
      * A host tile was activated: browse it if it can be browsed, pair it if it cannot yet, and
      * otherwise offer the menu, which is the only thing left to do with an offline host.
      */
-    private void onHostClicked(ComputerDetails details, View tile) {
+    private void onHostClicked(ComputerDetails details) {
         if (details.state == ComputerDetails.State.UNKNOWN
                 || details.state == ComputerDetails.State.OFFLINE) {
-            openContextMenu(tile);
+            showHostMenu(details);
         }
         else if (details.pairState != PairState.PAIRED) {
             doPair(details);
@@ -538,7 +530,7 @@ public class BrowseActivity extends Activity {
                     return;
                 }
 
-                // Only open the context menu if something is running, otherwise start it.
+                // Only open the menu if something is running, otherwise start it.
                 // Tapping the app that is already running just resumes it, if the user
                 // opted out of the confirmation.
                 if (lastRunningAppId != 0) {
@@ -546,7 +538,7 @@ public class BrowseActivity extends Activity {
                             PreferenceConfiguration.readPreferences(BrowseActivity.this).resumeWithoutConfirm) {
                         ServerHelper.doStart(BrowseActivity.this, app.app, computer, managerBinder);
                     } else {
-                        openContextMenu(view);
+                        showAppMenu(app, view);
                     }
                 } else {
                     ServerHelper.doStart(BrowseActivity.this, app.app, computer, managerBinder);
@@ -581,7 +573,21 @@ public class BrowseActivity extends Activity {
             }
         });
 
-        registerForContextMenu(appGrid);
+        // Handling the long press here, and claiming it by returning true, is what keeps
+        // AbsListView from raising its own context menu - which it renders as a popup anchored to
+        // the press when the press carried coordinates and as a dialog when it did not, so the
+        // grid and the host band disagreed with each other and with themselves. See MenuDialog.
+        appGrid.setOnItemLongClickListener(new AdapterView.OnItemLongClickListener() {
+            @Override
+            public boolean onItemLongClick(AdapterView<?> parent, View view, int position, long id) {
+                if (appGridAdapter == null || browseState.getSelected() == null) {
+                    return false;
+                }
+
+                showAppMenu((AppObject) appGridAdapter.getItem(position), view);
+                return true;
+            }
+        });
     }
 
     /**
@@ -1001,26 +1007,8 @@ public class BrowseActivity extends Activity {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Context menus
+    // Menus
     // ------------------------------------------------------------------------------------------
-
-    /** {@inheritDoc} Builds the host menu or the app menu, depending on what was long-pressed. */
-    @Override
-    public void onCreateContextMenu(ContextMenu menu, View v, ContextMenuInfo menuInfo) {
-        super.onCreateContextMenu(menu, v, menuInfo);
-
-        if (v == appGrid) {
-            contextMenuHost = null;
-            buildAppContextMenu(menu, (AdapterContextMenuInfo) menuInfo);
-        }
-        else {
-            // Host tiles are plain views, so there is no menuInfo to identify them by.
-            contextMenuHost = hostForTile(v);
-            if (contextMenuHost != null) {
-                buildHostContextMenu(menu, contextMenuHost);
-            }
-        }
-    }
 
     private ComputerDetails hostForTile(View tile) {
         String uuid = (String) tile.getTag();
@@ -1037,252 +1025,205 @@ public class BrowseActivity extends Activity {
         return null;
     }
 
-    private void buildHostContextMenu(ContextMenu menu, ComputerDetails details) {
+    /**
+     * The menu for one host: pairing, the running session, and the two ways of undoing the host's
+     * setup.
+     *
+     * <p>Which rows appear is {@link BrowseMenuLayout}'s decision, so it can be tested; the labels
+     * and actions are here because they need a Context and a bound
+     * {@link ComputerManagerService}. Same division as {@link GameMenu} and {@code GameMenuLayout}.
+     */
+    private void showHostMenu(final ComputerDetails details) {
         // Host polling would otherwise redraw the band under an open menu, which on a rebuild
-        // destroys the view the menu is anchored to.
+        // destroys the tile the menu was raised from.
         stopComputerUpdates(false);
 
-        menu.clearHeader();
-        String headerTitle = details.name + " - ";
-        switch (details.state) {
-            case ONLINE:
-                headerTitle += getResources().getString(R.string.pcview_menu_header_online);
-                break;
-            case OFFLINE:
-                menu.setHeaderIcon(R.drawable.ic_pc_offline);
-                headerTitle += getResources().getString(R.string.pcview_menu_header_offline);
-                break;
-            case UNKNOWN:
-                headerTitle += getResources().getString(R.string.pcview_menu_header_unknown);
-                break;
-        }
-        menu.setHeaderTitle(headerTitle);
+        String title = details.name + " - " + getString(switch (details.state) {
+            case ONLINE -> R.string.pcview_menu_header_online;
+            case OFFLINE -> R.string.pcview_menu_header_offline;
+            case UNKNOWN -> R.string.pcview_menu_header_unknown;
+        });
 
-        if (details.state != ComputerDetails.State.OFFLINE &&
-            details.state != ComputerDetails.State.UNKNOWN &&
-            details.pairState != PairState.PAIRED) {
-            menu.add(Menu.NONE, PAIR_ID, 1, getResources().getString(R.string.pcview_menu_pair_pc));
+        // The only state worth a glance rather than a read. Offline is the one that explains why
+        // most of the menu is missing.
+        int icon = details.state == ComputerDetails.State.OFFLINE ? R.drawable.ic_pc_offline : 0;
+
+        List<MenuDialog.Option> options = new ArrayList<>();
+
+        for (BrowseMenuLayout.HostRow row : BrowseMenuLayout.hostRows(
+                new BrowseMenuLayout.HostState(details.state == ComputerDetails.State.ONLINE,
+                        details.pairState == PairState.PAIRED, details.runningGameId != 0))) {
+            switch (row) {
+                case PAIR -> options.add(new MenuDialog.Option(
+                        getString(R.string.pcview_menu_pair_pc), () -> doPair(details)));
+
+                case RESUME -> options.add(new MenuDialog.Option(
+                        getString(R.string.applist_menu_resume), () -> resumeHostSession(details)));
+
+                case QUIT -> options.add(new MenuDialog.Option(
+                        getString(R.string.applist_menu_quit), () -> quitHostSession(details)));
+
+                case APP_LIST -> options.add(new MenuDialog.Option(
+                        getString(R.string.pcview_menu_app_list),
+                        () -> selectHost(details.uuid, true)));
+
+                case UNPAIR -> options.add(new MenuDialog.Option(
+                        getString(R.string.pcview_menu_unpair_pc),
+                        () -> UiHelper.displayUnpairConfirmationDialog(this, details,
+                                () -> doUnpair(details), null)));
+
+                case DELETE -> options.add(new MenuDialog.Option(
+                        getString(R.string.pcview_menu_delete_pc), () -> deleteHost(details)));
+
+                case DETAILS -> options.add(new MenuDialog.Option(
+                        getString(R.string.pcview_menu_details),
+                        () -> Dialog.displayDialog(this, getString(R.string.title_details),
+                                details.toString(), false)));
+            }
+        }
+
+        // Polling restarts however the menu goes away, a row selection included. startComputerUpdates
+        // manages the foreground check itself: this fires again after onPause() on some paths, and
+        // it will not actually poll until the activity is back.
+        MenuDialog.show(this, title, icon, options, null, this::startComputerUpdates);
+    }
+
+    /** Resumes whatever the host is already running, without knowing which app that is. */
+    private void resumeHostSession(ComputerDetails details) {
+        if (managerBinder == null) {
+            Toast.makeText(this, getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        ServerHelper.doStart(this, new NvApp("app", details.runningGameId, false), details, managerBinder);
+    }
+
+    private void quitHostSession(final ComputerDetails details) {
+        if (managerBinder == null) {
+            Toast.makeText(this, getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        UiHelper.displayQuitConfirmationDialog(this,
+                () -> ServerHelper.doQuit(BrowseActivity.this, details,
+                        new NvApp("app", 0, false), managerBinder, null), null);
+    }
+
+    private void deleteHost(final ComputerDetails details) {
+        if (ActivityManager.isUserAMonkey()) {
+            LimeLog.info("Ignoring delete PC request from monkey");
+            return;
+        }
+
+        UiHelper.displayDeletePcConfirmationDialog(this, details, () -> {
+            if (managerBinder == null) {
+                Toast.makeText(BrowseActivity.this,
+                        getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            removeComputer(details);
+        }, null);
+    }
+
+    /**
+     * The menu for one app.
+     *
+     * @param cell the grid cell the menu was raised from, needed only for the box art already
+     *             loaded into it — a shortcut has nowhere else to get an image from
+     */
+    private void showAppMenu(final AppObject app, View cell) {
+        final ComputerDetails computer = browseState.getSelected();
+        if (computer == null) {
+            return;
+        }
+
+        final Bitmap boxArt = boxArtOf(cell);
+        List<MenuDialog.Option> options = new ArrayList<>();
+
+        for (BrowseMenuLayout.AppRow row : BrowseMenuLayout.appRows(
+                new BrowseMenuLayout.AppState(lastRunningAppId != 0,
+                        lastRunningAppId == app.app.getAppId(), app.isHidden, boxArt != null))) {
+            switch (row) {
+                // Resume is the same as start for us.
+                case RESUME -> options.add(new MenuDialog.Option(
+                        getString(R.string.applist_menu_resume),
+                        () -> ServerHelper.doStart(this, app.app, computer, managerBinder)));
+
+                case QUIT -> options.add(new MenuDialog.Option(
+                        getString(R.string.applist_menu_quit), () -> quitApp(app, computer)));
+
+                case QUIT_AND_START -> options.add(new MenuDialog.Option(
+                        getString(R.string.applist_menu_quit_and_start),
+                        () -> UiHelper.displayQuitConfirmationDialog(this,
+                                () -> ServerHelper.doStart(BrowseActivity.this, app.app, computer,
+                                        managerBinder), null)));
+
+                case HIDE -> options.add(new MenuDialog.Option(
+                        getString(R.string.applist_menu_hide_app), () -> setAppHidden(app, true)));
+
+                case UNHIDE -> options.add(new MenuDialog.Option(
+                        getString(R.string.applist_menu_show_app), () -> setAppHidden(app, false)));
+
+                case DETAILS -> options.add(new MenuDialog.Option(
+                        getString(R.string.applist_menu_details),
+                        () -> Dialog.displayDialog(this, getString(R.string.title_details),
+                                app.app.toString(), false)));
+
+                case SHORTCUT -> options.add(new MenuDialog.Option(
+                        getString(R.string.applist_menu_scut),
+                        () -> createShortcut(app, computer, boxArt)));
+            }
+        }
+
+        MenuDialog.show(this, app.app.getAppName(), options);
+    }
+
+    /**
+     * The box art the cell has already loaded, or null if it has not loaded yet.
+     *
+     * <p>The drawable is only a {@link BitmapDrawable} once {@code AppGridAdapter} has put real
+     * artwork there; before that it is the placeholder, which has no bitmap to pin.
+     */
+    private static Bitmap boxArtOf(View cell) {
+        ImageView image = cell.findViewById(R.id.grid_image);
+
+        if (image != null && image.getDrawable() instanceof BitmapDrawable drawable) {
+            return drawable.getBitmap();
+        }
+
+        return null;
+    }
+
+    private void quitApp(final AppObject app, final ComputerDetails computer) {
+        UiHelper.displayQuitConfirmationDialog(this, () -> {
+            // The grid must not be rebuilt from a poll that is still reporting the app as
+            // running; the callback below lifts this and polls once the quit has landed.
+            suspendGridUpdates = true;
+
+            ServerHelper.doQuit(BrowseActivity.this, computer, app.app, managerBinder, () -> {
+                suspendGridUpdates = false;
+                if (poller != null) {
+                    poller.pollNow();
+                }
+            });
+        }, null);
+    }
+
+    private void setAppHidden(AppObject app, boolean hidden) {
+        if (hidden) {
+            hiddenAppIds.add(app.app.getAppId());
         }
         else {
-            if (details.runningGameId != 0) {
-                menu.add(Menu.NONE, HOST_RESUME_ID, 1, getResources().getString(R.string.applist_menu_resume));
-                menu.add(Menu.NONE, HOST_QUIT_ID, 2, getResources().getString(R.string.applist_menu_quit));
-            }
-
-            menu.add(Menu.NONE, FULL_APP_LIST_ID, 4, getResources().getString(R.string.pcview_menu_app_list));
-
-            // Unpair is a request to the host, so it needs one that is answering. It also has no
-            // meaning for a host we are not paired with - that case gets Pair, above. Grouped
-            // with Delete rather than with the app actions: both are ways of undoing the setup
-            // of this host, and both need a confirmation before they run.
-            if (details.state == ComputerDetails.State.ONLINE
-                    && details.pairState == PairState.PAIRED) {
-                menu.add(Menu.NONE, UNPAIR_ID, 7, getResources().getString(R.string.pcview_menu_unpair_pc));
-            }
+            hiddenAppIds.remove(app.app.getAppId());
         }
 
-        // Orders are distinct so the sequence is defined; several entries shared an order before,
-        // which left their relative order down to insertion.
-        menu.add(Menu.NONE, DELETE_ID, 8, getResources().getString(R.string.pcview_menu_delete_pc));
-        menu.add(Menu.NONE, HOST_DETAILS_ID, 9, getResources().getString(R.string.pcview_menu_details));
+        updateHiddenApps(false);
     }
 
-    private void buildAppContextMenu(ContextMenu menu, AdapterContextMenuInfo info) {
-        AppObject selectedApp = (AppObject) appGridAdapter.getItem(info.position);
-
-        menu.setHeaderTitle(selectedApp.app.getAppName());
-
-        if (lastRunningAppId != 0) {
-            if (lastRunningAppId == selectedApp.app.getAppId()) {
-                menu.add(Menu.NONE, APP_START_OR_RESUME_ID, 1, getResources().getString(R.string.applist_menu_resume));
-                menu.add(Menu.NONE, APP_QUIT_ID, 2, getResources().getString(R.string.applist_menu_quit));
-            }
-            else {
-                menu.add(Menu.NONE, APP_START_WITH_QUIT_ID, 1, getResources().getString(R.string.applist_menu_quit_and_start));
-            }
-        }
-
-        // Only show the hide checkbox if this is not the currently running app or it's already hidden
-        if (lastRunningAppId != selectedApp.app.getAppId() || selectedApp.isHidden) {
-            MenuItem hideAppItem = menu.add(Menu.NONE, APP_HIDE_ID, 3, getResources().getString(R.string.applist_menu_hide_app));
-            hideAppItem.setCheckable(true);
-            hideAppItem.setChecked(selectedApp.isHidden);
-        }
-
-        menu.add(Menu.NONE, APP_DETAILS_ID, 4, getResources().getString(R.string.applist_menu_details));
-
-        // Only offer a shortcut once there is box art to put on it.
-        ImageView appImageView = info.targetView.findViewById(R.id.grid_image);
-        if (appImageView != null) {
-            BitmapDrawable drawable = (BitmapDrawable) appImageView.getDrawable();
-            if (drawable != null && drawable.getBitmap() != null) {
-                menu.add(Menu.NONE, APP_CREATE_SHORTCUT_ID, 5, getResources().getString(R.string.applist_menu_scut));
-            }
-        }
-    }
-
-    /** {@inheritDoc} */
-    @Override
-    public void onContextMenuClosed(Menu menu) {
-        contextMenuHost = null;
-
-        // For some reason, this gets called again _after_ onPause() is called on this activity.
-        // startComputerUpdates() manages this and won't actually start polling until the activity
-        // returns to the foreground.
-        startComputerUpdates();
-    }
-
-    /** {@inheritDoc} Dispatches both menus; the id ranges keep them apart. */
-    @Override
-    public boolean onContextItemSelected(MenuItem item) {
-        if (item.getItemId() >= APP_START_OR_RESUME_ID) {
-            return onAppContextItemSelected(item);
-        }
-        return onHostContextItemSelected(item);
-    }
-
-    private boolean onHostContextItemSelected(MenuItem item) {
-        final ComputerDetails details = contextMenuHost;
-        if (details == null) {
-            return super.onContextItemSelected(item);
-        }
-
-        switch (item.getItemId()) {
-            case PAIR_ID:
-                doPair(details);
-                return true;
-
-            case UNPAIR_ID:
-                UiHelper.displayUnpairConfirmationDialog(this, details, new Runnable() {
-                    @Override
-                    public void run() {
-                        doUnpair(details);
-                    }
-                }, null);
-                return true;
-
-            case DELETE_ID:
-                if (ActivityManager.isUserAMonkey()) {
-                    LimeLog.info("Ignoring delete PC request from monkey");
-                    return true;
-                }
-                UiHelper.displayDeletePcConfirmationDialog(this, details, new Runnable() {
-                    @Override
-                    public void run() {
-                        if (managerBinder == null) {
-                            Toast.makeText(BrowseActivity.this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
-                            return;
-                        }
-                        removeComputer(details);
-                    }
-                }, null);
-                return true;
-
-            case FULL_APP_LIST_ID:
-                selectHost(details.uuid, true);
-                return true;
-
-            case HOST_RESUME_ID:
-                if (managerBinder == null) {
-                    Toast.makeText(this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
-                    return true;
-                }
-                ServerHelper.doStart(this, new NvApp("app", details.runningGameId, false), details, managerBinder);
-                return true;
-
-            case HOST_QUIT_ID:
-                if (managerBinder == null) {
-                    Toast.makeText(this, getResources().getString(R.string.error_manager_not_running), Toast.LENGTH_LONG).show();
-                    return true;
-                }
-                UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
-                    @Override
-                    public void run() {
-                        ServerHelper.doQuit(BrowseActivity.this, details,
-                                new NvApp("app", 0, false), managerBinder, null);
-                    }
-                }, null);
-                return true;
-
-            case HOST_DETAILS_ID:
-                Dialog.displayDialog(this, getResources().getString(R.string.title_details), details.toString(), false);
-                return true;
-
-            default:
-                return super.onContextItemSelected(item);
-        }
-    }
-
-    private boolean onAppContextItemSelected(MenuItem item) {
-        AdapterContextMenuInfo info = (AdapterContextMenuInfo) item.getMenuInfo();
-        final ComputerDetails computer = browseState.getSelected();
-        if (info == null || appGridAdapter == null || computer == null) {
-            return super.onContextItemSelected(item);
-        }
-
-        final AppObject app = (AppObject) appGridAdapter.getItem(info.position);
-
-        switch (item.getItemId()) {
-            case APP_START_WITH_QUIT_ID:
-                UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
-                    @Override
-                    public void run() {
-                        ServerHelper.doStart(BrowseActivity.this, app.app, computer, managerBinder);
-                    }
-                }, null);
-                return true;
-
-            case APP_START_OR_RESUME_ID:
-                // Resume is the same as start for us
-                ServerHelper.doStart(this, app.app, computer, managerBinder);
-                return true;
-
-            case APP_QUIT_ID:
-                UiHelper.displayQuitConfirmationDialog(this, new Runnable() {
-                    @Override
-                    public void run() {
-                        suspendGridUpdates = true;
-                        ServerHelper.doQuit(BrowseActivity.this, computer,
-                                app.app, managerBinder, new Runnable() {
-                            @Override
-                            public void run() {
-                                // Trigger a poll immediately
-                                suspendGridUpdates = false;
-                                if (poller != null) {
-                                    poller.pollNow();
-                                }
-                            }
-                        });
-                    }
-                }, null);
-                return true;
-
-            case APP_DETAILS_ID:
-                Dialog.displayDialog(this, getResources().getString(R.string.title_details), app.app.toString(), false);
-                return true;
-
-            case APP_HIDE_ID:
-                if (item.isChecked()) {
-                    // Transitioning hidden to shown
-                    hiddenAppIds.remove(app.app.getAppId());
-                }
-                else {
-                    // Transitioning shown to hidden
-                    hiddenAppIds.add(app.app.getAppId());
-                }
-                updateHiddenApps(false);
-                return true;
-
-            case APP_CREATE_SHORTCUT_ID:
-                ImageView appImageView = info.targetView.findViewById(R.id.grid_image);
-                Bitmap appBits = ((BitmapDrawable) appImageView.getDrawable()).getBitmap();
-                if (!shortcutHelper.createPinnedGameShortcut(computer, app.app, appBits)) {
-                    Toast.makeText(this, getResources().getString(R.string.unable_to_pin_shortcut), Toast.LENGTH_LONG).show();
-                }
-                return true;
-
-            default:
-                return super.onContextItemSelected(item);
+    private void createShortcut(AppObject app, ComputerDetails computer, Bitmap boxArt) {
+        if (!shortcutHelper.createPinnedGameShortcut(computer, app.app, boxArt)) {
+            Toast.makeText(this, getString(R.string.unable_to_pin_shortcut), Toast.LENGTH_LONG).show();
         }
     }
 

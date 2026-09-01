@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  One row of the in-stream game menu.
+  One row of a menu, shared by the browse screen's host and app menus and by the in-stream menu.
+  See MenuDialog, which is the only thing that inflates it.
 
   Replaces android.R.layout.simple_list_item_1, which is sized for a phone held in the hand: at
   television viewing distance its rows are both hard to read and hard to hit accurately with a
-  D-pad, and this menu is only ever reached from a controller.
-
-  Behaviour is unchanged - this is a row layout and nothing else. The menu's construction,
-  ordering and actions in GameMenu are untouched.
+  D-pad, and these menus are only ever reached from a controller or a remote.
 
   No background and no focus treatment: rows in an AlertDialog list are selected by the dialog's
   own list selector, and adding a second highlight on top of it would draw two.
