@@ -18,7 +18,6 @@ import com.limelight.grid.assets.MemoryAssetLoader;
 import com.limelight.grid.assets.NetworkAssetLoader;
 import com.limelight.ui.RoundedOutlineProvider;
 import com.limelight.nvstream.http.ComputerDetails;
-import com.limelight.preferences.PreferenceConfiguration;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -52,11 +51,11 @@ public class AppGridAdapter extends BaseAdapter {
     private final boolean showHiddenApps;
 
     /**
-     * Cell geometry, resolved from resources rather than held as dp constants so the television
-     * overrides in values-television/ apply. Rewritten by
-     * {@link #updateLayoutWithPreferences} whenever the small-icon setting changes.
+     * Width of a cell in pixels, resolved from resources rather than held as a dp constant so the
+     * television override in values-television/ applies. Only the width is kept: it is what box
+     * art has to be scaled down to fit, and the cell's own size comes from the layout.
      */
-    private int cellWidthPx, cellHeightPx;
+    private int cellWidthPx;
 
     /** Shared across every cell: all cells are the same size, so one outline serves them all. */
     private RoundedOutlineProvider outlineProvider;
@@ -66,7 +65,7 @@ public class AppGridAdapter extends BaseAdapter {
     private ArrayList<AppObject> allApps = new ArrayList<>();
 
     /** @param showHiddenApps include apps the user has hidden, for the settings-driven view */
-    public AppGridAdapter(Context context, PreferenceConfiguration prefs, ComputerDetails computer, String uniqueId, boolean showHiddenApps) {
+    public AppGridAdapter(Context context, ComputerDetails computer, String uniqueId, boolean showHiddenApps) {
         this.context = context;
         this.inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
 
@@ -74,7 +73,7 @@ public class AppGridAdapter extends BaseAdapter {
         this.uniqueId = uniqueId;
         this.showHiddenApps = showHiddenApps;
 
-        updateLayoutWithPreferences(context, prefs);
+        updateLayoutForConfiguration(context);
     }
 
     /**
@@ -109,17 +108,16 @@ public class AppGridAdapter extends BaseAdapter {
     }
 
     /**
-     * Re-reads the cell size and box art preferences, then rebuilds the asset loader around them.
+     * Re-resolves the cell geometry against the current configuration, then rebuilds the asset
+     * loader around it.
      *
-     * <p>There is one cell layout now, not one per setting: small icon mode changes the cell's
-     * measured size, which is applied per bind in {@link #populateView}, rather than swapping in a
-     * second copy of the same layout at a different scale.
+     * <p>There is one tile size and it is no longer a preference, so this only has to run when the
+     * resources behind it could have been re-resolved - at construction, and on a configuration
+     * change. The size the cells are actually laid out at comes from app_grid_item.xml; what is
+     * read here is the width the box art has to be decoded for.
      */
-    public void updateLayoutWithPreferences(Context context, PreferenceConfiguration prefs) {
-        cellWidthPx = context.getResources().getDimensionPixelSize(prefs.smallIconMode
-                ? R.dimen.app_tile_width_small : R.dimen.app_tile_width_large);
-        cellHeightPx = context.getResources().getDimensionPixelSize(prefs.smallIconMode
-                ? R.dimen.app_tile_height_small : R.dimen.app_tile_height_large);
+    public void updateLayoutForConfiguration(Context context) {
+        cellWidthPx = context.getResources().getDimensionPixelSize(R.dimen.app_tile_width);
         outlineProvider = new RoundedOutlineProvider(
                 context.getResources().getDimensionPixelSize(R.dimen.tile_corner_radius));
 
@@ -137,7 +135,7 @@ public class AppGridAdapter extends BaseAdapter {
                 new DiskAssetLoader(context),
                 BitmapFactory.decodeResource(context.getResources(), R.drawable.no_app_image));
 
-        // Cells already on screen were measured for the previous size
+        // Every bound cell holds a bitmap from the loader that was just thrown away
         notifyDataSetInvalidated();
     }
 
@@ -230,15 +228,6 @@ public class AppGridAdapter extends BaseAdapter {
      * @param overlayView badge drawn over the artwork, for the app that is currently running
      */
     private void populateView(View parentView, ImageView imgView, TextView txtView, ImageView overlayView, AppObject obj) {
-        // Cell size is a preference, not a layout, so it is applied here rather than by inflating
-        // a second copy of the layout at a different scale.
-        ViewGroup.LayoutParams params = parentView.getLayoutParams();
-        if (params != null && (params.width != cellWidthPx || params.height != cellHeightPx)) {
-            params.width = cellWidthPx;
-            params.height = cellHeightPx;
-            parentView.setLayoutParams(params);
-        }
-
         // Rounds the artwork and the label scrim along with the tile's own background. Set once
         // per view rather than per bind: this runs on every scroll, and both calls invalidate.
         if (parentView.getOutlineProvider() != outlineProvider) {

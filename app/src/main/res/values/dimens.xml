@@ -35,13 +35,13 @@
     <dimen name="host_tile_icon_size">72dp</dimen>
     <dimen name="host_tile_badge_size">40dp</dimen>
 
-    <!-- App tiles. The two widths are the small-icon preference, not a screen-size decision, so
-         they are chosen in code rather than by a resource qualifier - see BrowseActivity. The
-         3:4 art aspect is Steam's grid capsule ratio, which is what most box art arrives as. -->
-    <dimen name="app_tile_width_large">150dp</dimen>
-    <dimen name="app_tile_height_large">200dp</dimen>
-    <dimen name="app_tile_width_small">100dp</dimen>
-    <dimen name="app_tile_height_small">133dp</dimen>
+    <!-- App tiles. One size, applied straight from the layout: there used to be a second, larger
+         pair behind a "use small box art" preference, but the grid stretches its leftover row
+         width into the gaps between columns, so wider tiles fit fewer columns and spread the
+         remainder into visibly uneven gutters. The 3:4 art aspect is Steam's grid capsule ratio,
+         which is what most box art arrives as. -->
+    <dimen name="app_tile_width">100dp</dimen>
+    <dimen name="app_tile_height">133dp</dimen>
     <dimen name="app_tile_badge_size">44dp</dimen>
 
     <!-- Tile decoration. focus_lift is translationZ, so it is both the shadow depth and the

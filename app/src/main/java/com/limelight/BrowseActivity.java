@@ -669,11 +669,9 @@ public class BrowseActivity extends Activity {
             if (managerBinder != null) {
                 try {
                     appGridAdapter = new AppGridAdapter(this,
-                            PreferenceConfiguration.readPreferences(this),
                             computer, managerBinder.getUniqueId(), showHiddenApps);
                     appGridAdapter.updateHiddenApps(hiddenAppIds, true);
                     appGrid.setAdapter(appGridAdapter);
-                    applyGridCellSize();
 
                     populateAppGridWithCache(computer);
                     startApplistPoller(computer);
@@ -687,19 +685,6 @@ public class BrowseActivity extends Activity {
         }
 
         rebuild();
-    }
-
-    /**
-     * Sets the grid's column width from the small-icon preference.
-     *
-     * <p>Not a resource qualifier: small icon mode is something the user chooses, not something
-     * the device is. The two widths themselves are resources, so a television still gets bigger
-     * cells at either setting.
-     */
-    private void applyGridCellSize() {
-        boolean small = PreferenceConfiguration.readPreferences(this).smallIconMode;
-        appGrid.setColumnWidth(getResources().getDimensionPixelSize(
-                small ? R.dimen.app_tile_width_small : R.dimen.app_tile_width_large));
     }
 
     private void loadHiddenAppIds(String uuid) {
@@ -960,9 +945,8 @@ public class BrowseActivity extends Activity {
         // initializeViews() rebuilt the grid's views but not its adapter, which survives the
         // configuration change and still holds the loaded box art.
         if (appGridAdapter != null) {
-            appGridAdapter.updateLayoutWithPreferences(this, PreferenceConfiguration.readPreferences(this));
+            appGridAdapter.updateLayoutForConfiguration(this);
             appGrid.setAdapter(appGridAdapter);
-            applyGridCellSize();
             rebuild();
         }
     }

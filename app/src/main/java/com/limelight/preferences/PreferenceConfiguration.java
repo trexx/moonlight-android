@@ -2,7 +2,6 @@ package com.limelight.preferences;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.content.pm.PackageManager;
 import android.preference.PreferenceManager;
 
 import java.util.Locale;
@@ -63,7 +62,6 @@ public class PreferenceConfiguration {
     private static final String DEADZONE_PREF_STRING = "seekbar_deadzone";
     private static final String ENFORCE_DISPLAY_MODE_PREF_STRING = "checkbox_enforce_display_mode";
     private static final String RESUME_WITHOUT_CONFIRM_PREF_STRING = "checkbox_resume_without_confirm";
-    private static final String SMALL_ICONS_PREF_STRING = "checkbox_small_icon_mode";
     private static final String MULTI_CONTROLLER_PREF_STRING = "checkbox_multi_controller";
     static final String AUDIO_CONFIG_PREF_STRING = "list_audio_config";
     private static final String USB_DRIVER_PREF_SRING = "checkbox_usb_driver";
@@ -155,7 +153,7 @@ public class PreferenceConfiguration {
     public boolean resumeWithoutConfirm;
     public boolean stretchVideo, enableSops, playHostAudio, disableWarnings;
     public ScaleMode scaleMode;
-    public boolean smallIconMode, multiController, usbDriver, flipFaceButtons;
+    public boolean multiController, usbDriver, flipFaceButtons;
     public boolean enableHdr;
     public boolean enableIntraRefresh;
     public boolean enablePerfOverlay;
@@ -321,25 +319,6 @@ public class PreferenceConfiguration {
         }
 
         return (int)Math.round(resolutionFactor * frameRateFactor) * 1000;
-    }
-
-    /** @return true if the grid should default to small icons, based on screen size */
-    public static boolean getDefaultSmallMode(Context context) {
-        PackageManager manager = context.getPackageManager();
-        if (manager != null) {
-            // TVs shouldn't use small mode by default
-            if (manager.hasSystemFeature(PackageManager.FEATURE_TELEVISION)) {
-                return false;
-            }
-
-            // API 21 uses LEANBACK instead of TELEVISION
-            if (manager.hasSystemFeature(PackageManager.FEATURE_LEANBACK)) {
-                return false;
-            }
-        }
-
-        // Use small mode on anything smaller than a 7" tablet
-        return context.getResources().getConfiguration().smallestScreenWidthDp < 500;
     }
 
     /**
@@ -572,12 +551,6 @@ public class PreferenceConfiguration {
             config.fps = Integer.parseInt(prefs.getString(FPS_PREF_STRING, PreferenceConfiguration.DEFAULT_FPS));
         }
 
-        if (!prefs.contains(SMALL_ICONS_PREF_STRING)) {
-            // We need to write small icon mode's default to disk for the settings page to display
-            // the current state of the option properly
-            prefs.edit().putBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context)).apply();
-        }
-
         // This must happen after the preferences migration to ensure the preferences are populated
         config.bitrate = prefs.getInt(BITRATE_PREF_STRING, prefs.getInt(BITRATE_PREF_OLD_STRING, 0) * 1000);
         if (config.bitrate == 0) {
@@ -625,7 +598,6 @@ public class PreferenceConfiguration {
         };
         config.stretchVideo = config.scaleMode == ScaleMode.STRETCH;
         config.playHostAudio = prefs.getBoolean(HOST_AUDIO_PREF_STRING, DEFAULT_HOST_AUDIO);
-        config.smallIconMode = prefs.getBoolean(SMALL_ICONS_PREF_STRING, getDefaultSmallMode(context));
         config.multiController = prefs.getBoolean(MULTI_CONTROLLER_PREF_STRING, DEFAULT_MULTI_CONTROLLER);
         config.usbDriver = prefs.getBoolean(USB_DRIVER_PREF_SRING, DEFAULT_USB_DRIVER);
         config.enableHdr = prefs.getBoolean(ENABLE_HDR_PREF_STRING, DEFAULT_ENABLE_HDR);
