@@ -54,6 +54,22 @@ android {
         lintConfig = file('lint.xml')
     }
 
+    testOptions {
+        unitTests.all {
+            useJUnitPlatform()
+
+            // Gradle turns assertions on for test JVMs by default. Android disables them at
+            // runtime, so leaving them on would let a test fail on a constraint that never
+            // holds in production. Tests should see the same semantics the app does.
+            enableAssertions = false
+
+            testLogging {
+                events 'failed'
+                exceptionFormat = 'full'
+            }
+        }
+    }
+
     packaging {
         resources {
             // BouncyCastle ships these in every one of its jars
@@ -165,6 +181,12 @@ tasks.named('preBuild') {
 }
 
 dependencies {
+    // Unit tests run on the JVM, not a device. Nothing here reaches the APK: testImplementation
+    // is not on the app's runtime classpath and src/test is not compiled into any variant.
+    testImplementation platform('org.junit:junit-bom:5.14.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+
     // BouncyCastle, not the platform crypto: pairing needs certificate generation and signing
     // primitives that Android's providers do not expose.
     implementation 'org.bouncycastle:bcprov-jdk18on:1.85.2'
