@@ -140,17 +140,11 @@ public class GameMenu {
             actions.add(option.label());
         }
 
-        builder.setAdapter(actions, (dialog, which) -> {
-            String label = actions.getItem(which);
-            for (MenuOption option : options) {
-                if (!label.equals(option.label())) {
-                    continue;
-                }
-
-                run(option);
-                break;
-            }
-        });
+        // Dispatch on the row index, not on the label. The adapter is filled from options in
+        // order, so which indexes options directly. Matching by label instead made two rows that
+        // happen to share text both run the first one's action - which the Back rows and the
+        // repeated pad-audio state words below would otherwise do.
+        builder.setAdapter(actions, (dialog, which) -> run(options[which]));
 
         builder.show();
     }
