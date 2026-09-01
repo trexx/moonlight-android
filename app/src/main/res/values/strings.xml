@@ -114,6 +114,8 @@
     <string name="game_menu_toggle_performance_overlay">Toggle Performance Overlay</string>
     <string name="game_menu_toggle_mouse_on">Enable Controller Mouse Emulation</string>
     <string name="game_menu_toggle_mouse_off">Disable Controller Mouse Emulation</string>
+    <string name="game_menu_controllers">Controllers</string>
+    <string name="game_menu_back">Back</string>
     <string name="game_menu_pair_xbox_controller">Pair Xbox Wireless Controller</string>
     <string name="game_menu_pad_audio">Controller headphone audio</string>
     <string name="game_menu_pad_audio_entry">Controller %1$d: %2$s</string>
