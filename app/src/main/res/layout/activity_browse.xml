@@ -115,25 +115,28 @@
             android:clipToPadding="false"
             android:clipChildren="false">
 
-            <!-- columnWidth is overwritten in code from app_tile_width_large / _small, since
-                 which one applies is a user preference. drawSelectorOnTop puts the ring over the
-                 box art rather than behind it, where a stroke-only drawable would be invisible.
+            <!-- columnWidth is the tile width; there is one tile size, so nothing overrides it
+                 at runtime. drawSelectorOnTop puts the ring over the box art rather than behind
+                 it, where a stroke-only drawable would be invisible.
 
-                 stretchMode is spacingWidth, not spacingWidthUniform: uniform also pads the
-                 grid's outer edges, which indented the first column and left the app tiles out
-                 of line with the host band and both section labels above them. Spreading the
-                 leftover width between the columns only keeps column one flush with everything
-                 else in the content area. gravity=start for the same reason - a cell wider than
-                 its tile must not re-centre it. -->
+                 stretchMode is none, so the gutters are exactly horizontalSpacing and the width
+                 auto_fit could not use is left trailing at the right edge. Both of the stretching
+                 modes put that remainder between the tiles instead, which is a gap that grows the
+                 worse the row divides: spacingWidth left the tiles 92dp apart whenever the rail
+                 took focus and expanded, because the grid loses 172dp of width and drops from
+                 five columns to three. spacingWidthUniform is worse still - it pads the grid's
+                 outer edges too, indenting the first column out of line with the host band and
+                 both section labels above it. gravity=start for the same reason: the trailing
+                 remainder must sit at the end of the row, not be split around it. -->
             <GridView
                 android:id="@+id/appGrid"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:numColumns="auto_fit"
-                android:columnWidth="@dimen/app_tile_width_large"
+                android:columnWidth="@dimen/app_tile_width"
                 android:horizontalSpacing="@dimen/tile_spacing"
                 android:verticalSpacing="@dimen/tile_spacing"
-                android:stretchMode="spacingWidth"
+                android:stretchMode="none"
                 android:listSelector="@drawable/tile_focus_ring"
                 android:drawSelectorOnTop="true"
                 android:focusable="true"

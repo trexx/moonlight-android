@@ -2,10 +2,10 @@
 <!--
   One app in the grid. Box art fills the cell, with the name over a gradient at the foot.
 
-  Size is set in code, not here: app_tile_width_large / _small is a user preference (small icon
-  mode), and a preference cannot be a resource qualifier. The values here are the large defaults
-  so the layout editor and the first measure pass have something sane; AppGridAdapter overwrites
-  both on bind. See AppGridAdapter.updateLayoutWithPreferences.
+  Size comes from the resources directly, and nothing overrides it at runtime. It used to: a "use
+  small box art" preference chose between two pairs of dimens and stamped the chosen one onto every
+  cell on bind. There is one size now, so the grid's columnWidth in activity_browse.xml and the
+  width AppGridAdapter decodes box art for both read the same two dimens this does.
 
   No android:focusable and no android:stateListAnimator, unlike host_tile.xml. GridView has no
   setItemsCanFocus, so its cells never receive focus and neither attribute would ever fire; the
@@ -17,8 +17,8 @@
   fades it in over the placeholder rather than showing a spinner.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="@dimen/app_tile_width_large"
-    android:layout_height="@dimen/app_tile_height_large"
+    android:layout_width="@dimen/app_tile_width"
+    android:layout_height="@dimen/app_tile_height"
     android:background="@drawable/tile_background">
 
     <ImageView

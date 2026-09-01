@@ -32,10 +32,16 @@
     <dimen name="host_tile_icon_size">96dp</dimen>
     <dimen name="host_tile_badge_size">52dp</dimen>
 
-    <dimen name="app_tile_width_large">200dp</dimen>
-    <dimen name="app_tile_height_large">267dp</dimen>
-    <dimen name="app_tile_width_small">140dp</dimen>
-    <dimen name="app_tile_height_small">187dp</dimen>
+    <!-- Sized to leave the grid almost no remainder to spread. A television gives the grid
+         800dp of width, and GridView fits floor((800 + spacing) / (width + spacing)) columns and
+         then stretches whatever is left over into the gutters - so a width that does not divide
+         the row evenly shows up as gaps between tiles rather than as slack at the edge. Five
+         columns divide evenly at (800 - 4 x 14) / 5 = 148.8dp; 148dp is that rounded down, which
+         leaves the gutters 1dp over the nominal 14dp instead of the 11dp over they sat at before.
+         The numbers assume the collapsed rail, which is the only state they have to be right in:
+         the rail is expanded solely while it holds focus. -->
+    <dimen name="app_tile_width">148dp</dimen>
+    <dimen name="app_tile_height">197dp</dimen>
     <dimen name="app_tile_badge_size">56dp</dimen>
 
     <dimen name="tile_corner_radius">10dp</dimen>
