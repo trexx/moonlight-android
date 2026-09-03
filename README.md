@@ -344,7 +344,7 @@ ClassicOldSong's Artemis fork,
 
 | | Upstream base | This fork |
 |---|---|---|
-| Android Gradle Plugin | 8.5.1 | **9.3.1** |
+| Android Gradle Plugin | 8.5.1 | **9.4.0** |
 | Gradle | 8.7 | **9.6.1** |
 | compileSdk | 34 | **37** (Android 17) |
 | minSdk / targetSdk | 21 / 34 | **30 / 34** |
