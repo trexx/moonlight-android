@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Audio. See preferences.xml for how this screen is reached, and
+  PreferenceConfiguration.readPreferences() for how these keys are interpreted - defaults declared
+  here and defaults declared there must agree.
+
+  checkbox_host_audio is a host-side behaviour but it is an audio question, which is where anyone
+  looks for it.
+-->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <ListPreference
+        android:key="list_audio_config"
+        android:title="@string/title_audio_config_list"
+        android:summary="@string/summary_audio_config_list"
+        android:entries="@array/audio_config_names"
+        android:entryValues="@array/audio_config_values"
+        android:defaultValue="2" />
+    <CheckBoxPreference
+        android:key="checkbox_enable_aaudio"
+        android:title="@string/title_checkbox_enable_aaudio"
+        android:summary="@string/summary_checkbox_enable_aaudio"
+        android:defaultValue="false" />
+    <CheckBoxPreference
+        android:key="checkbox_continuous_audio"
+        android:title="@string/title_checkbox_continuous_audio"
+        android:summary="@string/summary_checkbox_continuous_audio"
+        android:defaultValue="false" />
+    <CheckBoxPreference
+        android:key="checkbox_host_audio"
+        android:title="@string/title_checkbox_host_audio"
+        android:summary="@string/summary_checkbox_host_audio"
+        android:defaultValue="false" />
+
+</PreferenceScreen>

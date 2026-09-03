@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Advanced and diagnostics: the experimental codec knobs, and what the client shows about its own
+  behaviour. Grouped out of the everyday path but deliberately not gated behind an expert toggle -
+  an option that cannot be found reads as an option that does not exist.
+
+  See PreferenceConfiguration.readPreferences() for how these keys are interpreted - defaults
+  declared here and defaults declared there must agree.
+-->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <PreferenceCategory android:title="@string/category_diagnostics"
+        android:key="category_diagnostics">
+        <CheckBoxPreference
+            android:key="checkbox_enable_perf_overlay"
+            android:title="@string/title_enable_perf_overlay"
+            android:summary="@string/summary_enable_perf_overlay"
+            android:defaultValue="false"/>
+        <CheckBoxPreference
+            android:key="checkbox_enable_post_stream_toast"
+            android:title="@string/title_enable_post_stream_toast"
+            android:summary="@string/summary_enable_post_stream_toast"
+            android:defaultValue="false"/>
+        <CheckBoxPreference
+            android:key="checkbox_disable_warnings"
+            android:title="@string/title_checkbox_disable_warnings"
+            android:summary="@string/summary_checkbox_disable_warnings"
+            android:defaultValue="false" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/category_experimental"
+        android:key="category_experimental">
+        <CheckBoxPreference
+            android:key="checkbox_enable_intra_refresh"
+            android:title="@string/title_enable_intra_refresh"
+            android:summary="@string/summary_enable_intra_refresh"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_full_range"
+            android:title="@string/title_full_range"
+            android:summary="@string/summary_full_range"
+            android:defaultValue="false" />
+    </PreferenceCategory>
+
+</PreferenceScreen>

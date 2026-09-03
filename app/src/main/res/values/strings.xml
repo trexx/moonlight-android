@@ -114,6 +114,8 @@
     <string name="game_menu_toggle_performance_overlay">Toggle Performance Overlay</string>
     <string name="game_menu_toggle_mouse_on">Enable Controller Mouse Emulation</string>
     <string name="game_menu_toggle_mouse_off">Disable Controller Mouse Emulation</string>
+    <string name="game_menu_controllers">Controllers</string>
+    <string name="game_menu_back">Back</string>
     <string name="game_menu_pair_xbox_controller">Pair Xbox Wireless Controller</string>
     <string name="game_menu_pad_audio">Controller headphone audio</string>
     <string name="game_menu_pad_audio_entry">Controller %1$d: %2$s</string>
@@ -146,6 +148,31 @@
     <!-- Add computer manually activity -->
     <string name="title_add_pc">Add PC Manually</string>
     <string name="title_settings">Settings</string>
+
+    <!-- Settings: the root screen's navigation rows. Each opens a preferences_*.xml sub-screen;
+         the summary says what is inside so the row is answerable without entering it. -->
+    <string name="screen_video">Video &amp; Display</string>
+    <string name="screen_video_summary">Resolution, frame rate, bitrate, codec and scaling</string>
+    <string name="screen_audio">Audio</string>
+    <string name="screen_audio_summary">Surround configuration and output</string>
+    <string name="screen_controllers">Controllers</string>
+    <string name="screen_controllers_summary">Deadzone, mouse emulation and the Xbox USB driver</string>
+    <string name="screen_mouse_keyboard">Mouse &amp; Keyboard</string>
+    <string name="screen_mouse_keyboard_summary">Touchscreen mouse mode and pointer buttons</string>
+    <string name="screen_host">Host &amp; Connection</string>
+    <string name="screen_host_summary">Game optimisation, encryption and client identity</string>
+    <string name="screen_advanced">Advanced &amp; Diagnostics</string>
+    <string name="screen_advanced_summary">Performance stats and experimental video options</string>
+
+    <!-- Settings: headings within a sub-screen. -->
+    <string name="category_video_stream">Stream</string>
+    <string name="category_video_display">Display</string>
+    <string name="category_controllers_general">General</string>
+    <string name="category_controllers_mouse">Mouse emulation</string>
+    <string name="category_controllers_usb">Xbox USB driver</string>
+    <string name="category_diagnostics">Diagnostics</string>
+    <string name="category_experimental">Experimental</string>
+
     <string name="msg_add_pc">Connecting to the PC…</string>
     <string name="addpc_fail">Unable to connect to the specified computer. Make sure the required ports are allowed through the firewall.</string>
     <string name="addpc_success">Successfully added computer</string>
@@ -154,7 +181,6 @@
     <string name="addpc_wrong_sitelocal">That address doesn\'t look right. You must use your router\'s public IP address for streaming over the Internet.</string>
 
     <!-- Preferences -->
-    <string name="category_basic_settings">Basic Settings</string>
     <string name="title_resolution_list">Video resolution</string>
     <string name="summary_resolution_list">Increase to improve image clarity. Decrease for better performance on lower end devices and slower networks.</string>
     <string name="title_native_res_dialog">Native Resolution Warning</string>
@@ -186,7 +212,6 @@
     <string name="fps_suffix_fps">FPS</string>
     <string name="title_native_fps_dialog">Native FPS Warning</string>
 
-    <string name="category_audio_settings">Audio Settings</string>
     <string name="title_audio_config_list">Surround sound configuration</string>
     <string name="summary_audio_config_list">Enable 5.1 or 7.1 surround sound for home-theater systems</string>
     <string name="title_checkbox_enable_aaudio">Low latency audio output (Experimental)</string>
@@ -195,7 +220,6 @@
     <string name="title_checkbox_continuous_audio">Keep the audio stream open during silence</string>
     <string name="summary_checkbox_continuous_audio">Ask the host to keep encoding while nothing is playing, instead of stopping until the next sound. Avoids a glitch on the first audio back and keeps underrun counts meaningful. Costs about 96 Kbps while the host is silent. Windows hosts only; others ignore it.</string>
 
-    <string name="category_gamepad_settings">Gamepad Settings</string>
     <string name="title_checkbox_multi_controller">Automatic gamepad presence detection</string>
     <string name="summary_checkbox_multi_controller">Unchecking this option forces a gamepad to always be present</string>
     <string name="title_seekbar_deadzone">Adjust analog stick deadzone</string>
@@ -221,20 +245,17 @@
     <string name="title_checkbox_gamepad_motion_sensors">Allow use of gamepad motion sensors</string>
     <string name="summary_checkbox_gamepad_motion_sensors">Enables supported hosts to request motion sensor data when emulating a gamepad with motion sensors. Disabling may slightly reduce power and network usage if motion sensors are not being used in game.</string>
 
-    <string name="category_input_settings">Input Settings</string>
     <string name="title_checkbox_absolute_mouse_mode">Remote desktop mouse mode</string>
     <string name="summary_checkbox_absolute_mouse_mode">This can make mouse acceleration behave more naturally for remote desktop usage, but it is incompatible with many games.</string>
     <string name="title_checkbox_mouse_nav_buttons">Enable back and forward mouse buttons</string>
     <string name="summary_checkbox_mouse_nav_buttons">Enabling this option may break right clicking on some buggy devices</string>
 
 
-    <string name="category_host_settings">Host Settings</string>
     <string name="title_checkbox_enable_sops">Optimize game settings</string>
     <string name="summary_checkbox_enable_sops">Allow GFE to modify game settings for optimal streaming</string>
     <string name="title_checkbox_host_audio">Play audio on PC</string>
     <string name="summary_checkbox_host_audio">Play audio from the computer and this device</string>
 
-    <string name="category_advanced_settings">Advanced Settings</string>
     <string name="title_unlock_fps">Unlock all possible frame rates</string>
     <string name="summary_unlock_fps">Streaming at 90 or 120 FPS may reduce latency on high-end devices but can cause lag or instability on devices that can\'t support it</string>
     <string name="title_checkbox_reduce_refresh_rate">Allow refresh rate reduction</string>
