@@ -100,7 +100,11 @@
     <string name="applist_menu_quit_and_start">Quit Current Game and Start</string>
     <string name="applist_menu_details">View Details</string>
     <string name="applist_menu_scut">Create Shortcut</string>
+    <!-- The hide row states what the app is now rather than carrying a check mark: the shared
+         menu row is a plain text row with no checkbox, and a word reads more easily at viewing
+         distance than a tick. Same convention as the in-stream menu's pad-audio rows. -->
     <string name="applist_menu_hide_app">Hide App</string>
+    <string name="applist_menu_show_app">Show App</string>
     <string name="applist_refresh_title">App List</string>
     <string name="applist_refresh_msg">Refreshing apps…</string>
     <string name="applist_quit_app">Quitting</string>

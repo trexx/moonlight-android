@@ -110,6 +110,25 @@ Beyond navigation, the split bounds what each screen costs to open: the decoder 
 queries and the display mode enumeration ran on every entry to settings and now run only
 when Video & Display is opened.
 
+### One menu style everywhere
+
+The host menu and the app menu on the browse screen were framework context menus. Android
+renders those two different ways — a popup anchored to the press when the gesture carried
+coordinates, a centred dialog when it did not — so which one you got depended on the widget
+under your thumb and on whether you had used the d-pad, a mouse or a touchscreen. The two
+menus on the same screen frequently disagreed, and neither matched the in-stream menu, which
+had already been moved onto rows sized to be read from a sofa rather than held in a hand.
+
+All three now go through one presenter and one row layout. There is nothing left to choose
+between forms, so no input device can produce a different one, and the rows are the same
+size wherever they appear.
+
+Two visible consequences. The "Hide App" row was a checkbox and is now a row that says
+either **Hide App** or **Show App** — a word carries further across a room than a tick, and
+the shared row has no checkbox to draw. And which rows each menu offers is now decided in
+`BrowseMenuLayout`, away from the Android widget, which is the first time that logic has had
+tests.
+
 ### Broader controller compatibility
 
 The bundled SDL controller database has been refreshed from Valve/SDL upstream, growing

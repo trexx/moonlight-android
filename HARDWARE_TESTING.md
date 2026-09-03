@@ -2121,6 +2121,58 @@ dependency edges, that no `<PreferenceScreen>` is nested — but none of the pre
 
 ---
 
+## 24. Browse screen menus
+
+The host menu and the app menu moved off the framework `ContextMenu` onto `MenuDialog`, the
+same presenter the in-stream menu uses. The point of the change is that the framework chose
+between an anchored popup and a centred dialog depending on whether the gesture carried
+coordinates — so the *input device* decided what the menu looked like. `BrowseMenuLayoutTest`
+covers which rows appear; none of it covers presentation, and the popup/dialog split is
+precisely what a JVM test cannot see.
+
+**Every check below must name the input device it was done with.** That is the variable the
+old behaviour turned on.
+
+- [ ] **The same dialog however it is raised.** On each box, open the host menu five ways —
+      d-pad long-press on a tile, remote select on an *offline* host, mouse right-click,
+      mouse long-press, and touch on the phone/tablet environment — and confirm all five give
+      a centred dialog of identical size and position. Then do the same on an app tile. Any
+      one of them appearing as a small list anchored beside the tile means a framework
+      context-menu path is still reachable.
+- [ ] **Host and app menus match each other.** Open one of each in succession and compare row
+      height, text size and left inset. They now share `menu_item.xml`; if they differ, one is
+      not using it.
+- [ ] **They match the in-stream menu too.** Compare against the menu opened with Back during
+      a stream. Same rows, same type. Note that the stream runs under `StreamTheme` and browse
+      under `AppTheme`, so the dialog *frame* may legitimately differ; the rows must not.
+- [ ] **Rows are legible and hittable from the sofa.** This is the reason the layout exists.
+      Check at real viewing distance on the **Shield** and the **Homatics** separately — the
+      `values-television` override takes `rail_item_height` from 56dp to 64dp, which is the
+      row's minimum height, while the padding either side of the text is not scaled at all.
+- [ ] **The offline icon still appears.** A host that is not answering shows
+      `ic_pc_offline` beside the menu title. This moved from `ContextMenu.setHeaderIcon` to
+      `AlertDialog.Builder.setIcon`, which is a different code path in the framework.
+- [ ] **Hide and Show.** Hide an app, reopen its menu, confirm the row now reads **Show App**,
+      and unhide it. Then check the running app: its menu must offer neither row unless it was
+      already hidden, in which case **Show App** is still there. This replaced a checkable
+      menu item, so the state is now carried by the wording alone.
+- [ ] **Create Shortcut only with box art.** Open an app's menu the moment the grid appears,
+      before artwork has loaded — the row must be absent — then again once it has. The bitmap
+      is read from the cell, and the row exists only when there is one.
+- [ ] **Polling does not rebuild the band under an open menu.** Open a host menu and leave it
+      for at least one poll interval. The host band must not redraw beneath it. Then dismiss
+      it **by choosing a row**, and separately **with Back**, and confirm hosts start updating
+      again both times — this used to hang off `onContextMenuClosed` and now hangs off the
+      dialog's dismiss listener, which is the case a cancel-only listener would have missed.
+- [ ] **Quit from the app menu still suspends grid updates.** Quit a running app and watch the
+      grid: it must not flicker back to showing the app as running before the poll catches up.
+- [ ] **The in-stream menu's Back still walks up one level.** Open it, enter **Controllers**,
+      press hardware Back — it must return to the top level of the menu, not to the stream.
+      The submenu-reopening listener moved into `MenuDialog`, so this is the regression check
+      for that move.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
