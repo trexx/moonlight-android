@@ -127,6 +127,18 @@ public class GameMenu {
     }
 
     private void showMenuDialog(String title, MenuOption[] options) {
+        showMenuDialog(title, options, null);
+    }
+
+    /**
+     * Shows one level of the menu.
+     *
+     * <p>{@code onBack} reopens the level above, and is what hardware Back runs. Each level is its
+     * own AlertDialog with no relationship to the one that opened it, so without this a submenu's
+     * Back dropped straight to the stream - further out than the user asked to go. The root passes
+     * null, where dismissing really does mean returning to the game.
+     */
+    private void showMenuDialog(String title, MenuOption[] options, Runnable onBack) {
         AlertDialog.Builder builder = new AlertDialog.Builder(game);
         builder.setTitle(title);
 
@@ -140,17 +152,17 @@ public class GameMenu {
             actions.add(option.label());
         }
 
-        builder.setAdapter(actions, (dialog, which) -> {
-            String label = actions.getItem(which);
-            for (MenuOption option : options) {
-                if (!label.equals(option.label())) {
-                    continue;
-                }
+        // Dispatch on the row index, not on the label. The adapter is filled from options in
+        // order, so which indexes options directly. Matching by label instead made two rows that
+        // happen to share text both run the first one's action - which the Back rows and the
+        // repeated pad-audio state words below would otherwise do.
+        builder.setAdapter(actions, (dialog, which) -> run(options[which]));
 
-                run(option);
-                break;
-            }
-        });
+        // Fires on hardware Back and on a touch outside, but not on a row selection, which
+        // dismisses rather than cancels.
+        if (onBack != null) {
+            builder.setOnCancelListener(dialog -> onBack.run());
+        }
 
         builder.show();
     }
@@ -221,10 +233,10 @@ public class GameMenu {
                     () -> showPadAudioVolumeMenu()));
         }
 
-        options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
+        options.add(new MenuOption(getString(R.string.game_menu_back), this::showControllerMenu));
 
         showMenuDialog(getString(R.string.game_menu_pad_audio),
-                options.toArray(new MenuOption[0]));
+                options.toArray(new MenuOption[0]), this::showControllerMenu);
     }
 
     /**
@@ -252,10 +264,10 @@ public class GameMenu {
 
         options.add(new MenuOption(getString(R.string.game_menu_pad_audio_volume_mute),
                 () -> game.setPadAudioVolume(0)));
-        options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
+        options.add(new MenuOption(getString(R.string.game_menu_back), this::showPadAudioMenu));
 
         showMenuDialog(getString(R.string.game_menu_pad_audio_volume_title),
-                options.toArray(new MenuOption[0]));
+                options.toArray(new MenuOption[0]), this::showPadAudioMenu);
     }
 
     private void showSpecialKeysMenu() {
@@ -282,41 +294,86 @@ public class GameMenu {
                         () -> sendKeys(new short[]{KeyboardTranslator.VK_LWIN, KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_LEFT})),
                 new MenuOption(getString(R.string.game_menu_send_keys_shift_tab),
                         () -> sendKeys(new short[]{KeyboardTranslator.VK_LSHIFT, KeyboardTranslator.VK_TAB})),
-                new MenuOption(getString(R.string.game_menu_cancel), null),
-        });
+                new MenuOption(getString(R.string.game_menu_back), this::showMenu),
+        }, this::showMenu);
+    }
+
+    /**
+     * The session facts {@link GameMenuLayout} decides the menu's shape from.
+     *
+     * <p>Read afresh each time a level is built rather than cached: a pad can be plugged in, or an
+     * adapter claimed, while the menu is open.
+     */
+    private GameMenuLayout.State layoutState() {
+        return new GameMenuLayout.State(
+                device != null,
+                game.hasXboxWirelessDongle(),
+                !game.getGipControllers().isEmpty(),
+                game.getPadAudioSink().isFormatSupported());
+    }
+
+    /**
+     * Builds one level from the rows {@link GameMenuLayout} chose.
+     *
+     * <p>The mapping is here rather than in GameMenuLayout because every arm of it needs a Context
+     * for its label or a Game for its action.
+     */
+    private MenuOption[] build(List<GameMenuLayout.Row> rows) {
+        List<MenuOption> options = new ArrayList<>();
+
+        for (GameMenuLayout.Row row : rows) {
+            switch (row) {
+                case KEYBOARD -> options.add(new MenuOption(
+                        getString(R.string.game_menu_toggle_keyboard), true,
+                        () -> game.toggleKeyboard()));
+                case SEND_KEYS -> options.add(new MenuOption(
+                        getString(R.string.game_menu_send_keys), () -> showSpecialKeysMenu()));
+                case CONTROLLERS -> options.add(new MenuOption(
+                        getString(R.string.game_menu_controllers), () -> showControllerMenu()));
+                case PERF_OVERLAY -> options.add(new MenuOption(
+                        getString(R.string.game_menu_toggle_performance_overlay),
+                        () -> game.togglePerformanceOverlay()));
+                case DISCONNECT -> options.add(new MenuOption(
+                        getString(R.string.game_menu_disconnect), () -> game.disconnect()));
+                case CANCEL -> options.add(new MenuOption(
+                        getString(R.string.game_menu_cancel), null));
+
+                // Supplied by the device itself, because what it offers - the mouse emulation
+                // toggle, whose label says which way it will go - is the pad's own state.
+                case MOUSE_EMULATION -> options.addAll(device.getGameMenuOptions());
+
+                // Stands in for the adapter's physical pairing button, which is dead on some units.
+                case PAIR_XBOX -> options.add(new MenuOption(
+                        getString(R.string.game_menu_pair_xbox_controller),
+                        () -> game.startDonglePairing()));
+
+                // Not gated on the adapter: a cabled pad has a headphone jack too, and checking for
+                // the adapter hid this entirely when the only pad was on a cable.
+                case PAD_AUDIO -> options.add(new MenuOption(
+                        getString(R.string.game_menu_pad_audio), () -> showPadAudioMenu()));
+
+                case BACK -> options.add(new MenuOption(
+                        getString(R.string.game_menu_back), () -> showMenu()));
+            }
+        }
+
+        return options.toArray(new MenuOption[0]);
+    }
+
+    /**
+     * The controller options, which are three of the four things this fork added to the menu.
+     *
+     * <p>They are a level down rather than at the top because the menu is shown mid-game, where
+     * every row is between the user and Disconnect. The row that opens this is not offered at all
+     * when none of its contents applies - see {@link GameMenuLayout#hasControllerOptions}.
+     */
+    private void showControllerMenu() {
+        showMenuDialog(getString(R.string.game_menu_controllers),
+                build(GameMenuLayout.controllerRows(layoutState())), this::showMenu);
     }
 
     private void showMenu() {
-        List<MenuOption> options = new ArrayList<>();
-
-        options.add(new MenuOption(getString(R.string.game_menu_toggle_keyboard), true,
-                () -> game.toggleKeyboard()));
-
-        if (device != null) {
-            options.addAll(device.getGameMenuOptions());
-        }
-
-        // Only worth offering when an adapter is actually claimed and running. It stands in for
-        // the adapter's physical pairing button, which is dead on some units.
-        if (game.hasXboxWirelessDongle()) {
-            options.add(new MenuOption(getString(R.string.game_menu_pair_xbox_controller),
-                    () -> game.startDonglePairing()));
-        }
-
-        // Outside the adapter check: a cabled pad has a headphone jack too, and gating this on the
-        // adapter hid the entry entirely when the only pad was on a cable. Still requires a pad to
-        // actually be present and the stream's audio to be a format one can take - otherwise the
-        // submenu would be a list whose every entry refuses.
-        if (!game.getGipControllers().isEmpty() && game.getPadAudioSink().isFormatSupported()) {
-            options.add(new MenuOption(getString(R.string.game_menu_pad_audio),
-                    () -> showPadAudioMenu()));
-        }
-
-        options.add(new MenuOption(getString(R.string.game_menu_toggle_performance_overlay), () -> game.togglePerformanceOverlay()));
-        options.add(new MenuOption(getString(R.string.game_menu_send_keys), () -> showSpecialKeysMenu()));
-        options.add(new MenuOption(getString(R.string.game_menu_disconnect), () -> game.disconnect()));
-        options.add(new MenuOption(getString(R.string.game_menu_cancel), null));
-
-        showMenuDialog(getString(R.string.game_menu_title), options.toArray(new MenuOption[0]));
+        showMenuDialog(getString(R.string.game_menu_title),
+                build(GameMenuLayout.rootRows(layoutState())));
     }
 }

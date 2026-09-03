@@ -35,7 +35,21 @@ feature checks.
 - [X] **Cancel** dismisses and returns to the stream with input still working.
 - [ ] **Holding Start on a controller opens the menu.** (This replaced the direct mouse
       emulation toggle.)
-- [ ] **Mouse emulation toggle inside the menu** still works and still shows its toast.
+- [ ] **Mouse emulation toggle inside the menu** still works and still shows its toast. It now
+      lives one level down, under **Controllers**, and still appears only when the menu was
+      opened by holding Start — opened with Back there is no device to supply it.
+- [ ] **The Controllers row is absent** when the menu is opened with Back on a box with no pad
+      attached and no adapter claimed. Offering a row that leads to a screen holding only
+      "Back" is what `GameMenuLayout.hasControllerOptions()` exists to prevent; the JVM test
+      pins the decision, but only hardware shows the row.
+- [ ] **Back walks up one level at a time.** From Controllers → Headphone audio → volume,
+      hardware Back should reach the root in three presses rather than dropping to the stream
+      on the first. Check the **Back row** and the **hardware button** separately: the row
+      runs the option, the button runs the dialog's cancel listener, and they are different
+      code paths.
+- [ ] **No menu row runs the wrong action.** Dispatch was by label text and is now by row
+      index; the Back rows are the first case of two rows sharing a label. Select each Back
+      row and confirm it goes up rather than running the first matching row's action.
 - [X] **Toggle Performance Overlay** works mid-stream, and works **repeatedly** — on, off,
       on again. This is the whole point of the feature.
 - [X] With the **performance overlay setting enabled**, the overlay is visible from stream
@@ -2072,7 +2086,42 @@ next created — the next stream — not on re-plugging a pad. That is the exist
 
 ---
 
-## 23. H.264 `level_idc` patching on the Homatics
+## 23. Settings sub-screen navigation
+
+Settings went from one scrolling list to a root of six navigation rows over one
+`preferences_*.xml` each. `SettingsTreeTest` covers the resource shape — the key set, the
+dependency edges, that no `<PreferenceScreen>` is nested — but none of the presentation.
+
+- [ ] **Every screen opens and comes back.** Enter and leave all six with the remote; Back
+      returns to the root, Back again leaves settings. Check on **both boxes**: the Shield is
+      API 30 and the Homatics API 34, and `enableOnBackInvokedCallback` is now off for this
+      activity so that one `onBackPressed()` serves both. If the Homatics leaves settings
+      from a sub-screen in one press, that attribute did not take.
+- [ ] **No screen opens as a centred dialog.** That would mean a nested `<PreferenceScreen>`
+      slipped in where a plain `<Preference>` was intended — the framework shows those in a
+      `Dialog` built from the theme, which never receives the activity's overscan padding.
+- [ ] **The heading names the screen you are on.** `AppTheme` sets `windowNoTitle`, so this is
+      a `TextView` in the layout rather than an action bar; if it is blank or stale the title
+      is not being set on navigation.
+- [ ] **Controllers opens cleanly with no pad and no USB host.** This is the dependency-crash
+      path: all four `android:dependency` edges live in `preferences_controllers.xml`, and a
+      dependent whose target is missing throws `IllegalStateException` as the screen binds.
+      The four USB rows and their category should simply be absent.
+- [ ] **Video & Display on a non-HDR10 panel** omits the HDR row, and toggling **Unlock all
+      possible frame rates** rebuilds the frame rate list *in place* — the screen should stay
+      on Video rather than dropping to the root.
+- [ ] **Settings survive the move.** Several preferences changed file, which does not change
+      their key but is exactly the change that would lose one if a key were mistyped. Set a
+      non-default value on **Play audio on PC** (moved Host → Audio) and on **Stream
+      encryption** (Advanced → Host), restart the app, and confirm both are retained.
+- [ ] **Opening settings is not slower.** The decoder capability queries moved behind Video &
+      Display, so the root should appear at least as fast as before, and any delay should now
+      be on entering Video rather than on opening settings. Worth a look on the Homatics,
+      which is the slower of the two to enumerate decoders.
+
+---
+
+## 24. H.264 `level_idc` patching on the Homatics
 
 Upstream disabled the SPS `level_idc` and constraint-flag rewrites on Oreo and later in
 `68adf9ec` (2026-09-01). **That change is deliberately not taken here.** This section records why,
@@ -2202,4 +2251,6 @@ other Amlogic buffering notes.
 | §19 | Both target devices; the survey differs per SoC |
 | §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |
 | §22 LED presets | Any adapter pad; a second pad to check one connecting mid-stream, and a cabled pad for the wired path |
-| §23 | The Homatics on a 1080p60 display, streaming H.264 — the Shield keeps RFI and never runs the patch |
+| §23 back navigation | Both target devices — the API 30/34 split is the point of the check |
+| §23 Controllers screen | A device with no USB host support, or a build run with the feature absent, for the dependency-crash path |
+| §24 | The Homatics on a 1080p60 display, streaming H.264 — the Shield keeps RFI and never runs the patch |

@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Controllers. See preferences.xml for how this screen is reached, and
+  PreferenceConfiguration.readPreferences() for how these keys are interpreted - defaults declared
+  here and defaults declared there must agree.
+
+  Every android:dependency in the tree lives in this file, and must stay here. Preference
+  dependencies resolve through PreferenceManager.findPreference(), which searches only the screen
+  currently set on the manager, and registerDependency() throws IllegalStateException when the
+  target is missing - so moving one half of a pair to another preferences_*.xml crashes this
+  screen as it binds. SettingsTreeTest enforces it.
+-->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:seekbar="http://schemas.moonlight-stream.com/apk/res/seekbar">
+
+    <PreferenceCategory android:title="@string/category_controllers_general"
+        android:key="category_controllers_general">
+        <!-- Percentage, and the sign is meaningful: positive values are a stick deadzone, negative
+             values are deadzone *compensation* for worn sticks that no longer reach full
+             deflection. See ControllerHandler.handleDeadZone(). -->
+        <com.limelight.preferences.SeekBarPreference
+            android:key="seekbar_deadzone"
+            android:defaultValue="7"
+            seekbar:min="-20"
+            android:max="20"
+            android:summary="@string/summary_seekbar_deadzone"
+            android:text="@string/suffix_seekbar_deadzone"
+            android:title="@string/title_seekbar_deadzone"/>
+        <CheckBoxPreference
+            android:key="checkbox_multi_controller"
+            android:title="@string/title_checkbox_multi_controller"
+            android:summary="@string/summary_checkbox_multi_controller"
+            android:defaultValue="true" />
+        <CheckBoxPreference
+            android:key="checkbox_flip_face_buttons"
+            android:title="@string/title_checkbox_flip_face_buttons"
+            android:summary="@string/summary_checkbox_flip_face_buttons"
+            android:defaultValue="false" />
+        <!-- Removed below API 31, which is the Shield. Motion, LED and battery extensions all
+             arrived in S. -->
+        <CheckBoxPreference
+            android:key="checkbox_gamepad_motion_sensors"
+            android:title="@string/title_checkbox_gamepad_motion_sensors"
+            android:summary="@string/summary_checkbox_gamepad_motion_sensors"
+            android:defaultValue="true" />
+    </PreferenceCategory>
+
+    <PreferenceCategory android:title="@string/category_controllers_mouse"
+        android:key="category_controllers_mouse">
+        <CheckBoxPreference
+            android:key="checkbox_mouse_emulation"
+            android:title="@string/title_checkbox_mouse_emulation"
+            android:summary="@string/summary_checkbox_mouse_emulation"
+            android:defaultValue="true" />
+        <ListPreference
+            android:key="analog_scrolling"
+            android:dependency="checkbox_mouse_emulation"
+            android:title="@string/title_analog_scrolling"
+            android:summary="@string/summary_analog_scrolling"
+            android:entries="@array/analog_scrolling_names"
+            android:entryValues="@array/analog_scrolling_values"
+            android:defaultValue="right" />
+        <CheckBoxPreference
+            android:key="checkbox_gamepad_touchpad_as_mouse"
+            android:title="@string/title_checkbox_gamepad_touchpad_as_mouse"
+            android:summary="@string/summary_checkbox_gamepad_touchpad_as_mouse"
+            android:defaultValue="false" />
+    </PreferenceCategory>
+
+    <!-- The whole category is removed at runtime on a device without USB host support. -->
+    <PreferenceCategory android:title="@string/category_controllers_usb"
+        android:key="category_controllers_usb">
+        <CheckBoxPreference
+            android:key="checkbox_usb_driver"
+            android:title="@string/title_checkbox_xb1_driver"
+            android:summary="@string/summary_checkbox_xb1_driver"
+            android:defaultValue="true" />
+        <CheckBoxPreference
+            android:key="checkbox_usb_bind_all"
+            android:dependency="checkbox_usb_driver"
+            android:title="@string/title_checkbox_usb_bind_all"
+            android:summary="@string/summary_checkbox_usb_bind_all"
+            android:defaultValue="false" />
+        <CheckBoxPreference
+            android:key="checkbox_wired_pad_audio"
+            android:dependency="checkbox_usb_bind_all"
+            android:title="@string/title_checkbox_wired_pad_audio"
+            android:summary="@string/summary_checkbox_wired_pad_audio"
+            android:defaultValue="false" />
+        <!-- Depends on the USB driver rather than on bind-all, because the wireless adapter is
+             claimed whatever bind-all says - Android has no driver for it - and its pads take the
+             LED command too. With the USB driver off nothing here is ever sent, which is why the
+             dependency exists at all rather than the setting silently doing nothing. -->
+        <ListPreference
+            android:key="list_guide_button_led"
+            android:dependency="checkbox_usb_driver"
+            android:title="@string/title_guide_button_led"
+            android:entries="@array/guide_button_led_names"
+            android:entryValues="@array/guide_button_led_values"
+            android:summary="%s"
+            android:defaultValue="normal" />
+    </PreferenceCategory>
+
+</PreferenceScreen>

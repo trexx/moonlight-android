@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The host and the connection to it. See PreferenceConfiguration.readPreferences() for how these
+  keys are interpreted - defaults declared here and defaults declared there must agree.
+-->
+<PreferenceScreen xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <CheckBoxPreference
+        android:key="checkbox_enable_sops"
+        android:title="@string/title_checkbox_enable_sops"
+        android:summary="@string/summary_checkbox_enable_sops"
+        android:defaultValue="true" />
+    <CheckBoxPreference
+        android:key="checkbox_resume_without_confirm"
+        android:title="@string/title_checkbox_resume_without_confirm"
+        android:summary="@string/summary_checkbox_resume_without_confirm"
+        android:defaultValue="false" />
+    <!-- Maps to ENCFLG_* via PreferenceConfiguration.getEncryptionFlagsValue(). The client
+         opts in; SdpGenerator enables encryption if either side asks, so "none" is a
+         request rather than a guarantee. The summary gains a warning at runtime on a device
+         without AES acceleration. -->
+    <ListPreference
+        android:key="list_encryption"
+        android:title="@string/title_encryption"
+        android:entries="@array/encryption_names"
+        android:entryValues="@array/encryption_values"
+        android:summary="@string/summary_encryption"
+        android:defaultValue="audio" />
+    <!-- Defaults to off, which keeps the shared client ID every Moonlight client reports.
+         That is what lets a session started on one device be quit from another, so turning
+         this on is a real trade rather than a strict improvement. -->
+    <CheckBoxPreference
+        android:key="checkbox_send_real_client_id"
+        android:title="@string/title_send_real_client_id"
+        android:summary="@string/summary_send_real_client_id"
+        android:defaultValue="false"/>
+
+</PreferenceScreen>

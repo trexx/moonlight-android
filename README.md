@@ -46,14 +46,22 @@ changing a setting and reconnecting can be done in place.
 
 Open it with the **back button** or by **holding Start** on a controller. It offers:
 
-* **Toggle the performance overlay mid-stream.** Previously the overlay was fixed at
-  connection time by a settings checkbox, which meant that diagnosing a stuttering session
-  destroyed the very conditions you were trying to observe.
-* **Toggle the on-screen keyboard**, and controller mouse emulation.
+* **Toggle the on-screen keyboard.**
 * **Send special keys** the client would otherwise swallow — ESC, F11, Alt+Enter, Alt+F4,
   Ctrl+V, Ctrl+Shift+Esc (Task Manager), Win, Win+D, Win+G (Game Bar), Win+Shift+Left, and
   Shift+Tab (Steam overlay).
+* **Controllers**, holding controller mouse emulation, Xbox wireless pairing and controller
+  headphone audio. The row is absent when none of those applies — a menu opened with the
+  back button on a box with no pad attached has none of them.
+* **Toggle the performance overlay mid-stream.** Previously the overlay was fixed at
+  connection time by a settings checkbox, which meant that diagnosing a stuttering session
+  destroyed the very conditions you were trying to observe.
 * **Disconnect.**
+
+The controller options sit one level down because this menu is shown *during* a stream,
+where every row is something to scroll past on the way to what you opened it for. Submenus
+return to the level above rather than to the stream, on both the Back row and the hardware
+back button.
 
 Two deliberate behaviour changes come with this: **the back button no longer ends the
 stream directly** — Disconnect is now a menu entry — and **holding Start opens the menu**
@@ -80,6 +88,27 @@ where every other keyboard path in the app sends `(0x80 << 8) | vk`. Sunshine ma
 high byte off (`src/input.cpp`, `packet->keyCode & 0x00FF`) so the original works in
 practice, but the menu now encodes its packets identically to the physical keyboard path
 rather than relying on the host being lenient.
+
+### Settings organised into screens
+
+Settings was one scrolling list of 37 preferences in six categories, and 13 of them had
+collected in "Advanced Settings" — stream encryption, codec choice, HDR, display-mode
+forcing, the perf overlay, the client ID — because it was where anything without an obvious
+home went. On a remote that put the last row a long d-pad hold from the first.
+
+It is now six screens, each one press from the root: **Video & Display**, **Audio**,
+**Controllers**, **Mouse & Keyboard**, **Host & Connection**, and **Advanced &
+Diagnostics**. The options that had drifted into Advanced moved to where they are actually
+looked for — the codec, HDR and the display-mode toggles to Video, encryption and the client
+ID to Host, "Play audio on PC" to Audio. What remains under Advanced is the two experimental
+codec knobs and the three diagnostics, grouped out of the everyday path but deliberately not
+hidden behind an expert toggle.
+
+No preference key changed, so nothing you have set is lost.
+
+Beyond navigation, the split bounds what each screen costs to open: the decoder capability
+queries and the display mode enumeration ran on every entry to settings and now run only
+when Video & Display is opened.
 
 ### Broader controller compatibility
 
@@ -198,7 +227,7 @@ the host cannot override it downwards — `moonlight-common-c`'s SDP generator e
 encryption if *either* side asks — so a host deliberately configured for no encryption on the
 LAN still got encrypted audio.
 
-**Stream encryption** in advanced settings now makes that choice explicit: **None**, **Audio
+**Stream encryption** in Host & Connection settings now makes that choice explicit: **None**, **Audio
 only** (the default, matching upstream's baseline) or **Audio and video**. On a device
 without hardware AES the setting warns that video encryption will run in software, but stays
 selectable. What the client asks for is still only half the negotiation: a host that requires
@@ -250,7 +279,7 @@ automatically and now is not unless asked for.
   120 consecutive frames had been dropped — 2 seconds at 60 FPS, 4 at 30. The keyframe is now
   requested on the next fully received frame, so recovery costs a frame interval plus a round
   trip. Carried from upstream [#147](https://github.com/moonlight-stream/moonlight-common-c/pull/147).
-* **Intra refresh can be requested** (off by default, under video settings). The host encodes a
+* **Intra refresh can be requested** (off by default, under Advanced & Diagnostics). The host encodes a
   rolling refresh wave instead of periodic keyframes, so recovery is spread over many frames
   rather than arriving as one bitrate spike and hitch. Sunshine has supported this since
   December 2024 but no client asked for it; only NVENC honours it, and it can shimmer on static
@@ -274,7 +303,7 @@ automatically and now is not unless asked for.
   swallows is logged rather than reported as an offline host.
 * **Optional per-client identity.** Every Moonlight client reports the same hardcoded client ID,
   which is what lets a session started on one device be quit from another. **Send a unique client
-  ID** in advanced settings reports this install's own ID instead, so a host such as Sunshine can
+  ID** in Host & Connection settings reports this install's own ID instead, so a host such as Sunshine can
   manage each client separately — at the cost of that shared control. Off by default, and the
   per-install ID is stored either way, so enabling it later does not look like a new client.
 * **A malformed app list no longer crashes the app.** The `applist` parser assumed every text node
