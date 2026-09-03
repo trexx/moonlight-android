@@ -2072,6 +2072,108 @@ next created — the next stream — not on re-plugging a pad. That is the exist
 
 ---
 
+## 23. H.264 `level_idc` patching on the Homatics
+
+Upstream disabled the SPS `level_idc` and constraint-flag rewrites on Oreo and later in
+`68adf9ec` (2026-09-01). **That change is deliberately not taken here.** This section records why,
+and the one measurement that would settle whether it is safe to take.
+
+The constraint-flag half is provably dead in this fork and needs no test:
+`doProfileSpecificSpsPatching()` only sets flags 4 and 5 when `constrainedHighProfile` is true,
+and `MediaCodecHelper.constrainedHighProfilePrefixes` contains exactly one entry, `omx.intel` —
+an x86 decoder, in a build whose `abiFilters` are `arm64-v8a` and `armeabi-v7a`. It cannot fire.
+
+The `level_idc` half is the live one, and it is narrower than it looks. Three conditions must all
+hold before it runs:
+
+1. **H.264 only.** The block sits inside
+   `decodeUnitType == BUFFER_TYPE_SPS && (videoFormat & VIDEO_FORMAT_MASK_H264)`. HEVC and AV1
+   never reach it.
+2. **RFI off.** It is gated on `!refFrameInvalidationActive`.
+3. **1080p60 or below**, for the branch that matters — above 1920x1080 the code falls through to
+   *"Leave the profile alone (currently 5.0)"* and patches nothing.
+
+**Which box that selects is not obvious, and it is the opposite of the usual answer.** The Shield
+never runs this: RFI is active there for both codecs (measured 2026-08-10, see §15.2), so the gate
+stays shut whatever the resolution. The Homatics does run it, because every Amlogic RFI enablement
+in `MediaCodecHelper` sits inside the Amazon Fire OS block —
+`hasSystemFeature("amazon.hardware.fire_tv") || MANUFACTURER == "Amazon"`. The Homatics is neither,
+so `isAmlogicRfiSafe` stays `false`, `c2.amlogic` never enters `refFrameInvalidationHevcPrefixes`,
+and Amlogic is never added to `refFrameInvalidationAvcPrefixes` at all. `c2.amlogic` *is* in
+`amlogicDecoderPrefixes`, so even advertised low-latency support takes the
+*"Not enabling HEVC RFI on unconfirmed Amlogic decoder"* path.
+
+So the exposure is exactly: **Homatics, H.264, 1080p60 or below.** On a 1080p60 panel that is the
+`sps.levelIdc = 42` branch.
+
+What the hint buys, at 1080p (8160 macroblocks):
+
+| Level | `MaxDpbMbs` | Permitted DPB frames |
+|---|---:|---:|
+| 4.2 (patched) | 34,816 | 4 |
+| 5.0 (unpatched) | 110,400 | 13 |
+
+That is a *ceiling*, not a request, which is why the change is probably harmless — and why
+"probably" is not good enough to act on blind. Three other fields already ask for far less, and
+none of them is touched by upstream's commit: `num_ref_frames` is patched to 1 under the same RFI
+gate (upstream pointedly does **not** add its Oreo check to that one), `max_dec_frame_buffering` is
+set to `num_ref_frames`, and `num_reorder_frames` is set to 0 unconditionally, outside both gates.
+A conformant decoder needs one DPB frame regardless of level.
+
+The hint therefore only bites on a decoder that ignores `num_ref_frames` *and* the VUI bitstream
+restrictions and sizes its buffers from the level alone. The code comment asserts such decoders
+exist — *"Some decoders rely on H264 level to decide how many buffers are needed"* — and Amlogic is
+the family this file already distrusts on exactly this axis: `decoderSupportsRefFrameInvalidationHevc()`
+warns of *"huge latency penalties … Old Amlogic decoders are known to have this problem"*, which is
+why `isAmlogicRfiSafe` defaults false. The one decoder that can reach this code is the one with the
+worst reputation for it.
+
+**Note the asymmetry before spending a session on this.** Taking `68adf9ec` deletes a defensive
+hint and gains nothing — there is no performance, size or clarity win on the table. Even a clean
+measurement only upgrades the finding from "unknown" to "safe to take", never to "worth taking".
+Run this out of curiosity about the decoder, or to close the question; not to unblock anything.
+
+- [ ] **Confirm the patch is actually firing.** Without this the rest measures nothing. Remember
+      the box silences the main log buffer by default:
+      ```bash
+      adb shell setprop persist.log.tag '""'
+      adb logcat -c && adb logcat -d | grep -a "Patching level_idc"
+      adb shell setprop persist.log.tag S
+      ```
+      Expect `Patching level_idc to 42` at 1080p60. Nothing means one of the three conditions above
+      is not met — check which before going further.
+- [ ] **Confirm the codec is H.264, not HEVC or AV1.** The likeliest reason for silence above.
+      ```bash
+      adb shell dumpsys media.metrics | grep -a "c2.amlogic"
+      ```
+      `c2.amlogic.avc.decoder` is the case this section is about; `hevc` or `av01` means the patch
+      is inert and there is nothing to measure.
+- [ ] **Confirm RFI is off**, which is what opens the gate: the absence of
+      `will use reference frame invalidation` for the chosen decoder in logcat. If it is present,
+      the patch is not running and the finding does not apply.
+- [ ] **Measure with and without.** Comment out the `sps.levelIdc = …` assignments in the SPS
+      handling in `MediaCodecDecoderRenderer.submitDecodeUnit()` — the first
+      `if (!refFrameInvalidationActive)` block, the one that logs `Patching level_idc`. Leave the
+      second such block (`num_ref_frames`) and the VUI restrictions below it alone: those are what
+      upstream keeps, so changing them would measure something else entirely. Compare
+      decoder latency between builds. **Harvest the end-of-stream summary, not the overlay**, per
+      the standing rule.
+- [ ] **Take several runs per build.** The session summary reports integer-millisecond means, which
+      are coarse enough that identical configurations have differed by several milliseconds run to
+      run. If `perf/latency-histogram` is available, its microsecond percentile histograms are the
+      better instrument here and turn a four-run guess into one run.
+- [ ] **Negative control: the Shield is unchanged.** RFI is active there, so neither build should
+      differ at all. A difference on the Shield means the experiment changed something other than
+      what it intended.
+
+**If decoder latency is unchanged**, the Amlogic decoder honours the VUI restrictions, `68adf9ec`
+is safe, and this section can be closed as "no longer a reason to diverge" — the patch may still be
+kept, since it costs nothing. **If it rises**, the hint is load-bearing on this box, the divergence
+from upstream is justified permanently, and that fact belongs in `MediaCodecHelper` next to the
+other Amlogic buffering notes.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2100,3 +2202,4 @@ next created — the next stream — not on re-plugging a pad. That is the exist
 | §19 | Both target devices; the survey differs per SoC |
 | §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |
 | §22 LED presets | Any adapter pad; a second pad to check one connecting mid-stream, and a cabled pad for the wired path |
+| §23 | The Homatics on a 1080p60 display, streaming H.264 — the Shield keeps RFI and never runs the patch |
