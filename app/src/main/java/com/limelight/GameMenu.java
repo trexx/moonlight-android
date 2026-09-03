@@ -1,9 +1,7 @@
 package com.limelight;
 
-import android.app.AlertDialog;
 import android.os.Handler;
 import android.os.Looper;
-import android.widget.ArrayAdapter;
 
 import com.limelight.binding.audio.PadAudioSink;
 import com.limelight.binding.input.GameInputDevice;
@@ -11,6 +9,7 @@ import com.limelight.binding.input.KeyboardTranslator;
 import com.limelight.binding.input.driver.GipController;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.KeyboardPacket;
+import com.limelight.utils.MenuDialog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -114,18 +113,6 @@ public class GameMenu {
         runnable.run();
     }
 
-    private void run(MenuOption option) {
-        if (option.runnable() == null) {
-            return;
-        }
-
-        if (option.withGameFocus()) {
-            runWithGameFocus(option.runnable());
-        } else {
-            option.runnable().run();
-        }
-    }
-
     private void showMenuDialog(String title, MenuOption[] options) {
         showMenuDialog(title, options, null);
     }
@@ -133,38 +120,29 @@ public class GameMenu {
     /**
      * Shows one level of the menu.
      *
+     * <p>The presentation is {@link MenuDialog}'s, shared with the browse screen's host and app
+     * menus so all three look the same. What is added here is {@link MenuOption#withGameFocus},
+     * which has no meaning off the stream: an action that sends input to the host has to wait for
+     * the Game activity to have focus back, so it is wrapped rather than handed over directly.
+     *
      * <p>{@code onBack} reopens the level above, and is what hardware Back runs. Each level is its
-     * own AlertDialog with no relationship to the one that opened it, so without this a submenu's
-     * Back dropped straight to the stream - further out than the user asked to go. The root passes
+     * own dialog with no relationship to the one that opened it, so without this a submenu's Back
+     * dropped straight to the stream - further out than the user asked to go. The root passes
      * null, where dismissing really does mean returning to the game.
      */
     private void showMenuDialog(String title, MenuOption[] options, Runnable onBack) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(game);
-        builder.setTitle(title);
-
-        // A row layout of our own rather than android.R.layout.simple_list_item_1, which is sized
-        // for a phone in the hand. This menu is only ever driven by a controller from across a
-        // room. See game_menu_item.xml.
-        final ArrayAdapter<String> actions =
-                new ArrayAdapter<>(game, R.layout.game_menu_item);
+        List<MenuDialog.Option> rows = new ArrayList<>();
 
         for (MenuOption option : options) {
-            actions.add(option.label());
+            Runnable runnable = option.runnable();
+            rows.add(new MenuDialog.Option(option.label(),
+                    // Cancel has no action at all; it is a row that only dismisses.
+                    runnable == null ? null
+                            : option.withGameFocus() ? () -> runWithGameFocus(runnable)
+                                                     : runnable));
         }
 
-        // Dispatch on the row index, not on the label. The adapter is filled from options in
-        // order, so which indexes options directly. Matching by label instead made two rows that
-        // happen to share text both run the first one's action - which the Back rows and the
-        // repeated pad-audio state words below would otherwise do.
-        builder.setAdapter(actions, (dialog, which) -> run(options[which]));
-
-        // Fires on hardware Back and on a touch outside, but not on a row selection, which
-        // dismisses rather than cancels.
-        if (onBack != null) {
-            builder.setOnCancelListener(dialog -> onBack.run());
-        }
-
-        builder.show();
+        MenuDialog.show(game, title, 0, rows, onBack, null);
     }
 
     /**
