@@ -2174,6 +2174,132 @@ other Amlogic buffering notes.
 
 ---
 
+## 24. Crypto backend: Mbed TLS PSA against OpenSSL
+
+This fork replaced 121 files of checked-in OpenSSL prebuilts with an Mbed TLS submodule in
+`fd6cc2ff`, then moved the stream crypto onto PSA in #26. Upstream went the other way in
+`31b70030`, updating its OpenSSL prebuilts to 4.0.2. The question of whether to follow has now
+come up three times, so the numbers behind the answer are recorded here rather than
+re-derived. **The decision is to stay on Mbed TLS.** Everything below is either the evidence
+for that or the measurement that could overturn it.
+
+### Why it is not close, on size
+
+Both libraries were linked against the same four functions this codebase actually uses —
+AES-128-GCM, AES-128-CBC and a random source — with the same flags the real build uses
+(`--gc-sections`, `--exclude-libs,ALL`, NDK r29):
+
+| ABI | Mbed TLS / PSA | OpenSSL 4.0.2 | Factor |
+|---|---:|---:|---:|
+| arm64-v8a | 46,696 B | 4,145,872 B | 89x |
+| armeabi-v7a | 29,160 B | 2,826,972 B | 97x |
+
+That is **+6.9 MB**, and native libraries are `Stored` in the APK at 0% compression, so it
+lands on the download 1:1 — roughly 6.1 MB to 13 MB. The cause is OpenSSL 3.x/4.x's provider
+architecture: `EVP_aes_128_gcm()` pulls in the algorithm registry, property-query parsing,
+ASN.1, BIO and the error strings whether they are wanted or not. Mbed TLS's 17-define trimmed
+config compiles the unused half to empty objects.
+
+### What OpenSSL would genuinely buy, and what it costs
+
+**It is faster per packet, permanently.** Not at the cipher — both use the ARMv8 crypto
+extensions — but at the call pattern. The OpenSSL path keeps a keyed `EVP_CIPHER_CTX` and
+resets only the IV per packet. PSA cannot: `psa_aead_finish()`/`psa_aead_verify()` terminate
+the operation, so every packet pays a fresh `psa_aead_*_setup()` — a key-slot mutex and a full
+AES key schedule. Measured by running both call shapes through one library on one host, which
+isolates the pattern from the cipher (1392-byte AES-128-GCM, x86_64 AES-NI, OpenSSL 3.5.7,
+200k iterations):
+
+| Pattern | ns/packet |
+|---|---:|
+| Keyed context, IV reset only | 696.9 |
+| Full re-init per message | 1,474.6 |
+| **Setup overhead** | **777.8 (2.12x)** |
+
+Only 27.5 ns of that is allocation. Two figures already in this repo agree in magnitude:
+`psa_cipher_setup()` at 776 ns against a keyed context's 18.9 ns, and the video microbench at
+5,660 ns for PSA against the pre-PSA keyed path's 5,149 ns.
+
+**And there is no way to close it inside Mbed TLS.** Driving `mbedtls_gcm_*` on a keyed
+context was prototyped and rejected: Mbed TLS 4.x deletes `mbedtls/gcm.h` along with the rest
+of the low-level API, because "the PSA Crypto API is now the only API for cryptographic
+primitives". Nothing keyed replaces it. So the gap is structural and permanent, not a
+temporary API-choice artefact.
+
+**But the gap is small where it lands.** Crypto runs on the `VideoStream`/`AudioStream`
+receive threads, not `submitDecodeUnit()`, the output loop, or `handleRead()`. At the ~3,600
+video packets/s used in section 20, 778 ns is about **2.8 ms/s, roughly 0.28% of a core**.
+Audio adds ~0.15 ms/s. Spread across a 16.67 ms frame interval that is ~0.05 ms — it is
+headroom, not latency, unless a receive thread saturates.
+
+**OpenSSL also adds a new cost in the worst place.** OpenSSL 3.x+ builds its provider and
+algorithm cache lazily on first EVP use — measured at **2,332.8 us** cold against 1.1 us warm
+on a fast x86_64 desktop, a ~2000x ratio; on a Cortex-A55 expect materially worse. The first
+crypto use in this codebase is `sealRtspMessage()` encrypting the RTSP `OPTIONS` request, so
+it lands on the connect path, which is exactly where the `/dev/random` entropy stall lived.
+Bounded rather than unbounded, so a connect hitch and not a hang — but it would want warming
+off that path.
+
+In fairness the `/dev/random` bug class was Mbed TLS-specific: its `getrandom()` wrapper is
+gated on `__GLIBC__`, absent on bionic. OpenSSL has no such gate. That is already fixed here,
+so it is not a reason to move.
+
+### The deadline that actually matters
+
+**Mbed TLS 3.6 LTS is supported until March 2027**, and the pin is `mbedtls-3.6.7`, which is
+the newest 3.6.x — this fork is current, not drifting. But a crypto migration has to happen
+before that date regardless, so the real choice is not "stay or move", it is which move:
+
+- **3.6 → 4.x (TF-PSA-Crypto).** `moonlight-common-c` needs no change: it calls standard
+  `psa/crypto.h` and `USE_PSA_CRYPTO` stays. What moves is the `Android.mk` source glob and
+  the trimmed config, which currently leans on `config_adjust_psa_from_legacy.h` deriving
+  PSA's algorithm list from legacy `MBEDTLS_*_C` macros — that mechanism is gone in 4.x and
+  the config gets rewritten in `PSA_WANT_*` terms. The two bespoke defines
+  (`MBEDTLS_PLATFORM_DEV_RANDOM`, `MBEDTLS_PSA_ASSUME_EXCLUSIVE_BUFFERS`) were already
+  verified against 4.1.1. Because this fork uses **no X.509 and no TLS**, 4.x's split is a
+  simplification: depend on TF-PSA-Crypto alone and drop the mbedtls repo entirely.
+- **Mbed TLS → OpenSSL.** The +6.9 MB above, opaque prebuilts, the cold-start cost, and full
+  hardware re-verification with silent audio as the failure mode.
+
+The migration that has to happen anyway is also the cheaper one, and leaves the tree smaller,
+source-built and auditable.
+
+- [ ] **Re-measure the per-message setup during the 4.x migration, not before it.**
+      TF-PSA-Crypto 1.x may cache the expanded key schedule in the key slot, in which case
+      `psa_aead_*_setup()` becomes a slot lock plus a copy and most of the 778 ns evaporates.
+      That would close this question permanently instead of leaving it to be re-litigated a
+      fourth time. If it does *not* improve, that is the point to decide whether the receive
+      thread is ever a real constraint — knowing the keyed-context workaround no longer exists.
+
+### If the A/B is run anyway
+
+`moonlight-common-c` supports both backends behind `USE_PSA_CRYPTO`, so an OpenSSL arm is a
+build-configuration change and not a code change — see the branch described in the pull
+request that added this section. What to measure, in order:
+
+- [ ] **Correctness first, and it gates everything else.** The failure mode is silent: crypto
+      that authenticates nothing looks like a working stream. Patch 0002's counters are the
+      instrument — `packetCountDecryptFailed` from `getRTPVideoStats()` and
+      `getRTPAudioStats()` must be zero across a full session with video, audio and control
+      encryption all negotiated.
+- [ ] **APK and library size on both ABIs**, which is the number that decides this and is the
+      one measurable without a device. The prediction above is +4.1 MB arm64 / +2.8 MB
+      armeabi-v7a on `libmoonlight-core.so`; a result far from that means the link differs
+      from the isolated test and the rest of the comparison needs re-checking.
+- [ ] **Receive-thread CPU**, by section 15.6's method: field 1 of `schedstat`
+      (`sum_exec_runtime`) for the anonymous `Thread-N` between `Video - Rendere` and
+      `VideoPing`, across a fixed-length stream at a fixed bitrate. Record the bitrate and
+      packet rate with every result — the saving is per packet and does not compare across
+      bitrates. Expect ~0.28% of a core, which needs several runs per arm to see at all.
+- [ ] **Cold connect time**, which is the risk OpenSSL adds rather than removes. Time from
+      connect to first frame on a cold app start, several times, both arms. This is the one
+      place OpenSSL is expected to be *worse*, and on the Homatics' slower core more so.
+- [ ] **Both boxes.** The Homatics matters more on the CPU measurement, being the slower core
+      and the ABI section 20 showed had most to gain from crypto work; the Shield matters more
+      on cold connect, being the box where the entropy stall was actually caught.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2203,3 +2329,4 @@ other Amlogic buffering notes.
 | §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |
 | §22 LED presets | Any adapter pad; a second pad to check one connecting mid-stream, and a cabled pad for the wired path |
 | §23 | The Homatics on a 1080p60 display, streaming H.264 — the Shield keeps RFI and never runs the patch |
+| §24 | Only if the A/B is run: both boxes with encryption negotiated. The size comparison that decides it needs no hardware |
