@@ -55,6 +55,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
     public static final int VK_F1 = 112;
     public static final int VK_F4 = 115;
     public static final int VK_F11 = 122;
+    public static final int VK_F13 = 0x7C;
     public static final int VK_END = 35;
     public static final int VK_HOME = 36;
     public static final int VK_NUM_LOCK = 144;
@@ -214,6 +215,16 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                  keycode <= KeyEvent.KEYCODE_F12) {
             translated = (keycode - KeyEvent.KEYCODE_F1) + VK_F1;
         }
+        // KEYCODE_F13 through KEYCODE_F24 are API 36, so no supported box can deliver them yet -
+        // the Shield is API 30 and the Homatics API 34. Carried for the same reason as the
+        // producer-throttling call in Game: a keyboard with these keys is ordinary hardware, and
+        // the mapping should already be right when a box updates or a newer device joins the set.
+        // No SDK_INT guard, because none is possible or needed - the constants inline at compile
+        // time, and a platform that does not define a keycode never sends it.
+        else if (keycode >= KeyEvent.KEYCODE_F13 &&
+                 keycode <= KeyEvent.KEYCODE_F24) {
+            translated = (keycode - KeyEvent.KEYCODE_F13) + VK_F13;
+        }
         else {
             translated = switch (keycode) {
                 case KeyEvent.KEYCODE_ALT_LEFT -> VK_LMENU;
@@ -250,6 +261,11 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
                 case KeyEvent.KEYCODE_SPACE -> VK_SPACE;
                 // Android defines this as SysRq/PrntScrn
                 case KeyEvent.KEYCODE_SYSRQ -> VK_PRINTSCREEN;
+                // The dedicated print and screenshot keys, split out of SysRq by newer platforms:
+                // KEYCODE_PRINT is API 36 and KEYCODE_SCREENSHOT API 35, so neither box reaches
+                // them yet. VK_PRINT and VK_SNAPSHOT are what the host expects for the two.
+                case KeyEvent.KEYCODE_PRINT -> 0x2a;
+                case KeyEvent.KEYCODE_SCREENSHOT -> 0x2c;
                 case KeyEvent.KEYCODE_TAB -> VK_TAB;
                 case KeyEvent.KEYCODE_DPAD_LEFT -> VK_LEFT;
                 case KeyEvent.KEYCODE_DPAD_RIGHT -> VK_RIGHT;

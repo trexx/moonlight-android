@@ -2371,6 +2371,19 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             holder.getSurface().setFrameRate(desiredFrameRate,
                     Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE);
         }
+
+        // Producer throttling makes the compositor block a producer that is running ahead of the
+        // display, which is exactly the wrong trade for a stream: frames arrive when the host sends
+        // them, not when we choose to draw, so the back-pressure lands as latency rather than as
+        // saved work. Turning it off is worth a frame of queueing on the paths that have it.
+        //
+        // API 37 (Android 17), so it reaches neither supported box today - the Shield is API 30 and
+        // the Homatics API 34. Carried anyway so it starts working the moment either box takes an
+        // update or a newer device joins the supported set, rather than needing to be rediscovered.
+        // Nothing below API 37 is emulated here: the method simply does not exist before then.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.CINNAMON_BUN) {
+            holder.getSurface().setProducerThrottlingEnabled(false);
+        }
     }
 
     /**
