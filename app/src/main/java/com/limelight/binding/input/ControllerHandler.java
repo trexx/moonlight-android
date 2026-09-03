@@ -2344,7 +2344,19 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
     }
 
-    /** Host callback setting the controller's light bar colour, where the controller has one. */
+    /**
+     * Host callback setting the controller's light bar colour, where the controller has one.
+     *
+     * <p>This arrives on moonlight-common-c's control thread, with no Handler hop in front of it.
+     * Every call the platform lights API needs — {@code getLightsManager()}, {@code openSession()}
+     * and {@code requestLights()} — is a binder transaction into system_server, and running three
+     * of them inline here blocked the control thread for as long as system_server cared to take.
+     * The work is posted to the background thread instead.
+     *
+     * <p>A pending update is dropped rather than queued behind the new one. A game fading the light
+     * bar sends these faster than the transactions complete, and only the newest colour is worth
+     * applying — queueing them would build an unbounded backlog of stale colours.
+     */
     public void handleSetControllerLED(short controllerNumber, byte r, byte g, byte b) {
         if (stopped) {
             return;
@@ -2356,25 +2368,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
                 // Ignore input devices without an RGB LED
                 if (deviceContext.controllerNumber == controllerNumber && deviceContext.hasRgbLed) {
-                    // Create a new light session if one doesn't already exist
-                    if (deviceContext.lightsSession == null) {
-                        deviceContext.lightsSession = deviceContext.inputDevice.getLightsManager().openSession();
-                    }
+                    deviceContext.ledArgbValue = ControllerLedColor.toArgb(r, g, b);
 
-                    // Convert the RGB components into the integer value that LightState uses
-                    int argbValue = 0xFF000000 | ((r << 16) & 0xFF0000) | ((g << 8) & 0xFF00) | (b & 0xFF);
-                    LightState lightState = new LightState.Builder().setColor(argbValue).build();
-
-                    // Set the RGB value for each RGB-controllable LED on the device
-                    LightsRequest.Builder lightsRequestBuilder = new LightsRequest.Builder();
-                    for (Light light : deviceContext.inputDevice.getLightsManager().getLights()) {
-                        if (light.hasRgbControl()) {
-                            lightsRequestBuilder.addLight(light, lightState);
-                        }
-                    }
-
-                    // Apply the LED changes
-                    deviceContext.lightsSession.requestLights(lightsRequestBuilder.build());
+                    backgroundThreadHandler.removeCallbacks(deviceContext.setLedStateRunnable);
+                    backgroundThreadHandler.post(deviceContext.setLedStateRunnable);
                 }
             }
         }
@@ -3103,7 +3100,17 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public InputDevice inputDevice;
 
         public boolean hasRgbLed;
-        public LightsManager.LightsSession lightsSession;
+
+        // The colour the host last asked for. Written on moonlight-common-c's control thread by
+        // handleSetControllerLED and read on the background thread by setLedStateRunnable, so it
+        // needs the same volatile treatment as the motion report rates above.
+        public volatile int ledArgbValue;
+
+        // Opened and used only on the background thread, but destroy() and migrateContext() run on
+        // the main thread and both touch it, so the background thread's write has to be visible
+        // there - otherwise a session opened moments earlier reads back as null and is leaked
+        // instead of closed.
+        public volatile LightsManager.LightsSession lightsSession;
 
         // These are BatteryState values, not Moonlight values
         public int lastReportedBatteryStatus;
@@ -3180,6 +3187,47 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
         };
 
+        /**
+         * Applies {@link #ledArgbValue} to the device's RGB lights, on the background thread.
+         *
+         * <p>The lights are re-enumerated on every run rather than trusted from the {@code
+         * hasRgbLed} check done at enumeration. A device can be replaced underneath us with a
+         * different set of lights, and opening a session for one that no longer has an
+         * RGB-controllable light is what took the app down. Building the request first means the
+         * session is only opened once there is something to put in it.
+         */
+        public final Runnable setLedStateRunnable = new Runnable() {
+            @TargetApi(31)
+            @Override
+            public void run() {
+                LightState lightState = new LightState.Builder().setColor(ledArgbValue).build();
+
+                // Set the RGB value for each RGB-controllable LED on the device
+                boolean hasRgbLight = false;
+                LightsRequest.Builder lightsRequestBuilder = new LightsRequest.Builder();
+                for (Light light : inputDevice.getLightsManager().getLights()) {
+                    if (light.hasRgbControl()) {
+                        lightsRequestBuilder.addLight(light, lightState);
+                        hasRgbLight = true;
+                    }
+                }
+
+                if (!hasRgbLight) {
+                    return;
+                }
+
+                // Create a new light session if one doesn't already exist
+                if (lightsSession == null) {
+                    // Logged once per device rather than per colour change, so the log says whether
+                    // the path is live on a box without spamming it while a game fades the light bar.
+                    LimeLog.info("Opening LightsSession for controller: " + name);
+                    lightsSession = inputDevice.getLightsManager().openSession();
+                }
+
+                lightsSession.requestLights(lightsRequestBuilder.build());
+            }
+        };
+
         @Override
         public void destroy() {
             super.destroy();
@@ -3192,6 +3240,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
 
             backgroundThreadHandler.removeCallbacks(enableSensorRunnable);
+            backgroundThreadHandler.removeCallbacks(setLedStateRunnable);
 
             if (gyroListener != null) {
                 sensorManager.unregisterListener(gyroListener);
@@ -3202,7 +3251,15 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 if (lightsSession != null) {
-                    lightsSession.close();
+                    // The session belongs to an input device that is usually already gone by the
+                    // time we get here, in which case system_server has torn its end down and
+                    // close() throws rather than no-opping. Nothing here can act on that, and
+                    // letting it escape kills a teardown path that still has work left to do.
+                    try {
+                        lightsSession.close();
+                    } catch (RuntimeException e) {
+                        LimeLog.warning("Error closing LightsSession: " + e.getMessage());
+                    }
                 }
             }
 
@@ -3344,6 +3401,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 this.lightsSession = oldContext.lightsSession;
                 oldContext.lightsSession = null;
             }
+            this.ledArgbValue = oldContext.ledArgbValue;
             this.gyroReportRateHz = oldContext.gyroReportRateHz;
             this.accelReportRateHz = oldContext.accelReportRateHz;
 
@@ -3362,6 +3420,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
             // Re-enable sensors on the new context
             enableSensors();
+
+            // Reapply the last colour the host asked for. The device was replaced underneath the
+            // host, which does not know to send it again, and any update still pending on the old
+            // context was dropped by its destroy() - so without this the light bar keeps whatever
+            // the firmware defaults to for the rest of the session. A non-null session is the
+            // record that a colour was applied at all; ledArgbValue alone cannot say, since the
+            // host is free to ask for black.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && lightsSession != null) {
+                backgroundThreadHandler.post(setLedStateRunnable);
+            }
 
             // Refresh battery state and start the battery state polling again
             backgroundThreadHandler.post(batteryStateUpdateRunnable);
