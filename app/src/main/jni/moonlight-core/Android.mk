@@ -95,11 +95,16 @@ LOCAL_C_INCLUDES := $(LOCAL_PATH)/moonlight-common-c/enet/include \
 
 LOCAL_CFLAGS := -DHAS_SOCKLEN_T=1 -DLC_ANDROID -DHAVE_CLOCK_GETTIME=1 -DUSE_MBEDTLS
 
-ifeq ($(NDK_DEBUG),1)
-LOCAL_CFLAGS += -DLC_DEBUG
-endif
-
 LOCAL_LDLIBS := -llog -laaudio
+
+# Trace markers are debug-only, so both halves are gated together: the define that makes the
+# ML_TRACE_* macros expand to ATrace calls, and libandroid, which is where those calls live.
+# AGP passes NDK_DEBUG=1 for debuggable variants and 0 otherwise, so a release build neither
+# compiles a marker nor takes on the library dependency. See profiling.h.
+ifeq ($(NDK_DEBUG),1)
+LOCAL_CFLAGS += -DLC_DEBUG -DMOONLIGHT_PROFILING
+LOCAL_LDLIBS += -landroid
+endif
 
 LOCAL_STATIC_LIBRARIES := libopus mbedtls cpufeatures
 LOCAL_LDFLAGS += -Wl,--exclude-libs,ALL

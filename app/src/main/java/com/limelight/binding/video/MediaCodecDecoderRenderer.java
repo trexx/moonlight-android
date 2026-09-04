@@ -17,6 +17,8 @@ import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.profiling.Profiler;
+import com.limelight.profiling.ProfilingCategory;
 import com.limelight.utils.TrafficStatsHelper;
 import com.limelight.preferences.PreferenceConfiguration;
 
@@ -921,6 +923,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         }
 
+        // Traced from here rather than at entry: this method runs several times per frame across
+        // three threads, and the no-op path above would cost more in markers than the check it
+        // guards. Everything below happens only when recovery is genuinely under way.
+        if (ProfilingCategory.VIDEO) {
+            Profiler.begin("MC.codecRecovery");
+        }
+        try {
+            return doCodecRecovery(quiescenceFlag);
+        } finally {
+            if (ProfilingCategory.VIDEO) {
+                Profiler.end();
+            }
+        }
+    }
+
+    /** The uncommon half of {@link #doCodecRecoveryIfRequired}: recovery is actually needed. */
+    private boolean doCodecRecovery(int quiescenceFlag) {
         // We need some sort of recovery, so quiesce all threads before starting that
         synchronized (codecRecoveryMonitor) {
             if (choreographerHandlerThread == null) {
@@ -1193,10 +1212,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      */
     @Override
     public void doFrame(long frameTimeNanos) {
-        // Do nothing if we're stopping
+        // Split so the span can wrap the whole callback without the early returns below having to
+        // carry a finally each. The stopping check stays outside it: a traced section on a
+        // callback that does nothing is noise.
         if (stopping) {
             return;
         }
+
+        if (ProfilingCategory.VIDEO) {
+            Profiler.begin("MC.doFrame");
+        }
+        try {
+            doFrameInternal(frameTimeNanos);
+        } finally {
+            if (ProfilingCategory.VIDEO) {
+                Profiler.end();
+            }
+        }
+    }
+
+    private void doFrameInternal(long frameTimeNanos) {
 
         // Only read the clock when there's a hint session to report to, so devices without
         // ADPF (the Shield, on Android 11) pay nothing for this.
@@ -1225,7 +1260,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             int nextOutputBuffer = outputBufferQueue.poll();
             if (nextOutputBuffer != OutputBufferRing.EMPTY) {
                 try {
-                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                    if (ProfilingCategory.VIDEO) {
+                        Profiler.begin("MC.releaseOutput");
+                    }
+                    try {
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                    } finally {
+                        if (ProfilingCategory.VIDEO) {
+                            Profiler.end();
+                        }
+                    }
+
+                    // The frame reached the display, so its span ends here.
+                    if (ProfilingCategory.VIDEO) {
+                        endFrameSpanForBuffer(nextOutputBuffer);
+                    }
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
                     activeWindowVideoStats.totalFramesRendered++;
@@ -1422,21 +1471,45 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
 
+                                    // Superseded before it could be shown. Close its span here or
+                                    // it stays open forever, and a trace full of unterminated
+                                    // spans is harder to read than one that shows the drop.
+                                    if (ProfilingCategory.VIDEO) {
+                                        Profiler.endAsync(FRAME_SPAN_NAME,
+                                                frameSpanCookie(presentationTimeUs));
+                                    }
+
                                     numFramesOut++;
 
                                     lastIndex = outIndex;
                                     presentationTimeUs = info.presentationTimeUs;
                                 }
 
-                                if (neverDropFrames) {
-                                    // In max smoothness or cap FPS mode, we want to never drop frames
-                                    // Use a PTS that will cause this frame to never be dropped
-                                    videoDecoder.releaseOutputBuffer(lastIndex, 0);
+                                if (ProfilingCategory.VIDEO) {
+                                    Profiler.begin("MC.releaseOutput");
                                 }
-                                else {
-                                    // Use a PTS that will cause this frame to be dropped if another comes in within
-                                    // the same V-sync period
-                                    videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());
+                                try {
+                                    if (neverDropFrames) {
+                                        // In max smoothness or cap FPS mode, we want to never drop frames
+                                        // Use a PTS that will cause this frame to never be dropped
+                                        videoDecoder.releaseOutputBuffer(lastIndex, 0);
+                                    }
+                                    else {
+                                        // Use a PTS that will cause this frame to be dropped if another comes in within
+                                        // the same V-sync period
+                                        videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());
+                                    }
+                                } finally {
+                                    if (ProfilingCategory.VIDEO) {
+                                        Profiler.end();
+                                    }
+                                }
+
+                                // This thread presents in every mode except balanced, so the span
+                                // closes here rather than in doFrame().
+                                if (ProfilingCategory.VIDEO) {
+                                    Profiler.endAsync(FRAME_SPAN_NAME,
+                                            frameSpanCookie(presentationTimeUs));
                                 }
 
                                 activeWindowVideoStats.totalFramesRendered++;
@@ -1461,10 +1534,33 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 // Evicting and inserting are one call, so there is no window between
                                 // them for the consumer to empty the ring. See OutputBufferRing for what
                                 // used to go wrong here.
+                                // Record the timestamp before the offer: once the buffer is in the
+                                // ring the Choreographer thread may poll it immediately, and it
+                                // has only the index to identify the frame by.
+                                if (ProfilingCategory.VIDEO) {
+                                    rememberTracedPts(lastIndex, presentationTimeUs);
+                                }
+
                                 int evictedIndex = outputBufferQueue.offerEvictingOldest(lastIndex);
                                 if (evictedIndex != OutputBufferRing.EMPTY) {
                                     videoDecoder.releaseOutputBuffer(evictedIndex, false);
+
+                                    // Dropped without ever being shown; close its span rather than
+                                    // leaving it open.
+                                    if (ProfilingCategory.VIDEO) {
+                                        endFrameSpanForBuffer(evictedIndex);
+                                    }
                                 }
+
+                                // Queue depth is only meaningful here: the ring is used solely in
+                                // balanced pacing, and every other mode presents immediately.
+                                if (ProfilingCategory.VIDEO) {
+                                    Profiler.counter("video.queue_depth", outputBufferQueue.size());
+                                }
+                            }
+
+                            if (ProfilingCategory.VIDEO) {
+                                Profiler.counter("video.frames_in_flight", numFramesIn - numFramesOut);
                             }
 
                             // Add delta time to the totals (excluding probable outliers).
@@ -1599,13 +1695,70 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     // Debug-only percentile histograms. A session mean cannot tell a stream where every frame
     // takes 5 ms from one where most take 2 ms and a few take 60, and four identical 90-second
-    // runs produced means of 2, 3, 8 and 10 ms - noise wide enough to hide anything worth finding.
+    // runs produced decoder means of 1, 4, 2 and 2 ms - noise wide enough to hide anything worth
+    // finding.
     private final LatencyHistogram recvToEnqueueHist =
             BuildConfig.DEBUG ? new LatencyHistogram("Receive to enqueue") : null;
     private final LatencyHistogram decoderHist =
             BuildConfig.DEBUG ? new LatencyHistogram("Decoder") : null;
     private final LatencyHistogram endToEndHist =
             BuildConfig.DEBUG ? new LatencyHistogram("End to end") : null;
+
+    /** Perfetto track name for the per-frame async span. */
+    private static final String FRAME_SPAN_NAME = "frame";
+
+    /**
+     * Presentation timestamp of each output buffer the renderer thread has handed to the ring,
+     * indexed by MediaCodec buffer index.
+     *
+     * <p>Only needed for balanced frame pacing, where the producer and consumer are different
+     * threads and {@link OutputBufferRing} carries an index but not a timestamp. The span's cookie
+     * is derived from the timestamp, so the consumer has to be able to recover it.
+     *
+     * <p>A side table rather than two more arrays inside {@link OutputBufferRing}: widening that
+     * class's signature would put the stores on the release hot path, where nothing could remove
+     * them, whereas this whole field is null in release and every access to it sits behind
+     * {@link ProfilingCategory#VIDEO}.
+     *
+     * <p>Written on the renderer thread and read on the Choreographer thread without
+     * synchronisation, matching how the surrounding statistics are handled. A stale read closes
+     * one span against the wrong cookie, which shows up as a single odd-looking span in a trace
+     * rather than as bad data.
+     *
+     * <p>Sized well above any plausible output buffer count; an index outside it is treated as
+     * "no span" rather than as an error, so an unusual codec cannot turn tracing into a crash.
+     */
+    private final long[] tracedPtsByBufferIndex =
+            ProfilingCategory.VIDEO ? new long[64] : null;
+
+    /**
+     * Cookie identifying one frame's span across the threads that handle it.
+     *
+     * <p>The renderer threads know a buffer only by its presentation timestamp, never by frame
+     * number, so the timestamp is the one identifier available on both sides. Truncating to 32
+     * bits wraps about every 71 minutes, which cannot collide in practice because a span lives for
+     * milliseconds.
+     */
+    private static int frameSpanCookie(long presentationTimeUs) {
+        return (int) presentationTimeUs;
+    }
+
+    /** Records a buffer's timestamp so {@link #endFrameSpanForBuffer} can recover it later. */
+    private void rememberTracedPts(int bufferIndex, long presentationTimeUs) {
+        if (bufferIndex >= 0 && bufferIndex < tracedPtsByBufferIndex.length) {
+            tracedPtsByBufferIndex[bufferIndex] = presentationTimeUs;
+        }
+    }
+
+    /**
+     * Closes the span for a buffer identified only by its index, which is all the consumer side of
+     * the ring has. Does nothing if the index was never recorded.
+     */
+    private void endFrameSpanForBuffer(int bufferIndex) {
+        if (bufferIndex >= 0 && bufferIndex < tracedPtsByBufferIndex.length) {
+            Profiler.endAsync(FRAME_SPAN_NAME, frameSpanCookie(tracedPtsByBufferIndex[bufferIndex]));
+        }
+    }
 
     {
         // -1 rather than the default 0, so an empty slot can never match a real timestamp.
@@ -1674,6 +1827,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         startTime = SystemClock.uptimeMillis();
 
+        // Traced, unlike dequeueOutputBuffer: this one blocking wide means the decoder is
+        // genuinely backed up, whereas the output side blocks on every idle iteration by design
+        // and a span there would say nothing.
+        if (ProfilingCategory.VIDEO) {
+            Profiler.begin("MC.fetchInputBuffer");
+        }
         try {
             // If we don't have an input buffer index yet, fetch one now.
             //
@@ -1708,6 +1867,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         } finally {
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+
+            if (ProfilingCategory.VIDEO) {
+                Profiler.end();
+            }
         }
 
         // If codec recovery is required, always return false to ensure the caller will request
@@ -1915,6 +2078,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean queueNextInputBuffer(long timestampUs, int codecFlags) {
         boolean codecRecovered;
 
+        if (ProfilingCategory.VIDEO) {
+            Profiler.begin("MC.queueInputBuffer");
+        }
         try {
             if (BuildConfig.DEBUG && perfMetricsEnabled) {
                 recordDecodeStart(timestampUs);
@@ -1943,6 +2109,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         } finally {
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+
+            if (ProfilingCategory.VIDEO) {
+                Profiler.end();
+            }
         }
 
         // If codec recovery is required, always return false to ensure the caller will request
@@ -2449,7 +2619,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         nextInputBuffer.position(nextInputBuffer.position() + bytesWritten);
 
+        // Open the frame's span here rather than in submitDecodeUnit(): since the copy-free path
+        // landed, that method only ever carries parameter sets, and picture data - the thing worth
+        // following to the display - reaches the decoder through startPicData/submitPicData.
+        if (ProfilingCategory.VIDEO) {
+            Profiler.beginAsync(FRAME_SPAN_NAME, frameSpanCookie(pendingTimestampUs));
+        }
+
         if (!queueNextInputBuffer(pendingTimestampUs, pendingCodecFlags)) {
+            // The frame never reached the decoder, so nothing downstream will ever close its span.
+            if (ProfilingCategory.VIDEO) {
+                Profiler.endAsync(FRAME_SPAN_NAME, frameSpanCookie(pendingTimestampUs));
+            }
             return MoonBridge.DR_NEED_IDR;
         }
 
