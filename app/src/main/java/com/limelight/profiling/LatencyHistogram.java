@@ -1,4 +1,4 @@
-package com.limelight.binding.video;
+package com.limelight.profiling;
 
 import java.util.Locale;
 
@@ -22,14 +22,22 @@ import java.util.Locale;
  * couple of kilobytes. Recording is a leading-zero count, a shift and an increment — no division,
  * no allocation, no branch on magnitude beyond the small-value case.
  *
- * <p><b>Debug builds only.</b> Instances are created only under {@code BuildConfig.DEBUG}; see
- * CLAUDE.md on keeping per-frame instrumentation out of release rather than merely unreached.
+ * <p><b>Debug builds only.</b> Every instance is constructed behind {@code BuildConfig.DEBUG} or a
+ * {@link ProfilingCategory} constant, so R8 removes this class from release entirely rather than
+ * merely leaving it unreached - the rule this package exists to follow. Keep it that way: a
+ * caller that allocates one unconditionally would drag the whole class back into the shipped
+ * binary.
  *
- * <p>Not synchronised, deliberately, matching {@link VideoStats}: samples are recorded on the
+ * <p>Session-scoped by design, not per-window. A percentile needs a population, and the decoder's
+ * one-second statistics windows hold only about sixty frames each - far too few for a p99 to mean
+ * anything. Instances therefore live as long as the stream and are read once at teardown; anything
+ * wanting a per-window view should read the counters in {@code VideoStats} instead.
+ *
+ * <p>Not synchronised, deliberately, matching {@code VideoStats}: samples are recorded on the
  * decoder threads and read once at teardown. A torn count costs one sample from a population of
  * tens of thousands.
  */
-final class LatencyHistogram {
+public final class LatencyHistogram {
 
     /** Mantissa bits kept below the leading one bit. 3 gives ~12% worst-case bucket width. */
     private static final int SUB_BUCKET_BITS = 3;
@@ -48,7 +56,7 @@ final class LatencyHistogram {
     private long sumUs;
     private boolean frozen;
 
-    LatencyHistogram(String label) {
+    public LatencyHistogram(String label) {
         this.label = label;
     }
 
@@ -84,7 +92,7 @@ final class LatencyHistogram {
     }
 
     /** Records one sample. Negative values are dropped: callers use -1 for "no sample". */
-    void record(long microseconds) {
+    public void record(long microseconds) {
         if (frozen || microseconds < 0) {
             return;
         }
@@ -110,11 +118,11 @@ final class LatencyHistogram {
      * the rest of this class. The worst case is a handful of extra samples recorded before the
      * write is observed, which is orders of magnitude better than recording the whole burst.
      */
-    void freeze() {
+    public void freeze() {
         frozen = true;
     }
 
-    long getCount() {
+    public long getCount() {
         return count;
     }
 
@@ -122,7 +130,7 @@ final class LatencyHistogram {
      * @param fraction e.g. 0.99 for p99
      * @return an upper bound on that percentile in microseconds, or 0 if nothing was recorded
      */
-    long percentileUs(double fraction) {
+    public long percentileUs(double fraction) {
         if (count == 0) {
             return 0;
         }
@@ -148,7 +156,7 @@ final class LatencyHistogram {
      * logcat by the measurement scripts, and a device set to a comma-decimal locale would
      * otherwise emit {@code mean=2,67ms} and break them.
      */
-    String summarise() {
+    public String summarise() {
         if (count == 0) {
             return label + ": no samples";
         }
