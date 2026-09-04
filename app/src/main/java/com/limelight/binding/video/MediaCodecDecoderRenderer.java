@@ -1483,6 +1483,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 if (!USE_FRAME_RENDER_TIME) {
                                     activeWindowVideoStats.totalTimeMs += delta;
                                 }
+
+                                if (BuildConfig.DEBUG) {
+                                    // Same sanity window as the millisecond path above, applied
+                                    // in microseconds so an outlier cannot poison the tail.
+                                    long decUs = lastMatchedDecoderUs;
+                                    long recvUs = lastMatchedRecvUs;
+                                    if (decUs >= 0 && decUs < 1000000) {
+                                        decoderHist.record(decUs);
+                                        if (recvUs >= 0) {
+                                            endToEndHist.record(recvUs + decUs);
+                                        }
+
+                                        // Log the tail samples with their position in the session
+                                        // so they can be correlated against loss events and codec
+                                        // restarts. Roughly six per 90 s run, so the cost of the
+                                        // string build is not on any path that matters.
+                                        if (decUs > 50000) {
+                                            LimeLog.info("Slow frame at t+" +
+                                                    ((SystemClock.uptimeMillis() - streamStartUptimeMs) / 1000.0)
+                                                    + "s: " + (decUs / 1000.0) + "ms in decoder");
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             switch (outIndex) {
@@ -1561,6 +1584,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final long[] decodeStartUptimeMs = new long[DECODE_START_SLOTS];
     private int decodeStartPos;
 
+    // Microsecond-resolution companions to the millisecond fields above, for the percentile
+    // histograms. nanoTime() rather than uptimeMillis() because a decoder that holds a frame for
+    // 1.4 ms is otherwise recorded as 1 or 2, and that quantisation is a large part of why the
+    // session means are unusable. Both ends of the subtraction use the same clock, which is the
+    // property the millisecond version had to be fixed to get - see takeDecodeStartDelta.
+    private final long[] decodeStartNanos = new long[DECODE_START_SLOTS];
+    private final long[] decodeStartRecvUs = new long[DECODE_START_SLOTS];
+
+    // Receive-to-enqueue time for the frame currently being submitted, carried from
+    // updateFrameCounters() to recordDecodeStart() so the two halves of a frame's latency can be
+    // joined into one end-to-end sample. Both run on the submit thread for a given frame.
+    private long pendingRecvToEnqueueUs = -1;
+
+    // Debug-only percentile histograms. A session mean cannot tell a stream where every frame
+    // takes 5 ms from one where most take 2 ms and a few take 60, and four identical 90-second
+    // runs produced means of 2, 3, 8 and 10 ms - noise wide enough to hide anything worth finding.
+    private final LatencyHistogram recvToEnqueueHist =
+            BuildConfig.DEBUG ? new LatencyHistogram("Receive to enqueue") : null;
+    private final LatencyHistogram decoderHist =
+            BuildConfig.DEBUG ? new LatencyHistogram("Decoder") : null;
+    private final LatencyHistogram endToEndHist =
+            BuildConfig.DEBUG ? new LatencyHistogram("End to end") : null;
+
     {
         // -1 rather than the default 0, so an empty slot can never match a real timestamp.
         java.util.Arrays.fill(decodeStartPtsUs, -1);
@@ -1570,8 +1616,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private void recordDecodeStart(long timestampUs) {
         decodeStartPtsUs[decodeStartPos] = timestampUs;
         decodeStartUptimeMs[decodeStartPos] = SystemClock.uptimeMillis();
+        decodeStartNanos[decodeStartPos] = System.nanoTime();
+        decodeStartRecvUs[decodeStartPos] = pendingRecvToEnqueueUs;
         decodeStartPos = (decodeStartPos + 1) % DECODE_START_SLOTS;
     }
+
+    // Set by takeDecodeStartDelta() when it matches a slot, so the caller can pair the decoder
+    // time it just measured with that frame's receive-to-enqueue time. Single-threaded with
+    // respect to the output loop, which is the only reader.
+    // Uptime of the first frame submitted, so debug logging can place an event in the session
+    // rather than on the wall clock. Debug-only; never read in release.
+    private long streamStartUptimeMs;
+
+    private long lastMatchedRecvUs = -1;
+    private long lastMatchedDecoderUs = -1;
 
     /**
      * @return milliseconds the decoder held this frame, or -1 if its submit time is no longer
@@ -1584,6 +1642,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Clear the slot so a stale entry can't match a later frame that happens to
                 // reuse the timestamp after a flush resets the sequence.
                 decodeStartPtsUs[i] = -1;
+                lastMatchedDecoderUs = (System.nanoTime() - decodeStartNanos[i]) / 1000;
+                lastMatchedRecvUs = decodeStartRecvUs[i];
                 return SystemClock.uptimeMillis() - decodeStartUptimeMs[i];
             }
         }
@@ -2128,12 +2188,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         if (lastFrameNumber == 0) {
             activeWindow.measurementStartTimestamp = SystemClock.uptimeMillis();
+            if (BuildConfig.DEBUG) {
+                streamStartUptimeMs = activeWindow.measurementStartTimestamp;
+            }
         } else if (frameNumber != lastFrameNumber && frameNumber != lastFrameNumber + 1) {
             // We can receive the same "frame" multiple times if it's an IDR frame.
             // In that case, each frame start NALU is submitted independently.
             activeWindow.framesLost += frameNumber - lastFrameNumber - 1;
             activeWindow.totalFrames += frameNumber - lastFrameNumber - 1;
             activeWindow.frameLossEvents++;
+
+            if (BuildConfig.DEBUG) {
+                // When in the session a loss happened, to test whether the recurring single
+                // loss event is a startup artefact (a display mode switch renegotiating HDMI)
+                // rather than network loss, and whether it coincides with the decoder tail.
+                // Inside the loss branch, which a healthy stream never takes.
+                LimeLog.info("Frame loss at t+" +
+                        ((SystemClock.uptimeMillis() - streamStartUptimeMs) / 1000.0) + "s: " +
+                        (frameNumber - lastFrameNumber - 1) + " frames");
+            }
         }
 
         boolean frameAdvanced = lastFrameNumber != frameNumber;
@@ -2234,6 +2307,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // We will count DU queue time as part of decoding, because it is directly
             // caused by a slow decoder.
             activeWindow.totalTimeMs += (enqueueTimeUs - receiveTimeUs) / 1000;
+        }
+
+        if (BuildConfig.DEBUG) {
+            // Full microsecond resolution, unlike the truncating division above. Carried to
+            // recordDecodeStart() so the decoder half can be added to it per frame.
+            pendingRecvToEnqueueUs = enqueueTimeUs - receiveTimeUs;
+            recvToEnqueueHist.record(pendingRecvToEnqueueUs);
         }
     }
 
@@ -2702,6 +2782,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * <p>Totals rather than the overlay's per-second window: the overlay forces GPU composition on
      * this hardware, so it changes frame timing as well as measuring it.
      */
+    /**
+     * Stops the latency histograms recording, leaving what they hold readable by
+     * {@link #logStreamSummary(String)}.
+     *
+     * <p>Called when the game menu opens, which is the last moment the numbers still describe
+     * streaming. Showing the menu stalls the decoder for roughly 190 ms; the frames queued behind
+     * it drain afterwards as a burst of large samples that lands entirely in p99.9 and max. That
+     * burst is what made those two figures meaningless in the measurements recorded in
+     * HARDWARE_TESTING.md section 26, which were taken before this existed.
+     *
+     * <p>No-op in release, where the histograms are not allocated at all.
+     */
+    public void freezeLatencyHistograms() {
+        if (BuildConfig.DEBUG) {
+            recvToEnqueueHist.freeze();
+            decoderHist.freeze();
+            endToEndHist.freeze();
+        }
+    }
+
     public void logStreamSummary(String label) {
         if (!BuildConfig.DEBUG) {
             return;
@@ -2714,6 +2814,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 globalVideoStats.frameLossEvents + " events, " +
                 getAverageEndToEndLatency() + " ms end-to-end, " +
                 getAverageDecoderLatency() + " ms decoder");
+
+        if (BuildConfig.DEBUG) {
+            LimeLog.info("Stream latency [" + label + "]: " + recvToEnqueueHist.summarise());
+            LimeLog.info("Stream latency [" + label + "]: " + decoderHist.summarise());
+            LimeLog.info("Stream latency [" + label + "]: " + endToEndHist.summarise());
+        }
     }
 
     public int getAverageEndToEndLatency() {
@@ -2917,6 +3023,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
         str += "Average end-to-end client latency: "+renderer.getAverageEndToEndLatency()+"ms"+DELIMITER;
         str += "Average hardware decoder latency: "+renderer.getAverageDecoderLatency()+"ms"+DELIMITER;
+        if (BuildConfig.DEBUG) {
+            // The two averages above are means over the whole session at millisecond resolution,
+            // which cannot separate a uniformly slow stream from a fast one with a bad tail. These
+            // are the same data as percentiles, in microseconds. Prefer them.
+            str += renderer.recvToEnqueueHist.summarise()+DELIMITER;
+            str += renderer.decoderHist.summarise()+DELIMITER;
+            str += renderer.endToEndHist.summarise()+DELIMITER;
+        }
         str += "Frame pacing mode: "+renderer.prefs.framePacing+DELIMITER;
 
         // Which cases the copy-free picture data path actually reached. Without these a clean

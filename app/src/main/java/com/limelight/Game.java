@@ -2471,6 +2471,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      */
     @Override
     public void showGameMenu(GameInputDevice device) {
+        // Close the latency measurement first: showing the menu stalls the decoder, and the
+        // frames that queue behind it would otherwise be recorded as the worst samples of the
+        // session. No-op in release.
+        decoderRenderer.freezeLatencyHistograms();
+
         new GameMenu(this, conn, device);
     }
 
