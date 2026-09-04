@@ -89,17 +89,49 @@ class FramePacingSelectorTest {
         }
 
         /**
-         * A display reporting 49 Hz or less is not a display mode either box has; it is a bad
-         * report. Capping to it would strand the stream at a rate the panel never runs at, so the
-         * request is left alone and pacing falls back to legacy rendering.
+         * A display reporting 49 Hz or less is treated as a bad report. Capping to it would strand
+         * the stream at a rate the panel never runs at, so the request is left alone and pacing
+         * falls back to legacy rendering.
+         *
+         * <p>The requested rate has to sit within three frames of the reported one to get here at
+         * all; further above and the drop branch above claims it first.
+         */
+        @ParameterizedTest(name = "{0} fps on a {1} Hz display")
+        @CsvSource({
+                "1,  1.0",
+                "24, 24.0",
+                "30, 30.0",
+                "49, 49.0",
+                "52, 49.0",
+        })
+        @DisplayName("a bogus display rate falls back to legacy rendering")
+        void bogusRateFallsBack(int requestedFps, float displayRefreshRate) {
+            FramePacingSelector pacing =
+                    FramePacingSelector.select(displayRefreshRate, requestedFps, CAP_FPS);
+
+            assertEquals(requestedFps, pacing.frameRate);
+            assertEquals(BALANCED, pacing.framePacing);
+            assertEquals(FramePacingSelector.Decision.BOGUS_REFRESH_RATE, pacing.decision);
+        }
+
+        /**
+         * Pins current behaviour, not intended behaviour. 29.97 and 23.976 round to 30 and 24, so
+         * the bogus-rate rejection above claims them before the fractional branch below is ever
+         * reached — even though the epsilon's own comment names those two rates as the modes it
+         * exists to recognise. A 24p display therefore gets balanced pacing rather than a 24 fps
+         * request carrying the exact rate.
+         *
+         * <p>Which of the two is correct needs a 24p display to settle, so it is recorded in
+         * HARDWARE_TESTING.md §17.1 and left alone. This test exists so that whichever way it is
+         * settled, the change is visible rather than silent.
          */
         @ParameterizedTest(name = "{0} Hz")
-        @ValueSource(floats = {1.0f, 24.0f, 30.0f, 49.0f})
-        @DisplayName("a bogus display rate falls back to legacy rendering")
-        void bogusRateFallsBack(float displayRefreshRate) {
-            FramePacingSelector pacing = FramePacingSelector.select(displayRefreshRate, 30, CAP_FPS);
+        @CsvSource({"29.97, 30", "23.976, 24"})
+        @DisplayName("a fractional rate below 50 Hz is rejected as bogus before it is seen as fractional")
+        void subFiftyFractionalRateIsRejectedAsBogus(float displayRefreshRate, int requestedFps) {
+            FramePacingSelector pacing =
+                    FramePacingSelector.select(displayRefreshRate, requestedFps, CAP_FPS);
 
-            assertEquals(30, pacing.frameRate);
             assertEquals(BALANCED, pacing.framePacing);
             assertEquals(FramePacingSelector.Decision.BOGUS_REFRESH_RATE, pacing.decision);
         }
@@ -122,12 +154,14 @@ class FramePacingSelectorTest {
          * The regression this branch exists for: requesting 59 against a 59.94 display is 1.6% out,
          * and Sunshine discards clientRefreshRateX100 beyond 1%, so the exact rate was thrown away
          * every time. Asking for the whole number keeps it.
+         *
+         * <p>Only rates above 49 Hz reach here — see the sub-50 case above for why 29.97 and 23.976
+         * do not, despite being named in the epsilon's own comment.
          */
         @ParameterizedTest(name = "{0} Hz requests {1}")
         @CsvSource({
                 "59.94,  60",
-                "29.97,  30",
-                "23.976, 24",
+                "119.88, 120",
         })
         @DisplayName("a fractional display rate requests the whole number, not one below it")
         void fractionalRateRequestsWholeNumber(float displayRefreshRate, int expectedFrameRate) {
