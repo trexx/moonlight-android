@@ -17,6 +17,7 @@ import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.profiling.LatencyHistogram;
 import com.limelight.profiling.Profiler;
 import com.limelight.profiling.ProfilingCategory;
 import com.limelight.utils.TrafficStatsHelper;

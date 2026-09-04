@@ -1,4 +1,4 @@
-package com.limelight.binding.video;
+package com.limelight.profiling;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
