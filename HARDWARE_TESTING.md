@@ -2377,6 +2377,125 @@ Nothing here is measurable off-device: it is entirely how the tile reads on a se
 
 ---
 
+## 28. Per-frame latency percentiles
+
+The session means reported at teardown — `Average end-to-end client latency` and
+`Average hardware decoder latency` — cannot answer the question they look like they answer. Both
+are integer milliseconds accumulated per frame, so a frame that genuinely took 0.9 ms contributed
+zero, and both are means, so a stream where every frame takes 5 ms is indistinguishable from one
+where most take 2 ms and a handful take 200. Debug builds therefore also record three
+`LatencyHistogram`s and report percentiles in microseconds. They are absent from release: R8
+strips the class entirely, and the release APK is byte-identical with and without them.
+
+Measured on the **Shield TV**, 2026-08-24, debug build of `deps/common-c-psa-crypto`, Steam
+streaming from Turk-PC at 3840x2160x60. Six runs in two batches.
+
+| Run | Hold | recv→enqueue p50 / p99 | decoder p50 / p99 | end-to-end p50 / p99 | decoder p99.9 / max |
+|---|---|---|---|---|---|
+| 1 | 90 s | 2.82 / 3.84 | 1.54 / 5.12 | 4.61 / 8.19 | 73.73 / 198.68 |
+| 2 | 90 s | 3.07 / 5.63 | 3.58 / 10.24 | 7.17 / 12.29 | 81.92 / 150.53 |
+| 3 | 90 s | 3.33 / 5.63 | 1.79 / 5.12 | 5.63 / 9.22 | 98.30 / 163.95 |
+| 4 | 90 s | 3.33 / 5.63 | 1.92 / 3.84 | 5.12 / 7.68 | 61.44 / 151.74 |
+| corr1 | 90 s | 1.79 / 3.58 | 9.22 / 14.34 | 11.26 / 14.34 | 40.96 / 187.78 |
+| corr2 | 150 s | 2.82 / 4.61 | 9.22 / 12.29 | 11.26 / 15.36 | 61.44 / 163.05 |
+
+All values milliseconds; ~6,240 frames per 90 s run. Percentile figures are the *upper* bound of
+the containing bucket, which is 9–12% wide at these magnitudes, so `p99<12.29` means "somewhere
+between about 11.0 and 12.29" — the reported figure is never optimistic, which is why the column
+headings carry a `<`.
+
+**In this table, read p50, p90 and p99 and ignore p99.9 and max** — see the teardown artefact
+below, and the fix that followed it.
+
+### The recurring frame-loss event is HDR, not the network
+
+Every run reports exactly one loss event of 4–5 frames. That regularity is the tell: real network
+loss is not that punctual. Debug builds now log the position of each loss event in the session,
+and it is always the same:
+
+```
+Display HDR mode: enabled
+Codec recovery attempt: 1
+Frame loss at t+0.057s: 4 frames
+```
+
+The host enables HDR as the stream starts. `Game.setHdrMode()` forwards that to
+`MediaCodecDecoderRenderer.setHdrMode()`, which promotes `codecRecoveryType` to
+`CR_RECOVERY_TYPE_RESTART` because HDR metadata can only be applied by recreating the codec. The
+restart drops the frames in flight, and the gap in the host's frame numbering is what
+`updateFrameTracking()` counts as loss.
+
+So `4 lost in 1 events` is a fixed cost of starting an HDR stream, not a link problem. Two
+consequences:
+
+- Do not read the loss counter as a network health signal on this box without checking the
+  timestamp first. A loss at t+0 is this; a loss later is not.
+- The restart is avoidable in principle — the host announces HDR in the stream configuration, so
+  the codec could be configured with the metadata from the start rather than restarted 57 ms in.
+  Not attempted; it touches codec configuration, which is where the copy-free path lives.
+
+### The decoder tail is the disconnect, not the stream
+
+**Superseded finding.** The p99.9 and max figures above were first read as a recurring stall — six
+frames per run over ~74 ms, inferred as "a stall every fifteen seconds". That inference was wrong.
+It counted the tail samples without checking whether they were spread out, and they are not.
+
+Logging each sample's position showed all of them inside one ~90 ms window, with monotonically
+decreasing times — one stall draining a backed-up queue, not many stalls:
+
+```
+Slow frame at t+164.717s: 163.05ms in decoder
+Slow frame at t+164.733s: 158.867ms
+...
+Slow frame at t+164.837s: 51.978ms
+```
+
+The window is the test harness pressing BACK to open the disconnect menu. Confirmed causally by
+changing only the hold length: a 90-second hold puts the burst at t+104.8s, a 150-second hold puts
+it at t+164.7s, and in both the burst follows the `TEARDOWN: pressing BACK` marker in logcat.
+Opening the game menu stalls the decoder for roughly 190 ms while frames queue behind it.
+
+Therefore:
+
+- **No frame exceeded 50 ms in 150 seconds of actual streaming.** Every sample above the 50 ms
+  logging threshold in corr2 belongs to the teardown burst.
+- p50, p90 and p99 are unaffected — 13 teardown samples in 9,843 frames cannot reach the 99th
+  percentile — and are the numbers to compare a change against.
+- p99.9 and max are pure artefact **in the table above**, which was recorded before the fix
+  below, and mean nothing there.
+
+**Fixed.** `Game.showGameMenu()` now calls `MediaCodecDecoderRenderer.freezeLatencyHistograms()`,
+which stops all three histograms recording at the last moment the numbers still describe
+streaming. Previously they ran until `prepareForStop()`, which is after the stall. The menu stall
+itself is real, but it happens once the user has decided to stop streaming, so excluding it costs
+nothing.
+
+Runs taken after this change should show p99.9 and max within a few multiples of p99 rather than
+30–100×. **If a run still shows the old shape, the freeze did not happen** — check that the
+teardown went through the menu rather than some other path, and treat the tail as suspect until
+that is explained. Do not compare a tail figure from the table above against one measured after
+the fix.
+
+### Open: the decoder p50 quadrupled between batches
+
+Runs 1–4 hold a decoder p50 of 1.54–3.58 ms. corr1 and corr2 both sit at 9.22 ms, with
+end-to-end p50 rising 4.61–7.17 → 11.26 ms. The two batches are each internally consistent, so
+this is a state change between them, not noise.
+
+Two candidates, not separated:
+
+- [ ] **HDR.** Both corr runs logged `Display HDR mode: enabled`. Runs 1–4 were harvested before
+      that line was in the grep, so their HDR state is simply unknown. 10-bit HDR decoding is
+      genuinely more work, and a 4× decoder time is not an unreasonable cost for it.
+- [ ] **A display renegotiation.** The box dropped into the Daydream screensaver between the two
+      batches and had to be woken. Exiting the screensaver renegotiates HDMI, and the box may not
+      have returned to the mode it was in.
+
+Re-run both batches back to back, grepping for the HDR line in each, before reading anything into
+the difference. Until then do not compare a number from batch 1 against one from batch 2.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2410,3 +2529,4 @@ Nothing here is measurable off-device: it is entirely how the tile reads on a se
 | §23 back navigation | Both target devices — the API 30/34 split is the point of the check |
 | §23 Controllers screen | A device with no USB host support, or a build run with the feature absent, for the dependency-crash path |
 | §25 | The Homatics on a 1080p60 display, streaming H.264 — the Shield keeps RFI and never runs the patch |
+| §28 batches | Both batches re-run back to back, to separate HDR from a display renegotiation |
