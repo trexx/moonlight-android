@@ -1,6 +1,5 @@
 package com.limelight.binding.video;
 
-import com.limelight.LimeLog;
 import com.limelight.preferences.PreferenceConfiguration;
 
 /**
@@ -11,11 +10,33 @@ import com.limelight.preferences.PreferenceConfiguration;
  * {@code Display} or a host — the same reason {@code GlRendererParser} and {@code StickCalibration}
  * are separate classes. Nothing here touches an Android type: the {@code FRAME_PACING_*} values are
  * compile-time constants, so javac inlines them and no reference to {@link PreferenceConfiguration}
- * survives into the bytecode.
+ * survives into the bytecode. That includes {@code LimeLog}, which is backed by
+ * {@code android.util.Log} and throws under the stubbed {@code android.jar} a JVM test runs
+ * against; the caller logs {@link #decision} instead, which is also the only thing worth logging.
  *
  * <p>Runs once per stream, immediately before {@code StreamConfiguration} is built.
  */
 public final class FramePacingSelector {
+
+    /**
+     * Why {@link #frameRate} and {@link #framePacing} came out as they did.
+     *
+     * <p>Returned rather than logged so the choice is testable and the message stays with the
+     * caller that already holds a {@code LimeLog} import. Each constant is one branch of
+     * {@link #select}, so a test that covers every constant has covered every path.
+     */
+    public enum Decision {
+        /** Nothing was derived from the display: the request is passed through untouched. */
+        AS_REQUESTED,
+        /** Asked for more frames than the panel can show, so drop them rather than pace to it. */
+        DROP_ABOVE_REFRESH,
+        /** The display reported a rate too low to believe; fall back to legacy rendering. */
+        BOGUS_REFRESH_RATE,
+        /** A fractional NTSC mode: request the whole number and let the exact rate ride along. */
+        FRACTIONAL_RATE,
+        /** A whole-number display: stay one frame below it. */
+        CAPPED_BELOW_REFRESH,
+    }
 
     /**
      * How far a reported refresh rate may sit from a whole number and still be treated as that
@@ -31,36 +52,40 @@ public final class FramePacingSelector {
     /** The pacing mode to actually use, which may be a downgrade of the one requested. */
     public final int framePacing;
 
-    private FramePacingSelector(int frameRate, int framePacing) {
+    /** Which branch of {@link #select} produced the two values above. */
+    public final Decision decision;
+
+    private FramePacingSelector(int frameRate, int framePacing, Decision decision) {
         this.frameRate = frameRate;
         this.framePacing = framePacing;
+        this.decision = decision;
     }
 
     /**
      * @param displayRefreshRate the active display mode's refresh rate in Hz
      * @param requestedFps       the frame rate the user asked for
      * @param requestedPacing    the {@code PreferenceConfiguration.FRAME_PACING_*} mode requested
-     * @return the frame rate and pacing mode to use
+     * @return the frame rate and pacing mode to use, and why
      */
     public static FramePacingSelector select(float displayRefreshRate, int requestedFps, int requestedPacing) {
         // Only "cap FPS" derives anything from the display rate. Every other mode asks for what the
         // user set and handles the mismatch when rendering.
         if (requestedPacing != PreferenceConfiguration.FRAME_PACING_CAP_FPS || requestedFps < Math.round(displayRefreshRate)) {
-            return new FramePacingSelector(requestedFps, requestedPacing);
+            return new FramePacingSelector(requestedFps, requestedPacing, Decision.AS_REQUESTED);
         }
 
         int roundedRefreshRate = Math.round(displayRefreshRate);
 
         if (requestedFps > roundedRefreshRate + 3) {
             // Use frame drops when rendering above the screen frame rate
-            LimeLog.info("Using drop mode for FPS > Hz");
-            return new FramePacingSelector(requestedFps, PreferenceConfiguration.FRAME_PACING_BALANCED);
+            return new FramePacingSelector(requestedFps, PreferenceConfiguration.FRAME_PACING_BALANCED,
+                    Decision.DROP_ABOVE_REFRESH);
         }
 
         if (roundedRefreshRate <= 49) {
             // Let's avoid clearly bogus refresh rates and fall back to legacy rendering
-            LimeLog.info("Bogus refresh rate: " + roundedRefreshRate);
-            return new FramePacingSelector(requestedFps, PreferenceConfiguration.FRAME_PACING_BALANCED);
+            return new FramePacingSelector(requestedFps, PreferenceConfiguration.FRAME_PACING_BALANCED,
+                    Decision.BOGUS_REFRESH_RATE);
         }
 
         // On a fractional-rate display, ask for the whole number and let clientRefreshRateX100
@@ -73,14 +98,12 @@ public final class FramePacingSelector {
         // fps is not within 1% of framerate"). Requesting 59 against a 59.94 display is 1.6% out,
         // so the exact rate was being thrown away every time and the host fell back to integer 59.
         if (isFractional(displayRefreshRate, roundedRefreshRate)) {
-            LimeLog.info("Fractional display rate " + displayRefreshRate + "; requesting " + roundedRefreshRate);
-            return new FramePacingSelector(roundedRefreshRate, requestedPacing);
+            return new FramePacingSelector(roundedRefreshRate, requestedPacing, Decision.FRACTIONAL_RATE);
         }
 
         // A whole-number display has no exact rate to pass, so stay a frame below it as before.
         int cappedFrameRate = roundedRefreshRate - 1;
-        LimeLog.info("Adjusting FPS target for screen to " + cappedFrameRate);
-        return new FramePacingSelector(cappedFrameRate, requestedPacing);
+        return new FramePacingSelector(cappedFrameRate, requestedPacing, Decision.CAPPED_BELOW_REFRESH);
     }
 
     private static boolean isFractional(float displayRefreshRate, int roundedRefreshRate) {

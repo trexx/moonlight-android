@@ -122,8 +122,19 @@ Robolectric:
 - `GlRendererParser` — split from `MediaCodecHelper`, which cannot even load on a JVM because it
   initialises a static field from `Build.HARDWARE`.
 - `StickCalibration` — split from `ProConController`, which needs a USB device.
+- `FramePacingSelector` — split from `Game`, which needs an `Activity` and a `Display`; it returns
+  a `Decision` and `Game` logs it, rather than logging from inside the decision.
 - `HttpInterrupts` — was already pure apart from one log call; the caller logs instead.
 - `KeyMapper` — was already pure.
+- `TextKeyPlanner`, `ImeTextModel`, `ImePreview` — split from the IME path, which needs an
+  `InputConnection`.
+- `GameMenuLayout`, `BrowseMenuLayout` — the menus' state and row lists, split from the Activities
+  that display them.
+- `ControllerLedColor` — was already pure.
+
+`SettingsTreeTest` is the one test with no class behind it: it parses `res/xml` from the source
+tree to guard the settings tree's shape. `app/build.gradle` therefore declares that directory as a
+test input, or the guard would stay up to date across a preference XML edit and silently not run.
 
 `LimeLog` is backed by `android.util.Log`, so it is **not** safe to call from code under test: JVM
 tests run against a stubbed `android.jar` whose methods throw `RuntimeException` unless
@@ -133,11 +144,14 @@ extract for testing free of `LimeLog` calls, as `VideoStats` and `KeyMapper` are
 **When extracted logic needs to log, the caller logs.** Do not reach for
 `returnDefaultValues`; leaving it unset is what forces extracted logic to be genuinely free of
 Android, and turning it on would let a test pass while silently calling framework methods that do
-nothing. Moving the line out has been the better change both times it came up: `GlRendererParser`
+nothing. Moving the line out has been the better change every time it came up: `GlRendererParser`
 logged the GPU model from a shared helper, so `MediaCodecHelper.initialize()` emitted the same line
 three or four times, and now emits it once. `HttpInterrupts` logged interrupts from inside
 `translate()`; `NvHTTP` now logs from inside the branch that only runs for an interrupt, so
 "never log for a plain IO failure" is guaranteed by shape rather than asserted by a test.
+`FramePacingSelector` logged a different line per branch, which is what a return value is for — it
+now returns a `Decision` and `Game` formats it, so a test can assert the choice rather than a
+string, and covering every constant covers every path.
 
 **Assertions are disabled in tests** (`enableAssertions = false`), matching Android runtime
 behaviour. Do not write a test that depends on an `assert` firing.
