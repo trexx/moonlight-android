@@ -300,6 +300,33 @@ pad. Test both configurations — the second block is the regression check.
 - [ ] The controller still works through the kernel `hid-nintendo` path exactly as before,
       with buttons and sticks but no motion. This must be unchanged for existing users.
 
+### Suspected defect: the Y extents are measured from the wrong centre
+
+Found by inspection while flattening `StickCalibration`, not by anyone playing. Recorded
+rather than fixed, because telling a real defect from a harmless quirk here means feeling
+the stick.
+
+`applyCalibration()` derives each axis's usable extent as 70% of its calibrated range. For X
+it measures from the stored centre. For Y it measures from the raw `yCenter` out of flash —
+but the stored Y centre is `0x1000 - yCenter`, because the Y axis is inverted on the way in.
+The two agree only when `yCenter` is exactly `0x800`; otherwise both Y extents are off by
+`1.4 ×` the centre offset, one too large and one too small.
+
+A pad whose flash Y centre sits at `0x700`, say, would get Y extents skewed by ~358 counts
+against a nominal 1792 — a fifth of the range.
+
+What makes it hard to see: `apply()` only ever widens. An extent that comes out too small
+heals itself the first time the stick is pushed to that corner, and after that the axis is
+correct. An extent that comes out too large never shrinks, so that direction stays sluggish
+for the whole session — full deflection never quite reaches 1.0.
+
+- [ ] **Push each stick to all four corners and confirm both axes reach full deflection.**
+      Compare Y against X on the same stick, and the left stick against the right. A Y axis
+      that reads short in one direction only, and stays short, is this.
+- [ ] If it reproduces, log the flash `yCenter` for the affected pad before changing the
+      formula — a pad centred at `0x800` cannot show the bug, so a clean test says nothing
+      until you know what its centre actually is.
+
 ---
 
 ## 3. Low latency audio output (AAudio)
@@ -1853,8 +1880,37 @@ the chance: Sunshine discards that value when it differs from the requested rate
 The client now asks for 60 on such a display and lets the exact rate through the guard, so the
 stream should land on 59.94 rather than a whole frame below it.
 
-**Take the numbers from the end-of-stream summary, not the overlay.** On this hardware the overlay
-forces GPU composition, so it changes the frame timing it is measuring. Compare overlay-off runs.
+**Take the numbers from the end-of-stream summary, not the overlay.** The overlay still perturbs
+what it measures — it adds a layer to the composition pass and its formatting costs the decode
+thread — so compare overlay-on with overlay-on. It does *not* force GPU composition; see §14.
+
+### 17.1 Fractional rates below 50 Hz never reach this branch
+
+Found by `FramePacingSelectorTest`, not on hardware, and **deliberately not fixed** — which of the
+two behaviours is right depends on how a 24p display actually behaves.
+
+`FramePacingSelector.select()` rejects a rounded rate of 49 Hz or below as bogus and downgrades
+pacing to balanced *before* it tests for a fractional rate. 29.97 and 23.976 round to 30 and 24, so
+both are caught by that check and can never reach the fractional branch — even though the epsilon's
+own comment names them as the modes it exists to separate. Only 59.94 (and any other fractional
+rate above 49 Hz) gets there.
+
+So on a 23.976 Hz output — a real mode both boxes expose for 24p film content — asking for cap-FPS
+pacing silently yields balanced pacing and the requested rate, not a 24 fps request carrying the
+exact rate. The test suite pins the behaviour as it stands rather than the behaviour the comment
+implies, so whichever way this is settled, the change will be visible.
+
+The open question is whether the `<= 49` rejection is meant to catch genuinely bogus reports (0 Hz,
+1 Hz — a display that has not settled) or is meant to exclude low modes from capping on purpose. If
+it is the former, the fractional test belongs before it. Reordering blind would change what every
+24p and 30p stream requests from the host, which is why it is recorded here instead.
+
+- [ ] **Set a box to a 23.976 or 29.97 Hz output mode** and confirm the client logs
+      `Bogus refresh rate: 24` (or `30`) rather than `Fractional display rate ...`.
+- [ ] **Stream 24 fps content with pacing set to "cap FPS"** and record `globalVideoStats`.
+- [ ] **Decide from the drop/duplicate counts** whether the stream is worse for having been
+      downgraded to balanced. If it is, move the fractional test above the `<= 49` rejection and
+      narrow that rejection to the rates that are actually implausible.
 
 - [ ] **Set each box to a 59.94 Hz output mode** and confirm the client logs
       `Fractional display rate 59.94; requesting 60`. If it logs nothing, the display is reporting
@@ -2299,6 +2355,7 @@ other Amlogic buffering notes.
 | §13 motion | A pad with a gyro (Switch Pro, DualSense, DualShock 4) + a host game that requests it |
 | §16 intra refresh | Sunshine host on an NVIDIA GPU |
 | §17 refresh rate | A display or output mode that reports a fractional rate (59.94, 29.97, 23.976) |
+| §17.1 sub-50 fractional | A 23.976 or 29.97 Hz output mode specifically — 59.94 takes the other branch and cannot settle it |
 | §18.2 two-client check | A second Moonlight client against the same host |
 | §19 | Both target devices; the survey differs per SoC |
 | §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |

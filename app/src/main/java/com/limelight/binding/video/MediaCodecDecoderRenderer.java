@@ -2156,8 +2156,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-        // Flip stats windows roughly every second
-        if (SystemClock.uptimeMillis() >= activeWindow.measurementStartTimestamp + 1000) {
+        // Flip stats windows roughly every second. Read once and reused below: this is the only
+        // clock read left on the steady-state path, and the window that closes here and the one
+        // that opens should meet at the same instant rather than a few microseconds apart.
+        final long nowUptimeMs = SystemClock.uptimeMillis();
+        if (nowUptimeMs >= activeWindow.measurementStartTimestamp + 1000) {
             // Cache the overlay's visibility for the per-frame paths. They need it 60 times a
             // second and this is the only place already asking, so they read a field rather than
             // making an interface call. Visibility rather than the preference: the game menu's
@@ -2177,7 +2180,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 lastTwo.add(lastWindowVideoStats);
                 lastTwo.add(activeWindow);
 
-                final VideoStatsFps fps = lastTwo.getFps();
+                final VideoStatsFps fps = lastTwo.getFps(nowUptimeMs);
                 final String decoder;
 
                 if ((videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
@@ -2201,7 +2204,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             globalVideoStats.add(activeWindow);
             lastWindowVideoStats.copy(activeWindow);
             activeWindow.clear();
-            activeWindow.measurementStartTimestamp = SystemClock.uptimeMillis();
+            activeWindow.measurementStartTimestamp = nowUptimeMs;
         }
     }
 

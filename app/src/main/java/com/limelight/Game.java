@@ -593,6 +593,17 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         int chosenFrameRate = pacing.frameRate;
         prefConfig.framePacing = pacing.framePacing;
 
+        // Logged here rather than inside the selector so the selector stays free of android.util.Log
+        // and can be reached from a JVM test. Once per stream, so the string build costs nothing.
+        LimeLog.info(switch (pacing.decision) {
+            case AS_REQUESTED -> "Frame pacing: requesting " + chosenFrameRate + " as asked";
+            case DROP_ABOVE_REFRESH -> "Using drop mode for FPS > Hz";
+            case BOGUS_REFRESH_RATE -> "Bogus refresh rate: " + Math.round(displayRefreshRate);
+            case FRACTIONAL_RATE -> "Fractional display rate " + displayRefreshRate
+                    + "; requesting " + chosenFrameRate;
+            case CAPPED_BELOW_REFRESH -> "Adjusting FPS target for screen to " + chosenFrameRate;
+        });
+
         StreamConfiguration config = new StreamConfiguration.Builder()
                 .setResolution(prefConfig.width, prefConfig.height)
                 .setLaunchRefreshRate(prefConfig.fps)

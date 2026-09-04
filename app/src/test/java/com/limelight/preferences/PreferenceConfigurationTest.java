@@ -1,20 +1,77 @@
 package com.limelight.preferences;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+import com.limelight.nvstream.StreamConfiguration;
 
 /**
- * Tests for the preference-value mappings that are reachable without a {@code Context}.
+ * Tests for the preference values that are parsed rather than read straight through.
  *
- * <p>Only the static string-to-value helpers are covered. {@code readPreferences} needs a real
- * {@code SharedPreferences} and is out of reach of a JVM test.
+ * <p>Only the pure mappers are reachable here — {@link PreferenceConfiguration#readPreferences}
+ * needs a {@code Context}, which is why those mappers are separate static methods in the first
+ * place. The {@code ENCFLG_*} values they return are compile-time constants, so javac inlines them
+ * and {@link StreamConfiguration} is never loaded; that matters because it would drag in
+ * {@code MoonBridge}, whose static initialiser calls {@code System.loadLibrary}.
  */
 class PreferenceConfigurationTest {
+
+    @Nested
+    @DisplayName("getEncryptionFlagsValue()")
+    class EncryptionFlags {
+
+        @Test
+        @DisplayName("maps each offered setting to its protocol flags")
+        void mapsEachSetting() {
+            assertEquals(StreamConfiguration.ENCFLG_NONE,
+                    PreferenceConfiguration.getEncryptionFlagsValue("none"));
+            assertEquals(StreamConfiguration.ENCFLG_AUDIO,
+                    PreferenceConfiguration.getEncryptionFlagsValue("audio"));
+            assertEquals(StreamConfiguration.ENCFLG_ALL,
+                    PreferenceConfiguration.getEncryptionFlagsValue("all"));
+        }
+
+        @Test
+        @DisplayName("audio-only is the default when the preference has never been written")
+        void nullFallsBackToDefault() {
+            // A fresh install reaches this with null rather than the default string.
+            assertEquals(StreamConfiguration.ENCFLG_AUDIO,
+                    PreferenceConfiguration.getEncryptionFlagsValue(null));
+            assertEquals(PreferenceConfiguration.getEncryptionFlagsValue(
+                            PreferenceConfiguration.DEFAULT_ENCRYPTION),
+                    PreferenceConfiguration.getEncryptionFlagsValue(null));
+        }
+
+        @ParameterizedTest(name = "\"{0}\"")
+        @ValueSource(strings = {"", "Audio", "AUDIO", "video", "everything", "1", " audio "})
+        @DisplayName("falls back to audio rather than silently dropping encryption")
+        void unrecognisedFallsBackToAudio(String value) {
+            // The failure mode that matters is a typo or a stale value quietly turning encryption
+            // off, so anything unrecognised lands on the upstream baseline rather than NONE.
+            assertEquals(StreamConfiguration.ENCFLG_AUDIO,
+                    PreferenceConfiguration.getEncryptionFlagsValue(value));
+        }
+
+        @Test
+        @DisplayName("the values match the array the preference actually offers")
+        void matchesPreferenceEntryValues() {
+            // arrays.xml holds the same three strings. If one is renamed there without being
+            // renamed here it would silently fall through to the audio default, which is exactly
+            // the kind of drift that survives review.
+            assertEquals(StreamConfiguration.ENCFLG_NONE,
+                    PreferenceConfiguration.getEncryptionFlagsValue("none"));
+            assertEquals(StreamConfiguration.ENCFLG_ALL,
+                    PreferenceConfiguration.getEncryptionFlagsValue("all"));
+            assertEquals("audio", PreferenceConfiguration.DEFAULT_ENCRYPTION);
+        }
+    }
 
     @Nested
     @DisplayName("guide button LED brightness")
@@ -61,8 +118,7 @@ class PreferenceConfigurationTest {
         void presetsStayWithinProtocolRange(String stored) {
             int intensity = PreferenceConfiguration.getGuideButtonLedValue(stored);
 
-            org.junit.jupiter.api.Assertions.assertTrue(
-                    intensity >= 0x00 && intensity <= 0x2F,
+            assertTrue(intensity >= 0x00 && intensity <= 0x2F,
                     "intensity " + intensity + " is outside the protocol's 0x00-0x2F range");
         }
     }

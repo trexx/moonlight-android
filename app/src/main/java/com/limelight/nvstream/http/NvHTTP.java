@@ -474,6 +474,18 @@ public class NvHTTP {
             // where nothing in the try block declares throwing one.
             InterruptedIOException interrupted = HttpInterrupts.translate(e);
             if (interrupted != null) {
+                // Once translated this is indistinguishable from an ordinary connect failure -
+                // tryPollIp swallows it and reports the host offline - so without a line here the
+                // interrupt leaves no trace at all. The thread name identifies the host ("Polling
+                // thread for <name>", "Parallel Poll - <address> - <name>"), which is what separates
+                // a routine stop-polling interrupt from one that fired where it should not have.
+                //
+                // Logged here rather than inside translate() so that method stays free of Android
+                // types and can be tested. Being inside this branch also means it cannot fire for
+                // the far more common IO failure, so a host that is simply offline does not spam
+                // the log - a property the old placement had to assert in a test.
+                LimeLog.info("Connect interrupted on \"" + Thread.currentThread().getName()
+                        + "\"; reporting it as an IO failure");
                 throw interrupted;
             }
 

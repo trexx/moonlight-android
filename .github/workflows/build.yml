@@ -4,8 +4,72 @@ name: Build
 on:
   workflow_dispatch:
   pull_request:
+  # Runs on master so each merge records the APK metrics that pull requests are
+  # compared against. Without this there is no baseline and the size report on a PR
+  # can only show absolute numbers.
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+  # Needed to list master's workflow runs and download their metrics artifact
+  actions: read
 
 jobs:
+  # Deliberately not a dependency of the build job. Unit tests need no NDK and finish in
+  # well under a minute, so they give a fast independent signal, and a red test should not
+  # stop a maintainer getting an APK to try on real hardware - which is how most of this
+  # project actually gets verified. See HARDWARE_TESTING.md.
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Setup Java JDK
+        uses: actions/setup-java@dd06d9cba3e5552c54d9f8ea23572deb30010f7c # v6
+        with:
+          java-version: 25
+          distribution: 'corretto'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+            packages: ''
+
+      # Submodules are the vendored C libraries, which no unit test touches - testDebugUnitTest
+      # does not run ndk-build. They are checked out anyway so Gradle configuration cannot
+      # depend on their absence; dropping them here would roughly halve this job if it proves
+      # safe.
+      - name: Checkout Repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+
+      - name: Run unit tests
+        uses: burrunan/gradle-cache-action@404534c34a2faa40430357a3183522a845b04f3b # v3
+        with:
+          arguments: testDebugUnitTest jacocoTestReport
+
+      # Runs even when tests fail, so a failing run still shows what the covered set was
+      - name: Summarise coverage
+        if: always()
+        run: |
+          report=app/build/reports/jacoco/jacocoTestReport/jacocoTestReport.xml
+          if [ -f "$report" ]; then
+            python3 scripts/coverage-summary.py "$report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload test and coverage reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest
+            app/build/reports/jacoco/jacocoTestReport/html
+          if-no-files-found: warn
+
   build:
     name: Build
     runs-on: ubuntu-latest
@@ -48,6 +112,59 @@ jobs:
         uses: burrunan/gradle-cache-action@404534c34a2faa40430357a3183522a845b04f3b # v3
         with:
           arguments: assembleRelease assembleDebug lintRelease lintDebug
+
+      # Measured on the unsigned APK, before zipalign and signing. Those steps depend on a
+      # secret and on the runner's build-tools version, so including them would put noise
+      # into a number whose whole purpose is to be comparable across runs.
+      #
+      # This is the honest half of performance checking on CI. Real latency needs a hardware
+      # decoder, a host and a network - see the note in scripts/apk-metrics.py - but APK size
+      # and DEX method count do move when the shrinker configuration or the dependency tree
+      # changes, and nothing else catches that before someone installs the build.
+      - name: Measure APK
+        run: |
+          python3 scripts/apk-metrics.py measure \
+            ./app/build/outputs/apk/release/app-release-unsigned.apk \
+            -o apk-metrics.json
+
+      # Best effort: a first run, a deleted artifact or an expired retention window all just
+      # mean there is no baseline to compare against, which is not a reason to fail the build.
+      - name: Fetch baseline metrics from master
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run_id=$(gh run list --workflow build.yml --branch master --status success \
+            --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ -n "$run_id" ]; then
+            gh run download "$run_id" --name apk-metrics --dir baseline
+          fi
+
+      - name: Report APK size and method count
+        if: github.event_name == 'pull_request'
+        run: |
+          {
+            echo "## APK metrics"
+            echo
+            if [ -f baseline/apk-metrics.json ]; then
+              python3 scripts/apk-metrics.py compare baseline/apk-metrics.json apk-metrics.json
+            else
+              echo "No master baseline available yet, so this run reports absolute numbers only."
+              echo "A baseline is recorded on the next push to master."
+              echo
+              echo '```json'
+              cat apk-metrics.json
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload APK metrics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: apk-metrics
+          path: apk-metrics.json
+          if-no-files-found: error
 
       # The SDK ships several build-tools versions and the pinned 34.0.0 is not guaranteed to
       # be present on the runner (setup-android installs no extra packages). Resolve the

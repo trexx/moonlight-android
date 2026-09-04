@@ -7,8 +7,6 @@ import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import android.annotation.SuppressLint;
 import android.app.ActivityManager;
@@ -268,59 +266,6 @@ public class MediaCodecHelper {
         amlogicCodec2DecoderPrefixes.add("c2.amlogic");
     }
 
-    private static boolean isPowerVR(String glRenderer) {
-        return glRenderer.toLowerCase(Locale.ROOT).contains("powervr");
-    }
-
-    private static String getAdrenoVersionString(String glRenderer) {
-        glRenderer = glRenderer.toLowerCase(Locale.ROOT).trim();
-
-        if (!glRenderer.contains("adreno")) {
-            return null;
-        }
-
-        Pattern modelNumberPattern = Pattern.compile("(.*)([0-9]{3})(.*)");
-
-        Matcher matcher = modelNumberPattern.matcher(glRenderer);
-        if (!matcher.matches()) {
-            return null;
-        }
-
-        String modelNumber = matcher.group(2);
-        LimeLog.info("Found Adreno GPU: "+modelNumber);
-        return modelNumber;
-    }
-
-    private static boolean isLowEndSnapdragonRenderer(String glRenderer) {
-        String modelNumber = getAdrenoVersionString(glRenderer);
-        if (modelNumber == null) {
-            // Not an Adreno GPU
-            return false;
-        }
-
-        // The current logic is to identify low-end SoCs based on a zero in the x0x place.
-        return modelNumber.charAt(1) == '0';
-    }
-
-    private static int getAdrenoRendererModelNumber(String glRenderer) {
-        String modelNumber = getAdrenoVersionString(glRenderer);
-        if (modelNumber == null) {
-            // Not an Adreno GPU
-            return -1;
-        }
-
-        return Integer.parseInt(modelNumber);
-    }
-
-    // This is a workaround for some broken devices that report
-    // only GLES 3.0 even though the GPU is an Adreno 4xx series part.
-    // An example of such a device is the Huawei Honor 5x with the
-    // Snapdragon 616 SoC (Adreno 405).
-    private static boolean isGLES31SnapdragonRenderer(String glRenderer) {
-        // Snapdragon 4xx and higher support GLES 3.1
-        return getAdrenoRendererModelNumber(glRenderer) >= 400;
-    }
-
     /**
      * Adds the quirks that can only be determined at runtime: SoC and GPU identification, and
      * device-family whitelists. Idempotent, and must be called before the query methods are
@@ -381,8 +326,17 @@ public class MediaCodecHelper {
         if (configInfo.reqGlEsVersion != ConfigurationInfo.GL_ES_VERSION_UNDEFINED) {
             LimeLog.info("OpenGL ES version: "+configInfo.reqGlEsVersion);
 
-            isLowEndSnapdragon = isLowEndSnapdragonRenderer(glRenderer);
-            isAdreno620 = getAdrenoRendererModelNumber(glRenderer) == 620;
+            // Resolved once and logged here rather than inside the parser. The parsing used to log
+            // on every call, so identifying the GPU emitted the same line three or four times per
+            // initialize(); more importantly, the log call is what kept this logic tied to Android
+            // and therefore untestable. See GlRendererParser.
+            int adrenoModel = GlRendererParser.getAdrenoRendererModelNumber(glRenderer);
+            if (adrenoModel != -1) {
+                LimeLog.info("Found Adreno GPU: "+adrenoModel);
+            }
+
+            isLowEndSnapdragon = GlRendererParser.isLowEndSnapdragonRenderer(glRenderer);
+            isAdreno620 = adrenoModel == 620;
 
             // Tegra K1 and later can do reference frame invalidation properly
             if (configInfo.reqGlEsVersion >= 0x30000) {
@@ -414,7 +368,7 @@ public class MediaCodecHelper {
             // The "good" GPUs support GLES 3.1, but we can't just check that directly
             // (see comment on isGLES31SnapdragonRenderer).
             //
-            if (isGLES31SnapdragonRenderer(glRenderer)) {
+            if (GlRendererParser.isGLES31SnapdragonRenderer(glRenderer)) {
                 LimeLog.info("Added omx.qcom/c2.qti to HEVC decoders based on GLES 3.1+ support");
                 whitelistedHevcDecoders.add("omx.qcom");
                 whitelistedHevcDecoders.add("c2.qti");
@@ -428,7 +382,7 @@ public class MediaCodecHelper {
 
             // Older MediaTek SoCs have issues with HEVC rendering but the newer chips with
             // PowerVR GPUs have good HEVC support.
-            if (isPowerVR(glRenderer)) {
+            if (GlRendererParser.isPowerVR(glRenderer)) {
                 LimeLog.info("Added omx.mtk to HEVC decoders based on PowerVR GPU");
                 whitelistedHevcDecoders.add("omx.mtk");
 
