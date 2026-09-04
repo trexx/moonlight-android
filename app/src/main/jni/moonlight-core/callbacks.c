@@ -28,6 +28,8 @@
 
 #include <cpu-features.h>
 
+#include "profiling.h"
+
 static OpusMSDecoder* Decoder;
 static OPUS_MULTISTREAM_CONFIGURATION OpusConfig;
 
@@ -244,6 +246,10 @@ static int SubmitPicData(JNIEnv* env, PDECODE_UNIT decodeUnit, int picDataLength
         return (*env)->CallStaticIntMethod(env, GlobalBridgeClass, BridgeDrAbortPicDataMethod);
     }
 
+    // The one copy left on the picture path: the decode unit arrives as a linked list of
+    // fragments and the codec wants them contiguous. Traced because it is the remaining candidate
+    // for removal, and a number is needed before deciding whether the restructuring is worth it.
+    ML_TRACE_BEGIN(ML_PROF_VIDEO, "JNI.copyPicData");
     int written = 0;
     for (PLENTRY entry = decodeUnit->bufferList; entry != NULL; entry = entry->next) {
         if (entry->bufferType == BUFFER_TYPE_PICDATA) {
@@ -251,6 +257,7 @@ static int SubmitPicData(JNIEnv* env, PDECODE_UNIT decodeUnit, int picDataLength
             written += entry->length;
         }
     }
+    ML_TRACE_END(ML_PROF_VIDEO);
 
     (*env)->DeleteLocalRef(env, inputBuffer);
 
