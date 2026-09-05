@@ -68,13 +68,13 @@ public final class FramePacingSelector {
      * @return the frame rate and pacing mode to use, and why
      */
     public static FramePacingSelector select(float displayRefreshRate, int requestedFps, int requestedPacing) {
+        int roundedRefreshRate = Math.round(displayRefreshRate);
+
         // Only "cap FPS" derives anything from the display rate. Every other mode asks for what the
         // user set and handles the mismatch when rendering.
-        if (requestedPacing != PreferenceConfiguration.FRAME_PACING_CAP_FPS || requestedFps < Math.round(displayRefreshRate)) {
+        if (requestedPacing != PreferenceConfiguration.FRAME_PACING_CAP_FPS || requestedFps < roundedRefreshRate) {
             return new FramePacingSelector(requestedFps, requestedPacing, Decision.AS_REQUESTED);
         }
-
-        int roundedRefreshRate = Math.round(displayRefreshRate);
 
         if (requestedFps > roundedRefreshRate + 3) {
             // Use frame drops when rendering above the screen frame rate

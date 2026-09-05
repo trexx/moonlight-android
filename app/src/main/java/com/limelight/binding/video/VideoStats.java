@@ -19,8 +19,14 @@ package com.limelight.binding.video;
  */
 class VideoStats {
 
-    // Time inside the decoder, and time from frame arrival to presentation
+    // Time inside the decoder. Accumulated in debug builds only - the decode-start ring it is
+    // measured against is not allocated in release - so this is always 0 in a shipped build, and
+    // nothing user-facing may report it. The overlay and the end-of-stream percentiles are both
+    // debug-only, which is why they can.
     long decoderTimeMs;
+    // Time from a frame's first packet arriving to it being handed to the decoder. Despite the
+    // name it does not reach presentation: decoderTimeMs is added here too, but only under the
+    // same debug-only guard, so in release this is receive-to-enqueue and nothing more.
     long totalTimeMs;
     // Frames the host says it sent, including ones lost in transit
     int totalFrames;
@@ -64,11 +70,11 @@ class VideoStats {
         this.totalHostProcessingLatency += other.totalHostProcessingLatency;
         this.framesWithHostProcessingLatency += other.framesWithHostProcessingLatency;
 
+        // Keeps the earlier of the two starts, so a summed window still spans from when the
+        // oldest of its parts opened. Callers add in chronological order.
         if (this.measurementStartTimestamp == 0) {
             this.measurementStartTimestamp = other.measurementStartTimestamp;
         }
-
-        assert other.measurementStartTimestamp >= this.measurementStartTimestamp;
     }
 
     /** Overwrites this window with another's values, including its start timestamp. */

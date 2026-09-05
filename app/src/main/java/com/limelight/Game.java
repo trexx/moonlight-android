@@ -494,7 +494,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // Initialize the MediaCodec helper before creating the decoder
         GlPreferences glPrefs = GlPreferences.readPreferences(this);
-        MediaCodecHelper.initialize(this, glPrefs.glRenderer);
+        MediaCodecHelper.initialize(this);
 
         // Check if the user has enabled HDR
         boolean willStreamHdr = false;
@@ -1014,17 +1014,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             stopConnection();
 
             if (prefConfig.enableLatencyToast) {
-                int averageEndToEndLat = decoderRenderer.getAverageEndToEndLatency();
-                int averageDecoderLat = decoderRenderer.getAverageDecoderLatency();
+                // Receive-to-enqueue only. The decoder half used to be shown in brackets beside
+                // it, but the decoder's time is accumulated only in debug builds, so in a release
+                // build that figure was always 0 and the bracket silently never appeared. Showing
+                // one honest number beats a compound one whose second half is a coin flip.
+                int averageReceiveToEnqueueLat = decoderRenderer.getAverageReceiveToEnqueueLatency();
                 String message = null;
-                if (averageEndToEndLat > 0) {
-                    message = getResources().getString(R.string.conn_client_latency)+" "+averageEndToEndLat+" ms";
-                    if (averageDecoderLat > 0) {
-                        message += " ("+getResources().getString(R.string.conn_client_latency_hw)+" "+averageDecoderLat+" ms)";
-                    }
-                }
-                else if (averageDecoderLat > 0) {
-                    message = getResources().getString(R.string.conn_hardware_latency)+" "+averageDecoderLat+" ms";
+                if (averageReceiveToEnqueueLat > 0) {
+                    message = getResources().getString(R.string.conn_client_latency)+" "+averageReceiveToEnqueueLat+" ms";
                 }
 
                 // Add the video codec to the post-stream toast
