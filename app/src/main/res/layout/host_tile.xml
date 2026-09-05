@@ -10,7 +10,10 @@
 
   The badge and the spinner deliberately occupy the same place over the icon: a host is either
   being probed (spinner), or settled with something to report (offline, or online but unpaired),
-  never both.
+  never both. That place is the middle of the monitor's screen, which is not the middle of the
+  icon's box - see host_tile_badge_rise in values/dimens.xml for the two viewport units between
+  them, and note that FrameLayout's centre gravity subtracts the bottom margin, so the margin
+  below each of them is what lifts it.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="@dimen/host_tile_width"
@@ -45,13 +48,15 @@
                 android:importantForAccessibility="no"
                 android:layout_width="@dimen/host_tile_badge_size"
                 android:layout_height="@dimen/host_tile_badge_size"
-                android:layout_gravity="center" />
+                android:layout_gravity="center"
+                android:layout_marginBottom="@dimen/host_tile_badge_rise" />
 
             <ProgressBar
                 android:id="@+id/grid_spinner"
                 android:layout_width="@dimen/host_tile_badge_size"
                 android:layout_height="@dimen/host_tile_badge_size"
                 android:layout_gravity="center"
+                android:layout_marginBottom="@dimen/host_tile_badge_rise"
                 android:indeterminate="true" />
 
         </FrameLayout>

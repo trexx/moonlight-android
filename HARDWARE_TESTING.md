@@ -2331,6 +2331,52 @@ other Amlogic buffering notes.
 
 ---
 
+## 26. Host tile badge centring
+
+The offline badge and the pairing padlock sat low on the host tile. This was a geometry error, not
+a matter of taste, and it was introduced by the browse-UI rework: `pc_grid_item.xml` used to place
+the badge with a hand-tuned `layout_marginTop` of 28dp, which put it in the middle of the monitor's
+*screen*; `host_tile.xml` replaced that with `layout_gravity="center"`, which puts it in the middle
+of the icon's *box*.
+
+Those are not the same point. `ic_computer` draws the screen aperture across y 4..16 of its 24-unit
+viewport, so the screen's centre is at 10, while the box centre is 12 — the stand below the screen
+is what pulls the box centre down. The badge therefore sat two viewport units low.
+
+Measured off the vector paths at the shipped `values-television` sizes (96dp icon, 52dp badge), in
+icon viewport units, screen aperture 4.00..16.00:
+
+| | before | after (8dp rise) |
+|---|---|---|
+| offline triangle | 6.58..**16.88** — base over the bottom bezel | 4.58..14.88 — inside the screen |
+| pairing padlock | 6.04..**17.42** — body over the bezel and stand | 4.04..15.42 — inside the screen |
+| bbox centre (want 10.00) | 11.73 | 9.73 |
+
+The fix is `host_tile_badge_rise`, a bottom margin on both the badge and the spinner — FrameLayout's
+centre gravity subtracts the bottom margin, so a margin below lifts the child. It is two viewport
+units of the icon, so 6dp at the 72dp default and 8dp on a television's 96dp.
+
+**What a device still has to settle.** The correction above centres each badge's *bounding box* on
+the screen. It does not correct for where the ink sits inside that box, and an upward triangle is
+bottom-heavy: two thirds of its area lies below the middle of its own box, which puts the offline
+badge's centre of mass at 11.48 rather than 10.00 even after the lift. On a desk render it reads as
+centred. Across a room it may still read as low.
+
+- [ ] **Offline badge, on a television at viewing distance.** Does the triangle read as sitting in
+      the middle of the screen, or still low? If low, the remaining lift is a taste call: the apex
+      reaches the top bezel at about 2.4 further viewport units, so there is roughly 7dp of headroom
+      on a television before it starts to look high instead.
+- [ ] **Padlock, same view.** It is near-symmetric and its mass sits at 10.85, so it should need
+      nothing. If the triangle is nudged further, check the padlock has not been dragged with it —
+      they share `host_tile_badge_rise`.
+- [ ] **Probe spinner.** It moves with the badge by design, so that the two land in the same place.
+      Confirm it still looks centred while a host is being probed, which is the state it is the only
+      thing visible in.
+
+Nothing here is measurable off-device: it is entirely how the tile reads on a set at three metres.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2358,6 +2404,7 @@ other Amlogic buffering notes.
 | §17.1 sub-50 fractional | A 23.976 or 29.97 Hz output mode specifically — 59.94 takes the other branch and cannot settle it |
 | §18.2 two-client check | A second Moonlight client against the same host |
 | §19 | Both target devices; the survey differs per SoC |
+| §26 badge centring | Either box, on a television at normal viewing distance |
 | §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |
 | §22 LED presets | Any adapter pad; a second pad to check one connecting mid-stream, and a cabled pad for the wired path |
 | §23 back navigation | Both target devices — the API 30/34 split is the point of the check |

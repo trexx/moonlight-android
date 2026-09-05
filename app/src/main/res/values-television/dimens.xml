@@ -31,6 +31,8 @@
     <dimen name="host_tile_width">200dp</dimen>
     <dimen name="host_tile_icon_size">96dp</dimen>
     <dimen name="host_tile_badge_size">52dp</dimen>
+    <!-- 96dp / 12, the same two viewport units. See values/dimens.xml. -->
+    <dimen name="host_tile_badge_rise">8dp</dimen>
 
     <!-- Sized to leave the grid almost no remainder to spread. A television gives the grid
          800dp of width, and GridView fits floor((800 + spacing) / (width + spacing)) columns and
