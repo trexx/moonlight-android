@@ -2377,6 +2377,95 @@ Nothing here is measurable off-device: it is entirely how the tile reads on a se
 
 ---
 
+## 27. USB/IP device forwarding to a Windows host
+
+Forwarding a whole USB device to the host, so Windows binds its real driver to it rather than
+Sunshine emulating a generic pad. This is what reaches a force-feedback wheel, a HOTAS, an arcade
+stick, DualSense adaptive triggers and haptics, and controller headset audio — none of which
+Moonlight's own input protocol can model.
+
+The host runs [usbip-win2](https://github.com/vadimgrn/usbip-win2). Its released installers carry
+attestation- or WHLK-signed drivers via the Open Source Codesigning Initiative, so **test signing
+mode is not needed** — that requirement applies only to drivers you build yourself. The installer
+restarts every USB 3.0 hub as it runs, so nothing else should be mid-transfer, and it asks for a
+restore point first.
+
+Almost nothing here can be checked off-device. The protocol codec has JVM tests pinned against the
+wire capture in the kernel's own `Documentation/usb/usbip_protocol.rst`, and that is the whole of
+what CI can say. Everything below needs both boxes.
+
+### 26.1 Stage 0 — spike, before any of this ships
+
+Run against the standalone [cgutman/USBIPServerForAndroid](https://github.com/cgutman/USBIPServerForAndroid)
+build, not this app. The point is to find out whether the chain works at all before the transport
+is written here.
+
+That build needs one fix to run on the Shield: it gates `startService()` on `POST_NOTIFICATIONS`,
+which does not exist below API 33, so `checkSelfPermission` returns denied and the service never
+starts. Guard it on `SDK_INT >= 33`. Its own `android.os.Build` import is left unused, which is
+what the check used to be. This is the whole of issues #7 and #9 on that repo.
+
+- [ ] **`usbip.exe list -r <box>` shows the device.** If the box is not listening at all, the
+      permission gate above is the first suspect.
+- [ ] **`usbip.exe attach -r <box> -b <busid>` binds a real driver.** Device Manager shows the
+      device, not a yellow bang. "This device cannot start. (Code 10)" points at the reported bus
+      speed — Android never reports speed, so `DeviceSpeedResolver` infers it, and a wrong answer
+      fails here and nowhere else.
+- [ ] **Measure the report rate.** `usbhid` keeps one URB in flight and resubmits on completion,
+      so the rate should be about `min(1/bInterval, 1/RTT)` rather than the device's native poll
+      rate. Record it on wired Ethernet *and* on Wi-Fi; the gap between them is the whole argument
+      for keeping several URBs outstanding per endpoint.
+
+      | Link | RTT | Device poll interval | Measured report rate |
+      |---|---|---|---|
+      | Ethernet | *(fill in)* | | |
+      | Wi-Fi 5 GHz | *(fill in)* | | |
+
+- [ ] **A composite device with isochronous audio interfaces survives enumeration.** A DualSense
+      or a cabled Xbox pad. Windows enumerates *every* interface whether or not anyone wants the
+      audio, and that build answers an isochronous URB by killing the whole attachment rather than
+      failing the one transfer. If the device drops immediately, this is why — and it is the
+      likeliest explanation for issue #11 on that repo.
+- [ ] **Streaming does not degrade with the device attached.** Ten minutes with the USB/IP flow on
+      the same link as video. Compare `globalVideoStats` against a run without it, not the overlay
+      numbers, and keep the overlay in the same state for both runs.
+
+### 26.2 Stage 1 — HID devices through this app
+
+- [ ] **A device marked for export is not also claimed locally.** It must disappear from the
+      in-stream game menu when exported: two owners means the game sees the pad twice.
+- [ ] **A device not marked for export is untouched.** `UsbDriverService` still drives it, and the
+      existing §2 and §12 checks still pass.
+- [ ] **Wheel force feedback works** through a game that uses it. This is the case that has no
+      equivalent over Moonlight's own input protocol, so there is nothing to compare against —
+      record what the wheel actually does.
+- [ ] **DualSense adaptive triggers, haptics, gyro and touchpad** all reach the game as a real
+      device rather than a ViGEm pad.
+- [ ] **An isochronous URB fails that transfer only.** The attachment survives and HID keeps
+      working while `usbaudio.sys` gives up. This is the specific defect stage 1 fixes rather than
+      ports, so it is worth provoking deliberately.
+- [ ] **Unplugging mid-stream tears down cleanly at both ends.** No stale claim on the box, no
+      wedged port on the host. Replug and re-attach afterwards.
+- [ ] **Killing the app releases the device.** The failure to check for is a native driver left
+      alive on a dead file descriptor, which is what §10 describes as the USB stack cycling once a
+      second.
+
+### 26.3 Stage 2 — isochronous over libusb
+
+- [ ] **Controller headset audio works in both directions.** The endpoints are the ones §10 and
+      `jni/xow_driver/AUDIO.md` already describe: 228 bytes out, 64 in, at 1 ms.
+- [ ] **The report rate is no longer capped by RTT.** Re-run the 26.1 table with several URBs
+      outstanding per endpoint and compare. If Wi-Fi is still too slow for a high-poll device,
+      record that as the honest limit rather than tuning around it.
+- [ ] **The Homatics specifically.** Isochronous URB submission over usbfs has 32-bit versus
+      64-bit layout pitfalls that libusb handles and hand-rolled ioctls do not, so the 32-bit
+      userspace is the case that matters here — the Shield cannot settle it.
+
+Reading `LimeLog` output on the Homatics needs `adb shell setprop persist.log.tag '""'` first, and
+`adb shell setprop persist.log.tag S` afterwards to restore the shipped value.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
