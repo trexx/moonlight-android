@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -276,6 +277,37 @@ class StickCalibrationTest {
             assertEquals(0x700, calibration.extent(0, 1, 1), 0.001f);
             assertEquals(0x700, calibration.extent(1, 0, 1), 0.001f);
             assertEquals(0x700, calibration.extent(1, 1, 1), 0.001f);
+        }
+
+        @Test
+        @DisplayName("never returns NaN for a record with no travel in it")
+        void degenerateRecordDoesNotProduceNaN() {
+            // Erased flash, a partial SPI read or a clone pad can report a record whose deflection
+            // deltas are all zero. Without the floor in applyCalibration the extents come out at
+            // exactly 0.0f, every comparison in apply() is strict so none of them catches it, and
+            // a reading at the centre evaluates 0.0f / 0.0f. NaN then rides the axis for the whole
+            // session, because the extents only widen.
+            StickCalibration calibration = new StickCalibration();
+            calibration.applyCalibration(0, 0, 0x800, 0, 0, 0x800, 0);
+
+            for (float reading : new float[] {
+                    calibration.leftX.apply(0x800),
+                    calibration.leftY.apply(-0x800),
+                    calibration.leftX.apply(0x801),
+                    calibration.leftX.apply(0x7FF)}) {
+                assertFalse(Float.isNaN(reading), "axis read NaN from a zero-travel record");
+                assertTrue(reading >= -1.0f && reading <= 1.0f,
+                        "axis escaped the -1..1 range: " + reading);
+            }
+        }
+
+        @Test
+        @DisplayName("still reports zero at the centre of a zero-travel record")
+        void degenerateRecordStillCentres() {
+            StickCalibration calibration = new StickCalibration();
+            calibration.applyCalibration(0, 0, 0x800, 0, 0, 0x800, 0);
+
+            assertEquals(0.0f, calibration.leftX.apply(0x800), 0.001f);
         }
     }
 
