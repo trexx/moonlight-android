@@ -43,6 +43,30 @@ class VideoStats {
     char maxHostProcessingLatency;
     int totalHostProcessingLatency;
     int framesWithHostProcessingLatency;
+
+    // Worst single frame in this window, alongside the totals above. A mean over a one-second
+    // window cannot distinguish a smooth second from one containing a single 200 ms stall, which
+    // is the failure the overlay was consulted for and could not answer - the same reason
+    // LatencyHistogram exists for the session view. These are the per-window half of that.
+    //
+    // Microseconds, not milliseconds: totalTimeMs truncates toward zero, so a frame that really
+    // took 0.9 ms contributes nothing to it. A worst-case figure that rounds its way to zero is
+    // worse than useless.
+    long worstRecvToEnqueueUs;
+    // Debug builds only, like the decoder timing that feeds it.
+    long worstDecoderTimeUs;
+
+    // Gaps where the display went without a new frame, measured from the codec's render
+    // timestamps. Debug builds only.
+    //
+    // Per window rather than per session, deliberately. These lived in MediaCodecDecoderRenderer
+    // as plain fields that were incremented and maxed but never reset, so after a single hitch the
+    // overlay reported that hitch for the rest of the stream and stopped describing anything
+    // current. Here they clear with every other counter, and add() gives the session total for
+    // free - which is what the summary wanted from them anyway.
+    int presentationGapCount;
+    long worstPresentationGapNanos;
+
     long measurementStartTimestamp;
 
     /**
@@ -70,6 +94,15 @@ class VideoStats {
         this.totalHostProcessingLatency += other.totalHostProcessingLatency;
         this.framesWithHostProcessingLatency += other.framesWithHostProcessingLatency;
 
+        // Maxima need no unset check, unlike the minimum above. Zero is the identity for max, so
+        // an empty window contributes nothing rather than collapsing the result - which is exactly
+        // what Math.min(x, 0) did to the host latency minimum before it was fixed. The two idioms
+        // sit a few lines apart and are not interchangeable.
+        this.worstRecvToEnqueueUs = Math.max(this.worstRecvToEnqueueUs, other.worstRecvToEnqueueUs);
+        this.worstDecoderTimeUs = Math.max(this.worstDecoderTimeUs, other.worstDecoderTimeUs);
+        this.presentationGapCount += other.presentationGapCount;
+        this.worstPresentationGapNanos = Math.max(this.worstPresentationGapNanos, other.worstPresentationGapNanos);
+
         // Keeps the earlier of the two starts, so a summed window still spans from when the
         // oldest of its parts opened. Callers add in chronological order.
         if (this.measurementStartTimestamp == 0) {
@@ -90,6 +123,10 @@ class VideoStats {
         this.maxHostProcessingLatency = other.maxHostProcessingLatency;
         this.totalHostProcessingLatency = other.totalHostProcessingLatency;
         this.framesWithHostProcessingLatency = other.framesWithHostProcessingLatency;
+        this.worstRecvToEnqueueUs = other.worstRecvToEnqueueUs;
+        this.worstDecoderTimeUs = other.worstDecoderTimeUs;
+        this.presentationGapCount = other.presentationGapCount;
+        this.worstPresentationGapNanos = other.worstPresentationGapNanos;
         this.measurementStartTimestamp = other.measurementStartTimestamp;
     }
 
@@ -106,6 +143,10 @@ class VideoStats {
         this.maxHostProcessingLatency = 0;
         this.totalHostProcessingLatency = 0;
         this.framesWithHostProcessingLatency = 0;
+        this.worstRecvToEnqueueUs = 0;
+        this.worstDecoderTimeUs = 0;
+        this.presentationGapCount = 0;
+        this.worstPresentationGapNanos = 0;
         this.measurementStartTimestamp = 0;
     }
 

@@ -1592,6 +1592,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             endToEndHist.record(recvUs + decUs);
                                         }
 
+                                        // Per-window worst, for the overlay. The histogram above
+                                        // is session-scoped by design and cannot answer "was the
+                                        // last second bad", which is what someone watching the
+                                        // overlay mid-stream is asking.
+                                        if (decUs > activeWindowVideoStats.worstDecoderTimeUs) {
+                                            activeWindowVideoStats.worstDecoderTimeUs = decUs;
+                                        }
+
                                         // Log the tail samples with their position in the session
                                         // so they can be correlated against loss events and codec
                                         // restarts. Roughly six per 90 s run, so the cost of the
@@ -1641,12 +1649,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // while the decoder discarded every frame it was handed. Render timestamps say what actually
     // reached the display.
     //
-    // Written from the codec's callback thread and read by the stats tick, so both are volatile.
     // Counters rather than a log line per gap: logging here would mean up to sixty writes a second
     // on a callback thread during precisely the stall being diagnosed.
+    //
+    // The counters themselves now live in VideoStats, so they reset with the window. They used to
+    // be volatile fields here that nothing ever cleared, which meant one hitch pinned the overlay's
+    // worst-gap figure for the remainder of the stream. VideoStats is written from the decode
+    // threads as well as from this callback thread, which is already true of totalFramesRendered
+    // and is covered by that class's unsynchronised stance - the values are statistics, and a torn
+    // read costs an odd number on screen for one second.
     private long lastPresentedFrameNanos;
-    private volatile int presentationGapCount;
-    private volatile long worstPresentationGapNanos;
 
     /**
      * Notes how long the display went without a new frame. Called once per presented frame on the
@@ -1660,10 +1672,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // interval has to come from the stream rate rather than a constant because
             // refreshRate is whatever the stream negotiated.
             if (refreshRate > 0 && gapNanos > (2 * 1000000000L / refreshRate)) {
-                presentationGapCount++;
+                final VideoStats activeWindow = activeWindowVideoStats;
+                activeWindow.presentationGapCount++;
 
-                if (gapNanos > worstPresentationGapNanos) {
-                    worstPresentationGapNanos = gapNanos;
+                if (gapNanos > activeWindow.worstPresentationGapNanos) {
+                    activeWindow.worstPresentationGapNanos = gapNanos;
                 }
             }
         }
@@ -2497,7 +2510,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Count time from first packet received to enqueue time as receive time
             // We will count DU queue time as part of decoding, because it is directly
             // caused by a slow decoder.
-            activeWindow.totalTimeMs += (enqueueTimeUs - receiveTimeUs) / 1000;
+            long recvToEnqueueUs = enqueueTimeUs - receiveTimeUs;
+            activeWindow.totalTimeMs += recvToEnqueueUs / 1000;
+
+            // Kept in release, unlike the rest of the instrumentation here, because it is a
+            // compare against a value the line above already computed - no clock read, no
+            // allocation, one predictable not-taken branch per decode unit. The mean beside it
+            // cannot show a hitch: a single 200 ms frame moves a sixty-frame average by 3 ms and
+            // then vanishes when the window rolls. Without this the release overlay cannot answer
+            // the one question it gets opened for.
+            if (recvToEnqueueUs > activeWindow.worstRecvToEnqueueUs) {
+                activeWindow.worstRecvToEnqueueUs = recvToEnqueueUs;
+            }
         }
 
         if (BuildConfig.DEBUG) {
@@ -2881,13 +2905,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     (float)lastTwo.maxHostProcessingLatency / 10,
                     (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
         }
+        // The worst single frame, beside the averages above. Every other figure here is a mean
+        // over the window, and a mean of sixty frames moves by 3 ms for a frame that took 200 -
+        // then loses it entirely at the next rollover. This is the row that shows a hitch.
+        sb.append(context.getString(R.string.perf_overlay_worstframe,
+                lastTwo.worstRecvToEnqueueUs / 1000.f)).append('\n');
+
         // Debug only, because the measurements behind them are. Release builds must not show these
         // rows at all rather than show them reading zero - that is exactly the failure the decode
         // time metric had for its whole existence, and a blank row invites the same misreading.
         if (BuildConfig.DEBUG) {
-            sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs)).append('\n');
+            sb.append(context.getString(R.string.perf_overlay_dectime,
+                    decodeTimeMs, lastTwo.worstDecoderTimeUs / 1000.f)).append('\n');
             sb.append(context.getString(R.string.perf_overlay_presentgaps,
-                    presentationGapCount, (float)worstPresentationGapNanos / 1000000));
+                    lastTwo.presentationGapCount,
+                    (float)lastTwo.worstPresentationGapNanos / 1000000));
         }
 
         return sb.toString();
