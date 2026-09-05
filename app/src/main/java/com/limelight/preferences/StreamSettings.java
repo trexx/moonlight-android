@@ -557,7 +557,7 @@ public class StreamSettings extends Activity {
 
             // This must be called to do runtime initialization before calling functions that evaluate
             // decoder lists.
-            MediaCodecHelper.initialize(getContext(), GlPreferences.readPreferences(getContext()).glRenderer);
+            MediaCodecHelper.initialize(getContext());
 
             MediaCodecInfo avcDecoder = MediaCodecHelper.findProbableSafeDecoder("video/avc", -1);
             MediaCodecInfo hevcDecoder = MediaCodecHelper.findProbableSafeDecoder("video/hevc", -1);
