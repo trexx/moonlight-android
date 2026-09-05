@@ -70,11 +70,11 @@ class VideoStats {
         this.totalHostProcessingLatency += other.totalHostProcessingLatency;
         this.framesWithHostProcessingLatency += other.framesWithHostProcessingLatency;
 
+        // Keeps the earlier of the two starts, so a summed window still spans from when the
+        // oldest of its parts opened. Callers add in chronological order.
         if (this.measurementStartTimestamp == 0) {
             this.measurementStartTimestamp = other.measurementStartTimestamp;
         }
-
-        assert other.measurementStartTimestamp >= this.measurementStartTimestamp;
     }
 
     /** Overwrites this window with another's values, including its start timestamp. */

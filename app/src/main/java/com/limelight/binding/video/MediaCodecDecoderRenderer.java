@@ -2461,12 +2461,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     decoder = "(unknown)";
                 }
 
-                overlayHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        perfListener.onPerfUpdate(buildPerfOverlayText(lastTwo, fps, decoder));
-                    }
-                });
+                overlayHandler.post(() -> perfListener.onPerfUpdate(
+                        buildPerfOverlayText(lastTwo, fps, decoder)));
             }
 
             globalVideoStats.add(activeWindow);
