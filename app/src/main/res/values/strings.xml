@@ -84,18 +84,21 @@
     <string name="poor_connection_msg">Poor connection to PC</string>
     <string name="perf_overlay_streamdetails">Video stream: %1$s %2$.2f FPS</string>
     <string name="perf_overlay_decoder">Decoder: %1$s</string>
-    <string name="perf_overlay_incomingfps">Incoming frame rate from network: %1$.2f FPS</string>
-    <string name="perf_overlay_renderingfps">Rendering frame rate: %1$.2f FPS</string>
+    <!-- Sparkline plot labels. These carry the current values that used to be their own text rows
+         (perf_overlay_incomingfps, perf_overlay_renderingfps, perf_overlay_netlatency and the
+         average half of perf_overlay_dectime), so the overlay stays about the size it was while
+         gaining a time axis. Kept short: they sit above a plot on a TV, read from a sofa. -->
+    <string name="perf_overlay_plot_fps">FPS in/out: %1$.1f / %2$.1f</string>
+    <string name="perf_overlay_plot_rtt">Network latency: %1$d ms (variance: %2$d ms)</string>
+    <string name="perf_overlay_plot_dectime">Decode: %1$.2f ms (worst: %2$.2f ms)</string>
     <string name="perf_overlay_hostprocessinglatency">Host processing latency min/max/average: %1$.1f/%2$.1f/%3$.1f ms</string>
     <string name="perf_overlay_netdrops">Frames dropped by your network connection: %1$.2f%%</string>
-    <string name="perf_overlay_netlatency">Average network latency: %1$d ms (variance: %2$d ms)</string>
     <string name="perf_overlay_fec">FEC recovered video/audio: %1$d/%2$d (unrecoverable: %3$d/%4$d)</string>
     <string name="perf_overlay_decryptfail">Decrypt failures video/audio: %1$d/%2$d</string>
     <!-- The worst single frame, not an average. Every other row here is a mean over the window,
          and a mean cannot show a hitch: one 200 ms frame moves a sixty-frame average by 3 ms and
          is gone at the next rollover. -->
     <string name="perf_overlay_worstframe">Worst frame to decoder: %1$.2f ms</string>
-    <string name="perf_overlay_dectime">Average decoding time: %1$.2f ms (worst: %2$.2f ms)</string>
     <string name="perf_overlay_presentgaps">Presentation gaps: %1$d (worst: %2$.1f ms)</string>
 
     <!-- AppList activity -->

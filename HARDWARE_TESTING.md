@@ -2513,6 +2513,66 @@ the difference. Until then do not compare a number from batch 1 against one from
 
 ---
 
+## 29. Overlay sparklines
+
+The overlay grew time-series plots: incoming against rendered frame rate on one axis, network
+latency on a second, and decoder time on a third in debug builds. They replace the four text rows
+that carried the same figures, so the overlay stays about the size it was. Three things about them
+cannot be settled without a device.
+
+### 27.1 Does the plot view add a composited layer?
+
+**Expected: no. Verify before believing it.**
+
+§14 measured one layer with the overlay off and two with it on. That step is the app's *window
+surface* becoming non-empty, not the `TextView` being a layer of its own — the reasoning is in the
+layout comment above `performanceOverlayContainer`, and it means the text and the plots, being
+sibling views in one window, should still come to two layers together.
+
+Repeat §14's check with the overlay up and confirm `2 layers in a scratch buffer`:
+
+```bash
+adb shell dumpsys SurfaceFlinger | grep -i "layers in a scratch buffer"
+```
+
+**If it reads 3, the split into two sibling views is wrong** and the text and plots must be drawn by
+a single custom view instead. Nothing else about the change needs to move.
+
+### 27.2 Is a sparkline legible from a sofa?
+
+The plots are sized by constants at the top of `SparklineView` — `PLOT_HEIGHT_DP` 34,
+`STROKE_WIDTH_DP` 2, `LABEL_SIZE_SP` 12 — and the container is a fixed `260dp` wide in
+`activity_game.xml`. Those are a starting point chosen on a monitor, which is the wrong instrument.
+
+Stream to the Shield, sit where you normally sit, and check: can you tell the two frame-rate lines
+apart by colour (cyan incoming, amber rendered), and can you see a single-sample spike? Adjust the
+constants and record what worked. This is the one part of the change no amount of local checking
+can settle.
+
+### 27.3 What does the overlay actually cost now?
+
+This became measurable only after `3e708f65`, which made the latency histograms fill with the
+overlay off. Before that, the decoder and end-to-end percentiles could only be collected while the
+overlay was up, so the overlay's own cost could never be isolated.
+
+Run 90 s overlay-off and 90 s overlay-on and diff the percentiles:
+
+```
+Stream latency [...]: Decoder: n=... p50<... p99<...
+Stream latency [...]: End to end: n=... p50<... p99<...
+```
+
+Do it on this branch and on its parent, which gives both the overlay's absolute cost and whether
+the plots made it worse. The expectation is that they did not, and may have helped: four
+`getString()` lookups and four rows of `StaticLayout` came out, two or three 64-point polylines
+went in. **Expectation, not measurement** — record the real numbers here.
+
+Note the plots add nothing to the frame path either way. Every value they draw was already computed
+for the text at the 1 Hz window rollover; the plots add a float store per series per second and an
+`invalidate()`.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
