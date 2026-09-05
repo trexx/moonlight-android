@@ -494,7 +494,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // Initialize the MediaCodec helper before creating the decoder
         GlPreferences glPrefs = GlPreferences.readPreferences(this);
-        MediaCodecHelper.initialize(this, glPrefs.glRenderer);
+        MediaCodecHelper.initialize(this);
 
         // Check if the user has enabled HDR
         boolean willStreamHdr = false;
