@@ -19,6 +19,19 @@ public interface PerfOverlayListener {
      */
     void onPerfUpdate(final String text);
 
+    /**
+     * Hands over the plots to draw, roughly once per second, immediately before
+     * {@link #onPerfUpdate}.
+     *
+     * <p>Separate from the text because the plots are not text: the decoder owns the series and
+     * pushes a sample into each as its window rolls, and the view redraws from them. The list is
+     * the same one every time - built once per stream, with its series mutated in place - so this
+     * allocates nothing per update.
+     *
+     * @param plots in display order, or empty to draw nothing
+     */
+    void onPerfPlots(final java.util.List<SparklinePlot> plots);
+
     /** @return true if the overlay is currently displayed */
     boolean isPerfOverlayVisible();
 }

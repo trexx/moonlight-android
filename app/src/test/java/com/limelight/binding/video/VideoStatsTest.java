@@ -31,6 +31,10 @@ class VideoStatsTest {
         stats.maxHostProcessingLatency = 90;
         stats.totalHostProcessingLatency = 1500;
         stats.framesWithHostProcessingLatency = 25;
+        stats.worstRecvToEnqueueUs = 4200;
+        stats.worstDecoderTimeUs = 7300;
+        stats.presentationGapCount = 4;
+        stats.worstPresentationGapNanos = 51000000;
         stats.measurementStartTimestamp = 1000;
         return stats;
     }
@@ -110,6 +114,49 @@ class VideoStatsTest {
         }
 
         @Test
+        @DisplayName("takes the higher of each worst-case figure")
+        void takesHigherWorstCase() {
+            VideoStats target = populated();
+            VideoStats other = populated();
+            other.worstRecvToEnqueueUs = 9000;
+            other.worstDecoderTimeUs = 100;
+            other.worstPresentationGapNanos = 90000000;
+
+            target.add(other);
+
+            assertEquals(9000, target.worstRecvToEnqueueUs);
+            // The lower incoming value must not pull the running worst down
+            assertEquals(7300, target.worstDecoderTimeUs);
+            assertEquals(90000000, target.worstPresentationGapNanos);
+        }
+
+        @Test
+        @DisplayName("sums presentation gap events rather than taking the larger count")
+        void sumsPresentationGapEvents() {
+            VideoStats target = populated();
+
+            target.add(populated());
+
+            // A count, not a worst - two windows of four gaps are eight gaps
+            assertEquals(8, target.presentationGapCount);
+        }
+
+        @Test
+        @DisplayName("an empty window cannot collapse a worst-case figure to zero")
+        void emptyWindowDoesNotCollapseWorstCase() {
+            // The failure mode this guards is the one the host-latency minimum actually had:
+            // Math.min(x, 0) pinned the session minimum as soon as any window carried no data.
+            // Maxima are safe because zero is their identity, and these must stay maxima.
+            VideoStats target = populated();
+
+            target.add(new VideoStats());
+
+            assertEquals(4200, target.worstRecvToEnqueueUs);
+            assertEquals(7300, target.worstDecoderTimeUs);
+            assertEquals(51000000, target.worstPresentationGapNanos);
+        }
+
+        @Test
         @DisplayName("keeps the earliest start timestamp")
         void keepsEarliestStartTimestamp() {
             VideoStats target = populated();
@@ -174,6 +221,10 @@ class VideoStatsTest {
             assertEquals(source.maxHostProcessingLatency, target.maxHostProcessingLatency);
             assertEquals(source.totalHostProcessingLatency, target.totalHostProcessingLatency);
             assertEquals(source.framesWithHostProcessingLatency, target.framesWithHostProcessingLatency);
+            assertEquals(source.worstRecvToEnqueueUs, target.worstRecvToEnqueueUs);
+            assertEquals(source.worstDecoderTimeUs, target.worstDecoderTimeUs);
+            assertEquals(source.presentationGapCount, target.presentationGapCount);
+            assertEquals(source.worstPresentationGapNanos, target.worstPresentationGapNanos);
             // copy() takes the timestamp verbatim where add() would have kept the earlier one
             assertEquals(source.measurementStartTimestamp, target.measurementStartTimestamp);
         }
@@ -227,7 +278,29 @@ class VideoStatsTest {
             assertEquals(0, stats.maxHostProcessingLatency);
             assertEquals(0, stats.totalHostProcessingLatency);
             assertEquals(0, stats.framesWithHostProcessingLatency);
+            assertEquals(0, stats.worstRecvToEnqueueUs);
+            assertEquals(0, stats.worstDecoderTimeUs);
+            assertEquals(0, stats.presentationGapCount);
+            assertEquals(0, stats.worstPresentationGapNanos);
             assertEquals(0, stats.measurementStartTimestamp);
+        }
+
+        @Test
+        @DisplayName("lets a hitch age out instead of pinning the overlay for the whole stream")
+        void worstCaseDoesNotPersistAcrossWindows() {
+            // This is why the presentation gap counters moved here from the renderer, where
+            // nothing ever reset them: one hitch used to hold the overlay's worst-gap figure for
+            // the rest of the session, long after it stopped describing anything current.
+            VideoStats window = populated();
+            window.worstPresentationGapNanos = 190000000;
+            window.worstRecvToEnqueueUs = 200000;
+
+            window.clear();
+            window.totalFramesReceived = 60;
+
+            assertEquals(0, window.worstPresentationGapNanos);
+            assertEquals(0, window.worstRecvToEnqueueUs);
+            assertEquals(0, window.presentationGapCount);
         }
 
         @Test

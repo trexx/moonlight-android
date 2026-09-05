@@ -1592,6 +1592,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                             endToEndHist.record(recvUs + decUs);
                                         }
 
+                                        // Per-window worst, for the overlay. The histogram above
+                                        // is session-scoped by design and cannot answer "was the
+                                        // last second bad", which is what someone watching the
+                                        // overlay mid-stream is asking.
+                                        if (decUs > activeWindowVideoStats.worstDecoderTimeUs) {
+                                            activeWindowVideoStats.worstDecoderTimeUs = decUs;
+                                        }
+
                                         // Log the tail samples with their position in the session
                                         // so they can be correlated against loss events and codec
                                         // restarts. Roughly six per 90 s run, so the cost of the
@@ -1634,6 +1642,33 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // the frame paths, written from the decode thread, hence volatile.
     private volatile boolean perfMetricsEnabled;
 
+    // The overlay's time-series plots. Every other figure on the overlay is a number with no time
+    // axis, so a step change, a spike and a slow drift read identically; these carry the axis.
+    //
+    // Built once and mutated in place, so a window rollover pushes four floats and formats three
+    // labels rather than allocating a plot structure a second. Touched only on the overlay
+    // handler, never on a frame path - the samples come from figures the stats window has already
+    // computed, so collecting them costs nothing extra.
+    private final SparklineSeries incomingFpsSeries = new SparklineSeries();
+    private final SparklineSeries renderedFpsSeries = new SparklineSeries();
+    private final SparklineSeries rttSeries = new SparklineSeries();
+    // Decoder time is only measured in debug builds, so its plot exists only there rather than
+    // drawing a flat zero - the same rule the debug-only text rows follow.
+    private final SparklineSeries decoderTimeSeries =
+            BuildConfig.DEBUG ? new SparklineSeries() : null;
+
+    private List<SparklinePlot> perfPlots;
+    private SparklinePlot fpsPlot;
+    private SparklinePlot rttPlot;
+    private SparklinePlot decoderPlot;
+
+    // Plot colours. Incoming and rendered share an axis, so they have to be told apart at a glance
+    // from across a room: cyan against amber rather than two shades of one hue.
+    private static final int PLOT_COLOUR_INCOMING = 0xFF4FC3F7;
+    private static final int PLOT_COLOUR_RENDERED = 0xFFFFB74D;
+    private static final int PLOT_COLOUR_RTT = 0xFF81C784;
+    private static final int PLOT_COLOUR_DECODER = 0xFFE57373;
+
     // Presentation gaps, measured from the codec's own render timestamps. Debug builds only.
     //
     // This is the counter that catches a frozen picture. "Rendering frame rate" counts frames
@@ -1641,12 +1676,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // while the decoder discarded every frame it was handed. Render timestamps say what actually
     // reached the display.
     //
-    // Written from the codec's callback thread and read by the stats tick, so both are volatile.
     // Counters rather than a log line per gap: logging here would mean up to sixty writes a second
     // on a callback thread during precisely the stall being diagnosed.
+    //
+    // The counters themselves now live in VideoStats, so they reset with the window. They used to
+    // be volatile fields here that nothing ever cleared, which meant one hitch pinned the overlay's
+    // worst-gap figure for the remainder of the stream. VideoStats is written from the decode
+    // threads as well as from this callback thread, which is already true of totalFramesRendered
+    // and is covered by that class's unsynchronised stance - the values are statistics, and a torn
+    // read costs an odd number on screen for one second.
     private long lastPresentedFrameNanos;
-    private volatile int presentationGapCount;
-    private volatile long worstPresentationGapNanos;
 
     /**
      * Notes how long the display went without a new frame. Called once per presented frame on the
@@ -1660,10 +1699,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // interval has to come from the stream rate rather than a constant because
             // refreshRate is whatever the stream negotiated.
             if (refreshRate > 0 && gapNanos > (2 * 1000000000L / refreshRate)) {
-                presentationGapCount++;
+                final VideoStats activeWindow = activeWindowVideoStats;
+                activeWindow.presentationGapCount++;
 
-                if (gapNanos > worstPresentationGapNanos) {
-                    worstPresentationGapNanos = gapNanos;
+                if (gapNanos > activeWindow.worstPresentationGapNanos) {
+                    activeWindow.worstPresentationGapNanos = gapNanos;
                 }
             }
         }
@@ -2461,8 +2501,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     decoder = "(unknown)";
                 }
 
-                overlayHandler.post(() -> perfListener.onPerfUpdate(
-                        buildPerfOverlayText(lastTwo, fps, decoder)));
+                overlayHandler.post(() -> {
+                    updatePerfPlots(lastTwo, fps);
+                    perfListener.onPerfPlots(perfPlots);
+                    perfListener.onPerfUpdate(buildPerfOverlayText(lastTwo, fps, decoder));
+                });
             }
 
             globalVideoStats.add(activeWindow);
@@ -2497,7 +2540,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Count time from first packet received to enqueue time as receive time
             // We will count DU queue time as part of decoding, because it is directly
             // caused by a slow decoder.
-            activeWindow.totalTimeMs += (enqueueTimeUs - receiveTimeUs) / 1000;
+            long recvToEnqueueUs = enqueueTimeUs - receiveTimeUs;
+            activeWindow.totalTimeMs += recvToEnqueueUs / 1000;
+
+            // Kept in release, unlike the rest of the instrumentation here, because it is a
+            // compare against a value the line above already computed - no clock read, no
+            // allocation, one predictable not-taken branch per decode unit. The mean beside it
+            // cannot show a hitch: a single 200 ms frame moves a sixty-frame average by 3 ms and
+            // then vanishes when the window rolls. Without this the release overlay cannot answer
+            // the one question it gets opened for.
+            if (recvToEnqueueUs > activeWindow.worstRecvToEnqueueUs) {
+                activeWindow.worstRecvToEnqueueUs = recvToEnqueueUs;
+            }
         }
 
         if (BuildConfig.DEBUG) {
@@ -2831,6 +2885,73 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     /**
+     * Pushes this window's figures onto the plots and refreshes their labels.
+     *
+     * <p>Called on {@link #overlayHandler}, immediately before the text is built. Every value here
+     * has already been computed for the text, so the plots add no measurement of their own -
+     * they add an axis to numbers that already existed.
+     *
+     * <p>Builds the plots on first use rather than in the constructor, because the frame rate
+     * axis is fixed to the stream's rate and {@code refreshRate} is not known until
+     * {@link #setup} has run.
+     */
+    private void updatePerfPlots(VideoStats lastTwo, VideoStatsFps fps) {
+        if (perfPlots == null) {
+            buildPerfPlots();
+        }
+
+        incomingFpsSeries.push(fps.receivedFps);
+        renderedFpsSeries.push(fps.renderedFps);
+
+        long rttInfo = MoonBridge.getEstimatedRttInfo();
+        int rttMs = (int) (rttInfo >> 32);
+        rttSeries.push(rttMs);
+
+        fpsPlot.setLabel(context.getString(R.string.perf_overlay_plot_fps,
+                fps.receivedFps, fps.renderedFps));
+        rttPlot.setLabel(context.getString(R.string.perf_overlay_plot_rtt, rttMs, (int) rttInfo));
+
+        if (BuildConfig.DEBUG) {
+            float decodeTimeMs = (float) lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
+            decoderTimeSeries.push(decodeTimeMs);
+            decoderPlot.setLabel(context.getString(R.string.perf_overlay_plot_dectime,
+                    decodeTimeMs, lastTwo.worstDecoderTimeUs / 1000.f));
+        }
+    }
+
+    /**
+     * Assembles the plot list once the stream's frame rate is known.
+     *
+     * <p>Incoming and rendered frame rate share one plot deliberately: the gap between the two
+     * lines is the diagnosis, as {@link VideoStats} already says in prose - total above received
+     * means network loss, received above rendered means the device cannot keep up. On separate
+     * axes that relationship is invisible.
+     *
+     * <p>The frame rate axis is fixed at the stream rate rather than autoscaled. A stream holding
+     * 59.9 to 60.0 autoscales into a mountain range, which reads as instability that is not there.
+     * Latency autoscales, because no fixed ceiling suits both a 3 ms network and a 190 ms stall.
+     */
+    private void buildPerfPlots() {
+        var plots = new ArrayList<SparklinePlot>(3);
+
+        fpsPlot = new SparklinePlot("", refreshRate > 0 ? refreshRate : 60,
+                new int[] {PLOT_COLOUR_INCOMING, PLOT_COLOUR_RENDERED},
+                incomingFpsSeries, renderedFpsSeries);
+        plots.add(fpsPlot);
+
+        rttPlot = new SparklinePlot("", 0, new int[] {PLOT_COLOUR_RTT}, rttSeries);
+        plots.add(rttPlot);
+
+        if (BuildConfig.DEBUG) {
+            decoderPlot = new SparklinePlot("", 0, new int[] {PLOT_COLOUR_DECODER},
+                    decoderTimeSeries);
+            plots.add(decoderPlot);
+        }
+
+        perfPlots = plots;
+    }
+
+    /**
      * Formats one overlay update from a snapshot of the window that just closed.
      *
      * <p>Called on {@link #overlayHandler}, never on the decode thread. Everything expensive
@@ -2843,17 +2964,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * @param decoder the decoder name for the format actually in use
      */
     private String buildPerfOverlayText(VideoStats lastTwo, VideoStatsFps fps, String decoder) {
-        float decodeTimeMs = (float)lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
-        long rttInfo = MoonBridge.getEstimatedRttInfo();
         StringBuilder sb = new StringBuilder();
         sb.append(context.getString(R.string.perf_overlay_streamdetails, initialWidth + "x" + initialHeight, fps.totalFps)).append('\n');
         sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
-        sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
-        sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
+        // Incoming and rendered frame rate, network latency and decode time are no longer rows:
+        // they are the sparkline plots, whose labels carry the same current values. Graphing them
+        // instead of listing them keeps the overlay roughly the size it was, which matters more
+        // than the CPU here - this is a TV, and every row covers part of the picture.
         sb.append(context.getString(R.string.perf_overlay_netdrops,
                 (float)lastTwo.framesLost / lastTwo.totalFrames * 100)).append('\n');
-        sb.append(context.getString(R.string.perf_overlay_netlatency,
-                (int)(rttInfo >> 32), (int)rttInfo)).append('\n');
         trafficStats.sample();
         sb.append(context.getString(R.string.perf_overlay_bandwidth,
                 trafficStats.getRxKBps() / 1024.f, trafficStats.getTxKBps() / 1024.f)).append('\n');
@@ -2881,13 +3000,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     (float)lastTwo.maxHostProcessingLatency / 10,
                     (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
         }
+        // The worst single frame, beside the averages above. Every other figure here is a mean
+        // over the window, and a mean of sixty frames moves by 3 ms for a frame that took 200 -
+        // then loses it entirely at the next rollover. This is the row that shows a hitch.
+        sb.append(context.getString(R.string.perf_overlay_worstframe,
+                lastTwo.worstRecvToEnqueueUs / 1000.f)).append('\n');
+
         // Debug only, because the measurements behind them are. Release builds must not show these
         // rows at all rather than show them reading zero - that is exactly the failure the decode
         // time metric had for its whole existence, and a blank row invites the same misreading.
         if (BuildConfig.DEBUG) {
-            sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs)).append('\n');
             sb.append(context.getString(R.string.perf_overlay_presentgaps,
-                    presentationGapCount, (float)worstPresentationGapNanos / 1000000));
+                    lastTwo.presentationGapCount,
+                    (float)lastTwo.worstPresentationGapNanos / 1000000));
         }
 
         return sb.toString();
