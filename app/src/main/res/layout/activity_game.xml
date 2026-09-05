@@ -36,18 +36,44 @@
       buffer regardless - launcher, our stream, and YouTube and Kodi playing 4K alike - leaving
       three of its four display windows unused in all of them.
     -->
-    <TextView
-        android:id="@+id/performanceOverlay"
+    <!--
+      Text and plots share one container, one background and one visibility. They are siblings
+      inside this window rather than a second window, so together they are still the single extra
+      composited layer section 14 measured - a child View is not a layer. Confirm with the same
+      dumpsys check if that ever seems doubtful; do not assume it.
+    -->
+    <LinearLayout
+        android:id="@+id/performanceOverlayContainer"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginStart="10dp"
         android:layout_marginTop="10dp"
         android:layout_gravity="start"
-        android:textAppearance="?android:attr/textAppearanceSmall"
-        android:gravity="start"
+        android:orientation="vertical"
         android:background="#80000000"
         android:preferKeepClear="true"
-        android:visibility="gone" />
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/performanceOverlay"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:textAppearance="?android:attr/textAppearanceSmall"
+            android:gravity="start" />
+
+        <!--
+          Width is fixed rather than wrap_content: a plot has no intrinsic width, and the history
+          has to occupy a stable span or the line would rescale horizontally as the overlay's text
+          rows change length. 260dp is a starting point to be checked on a real TV - see
+          HARDWARE_TESTING.md on 10-foot legibility.
+        -->
+        <com.limelight.ui.SparklineView
+            android:id="@+id/performanceSparklines"
+            android:layout_width="260dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp" />
+
+    </LinearLayout>
 
     <TextView
         android:id="@+id/notificationOverlay"

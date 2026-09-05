@@ -21,6 +21,8 @@ import com.limelight.binding.video.FramePacingSelector;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.binding.video.PerfOverlayListener;
+import com.limelight.binding.video.SparklinePlot;
+import com.limelight.ui.SparklineView;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.NvConnectionListener;
 import com.limelight.nvstream.StreamConfiguration;
@@ -255,6 +257,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private TextView performanceOverlayView;
+    // Text and plots are shown and hidden together, so visibility is set on the container that
+    // holds both rather than on either one.
+    private View performanceOverlayContainer;
+    private SparklineView performanceSparklines;
     private int requestedPerformanceOverlayVisibility = View.GONE;
 
     private MediaCodecDecoderRenderer decoderRenderer;
@@ -436,6 +442,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         notificationOverlayView = findViewById(R.id.notificationOverlay);
 
         performanceOverlayView = findViewById(R.id.performanceOverlay);
+        performanceOverlayContainer = findViewById(R.id.performanceOverlayContainer);
+        performanceSparklines = findViewById(R.id.performanceSparklines);
 
         imePreviewOverlay = findViewById(R.id.imePreviewOverlay);
 
@@ -520,7 +528,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // The preference sets the initial state only. From here it's owned by the game menu,
         // which can toggle the overlay on and off without restarting the stream.
         requestedPerformanceOverlayVisibility = prefConfig.enablePerfOverlay ? View.VISIBLE : View.GONE;
-        performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
+        performanceOverlayContainer.setVisibility(requestedPerformanceOverlayVisibility);
 
         decoderRenderer = new MediaCodecDecoderRenderer(
                 this,
@@ -2424,12 +2432,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // format, and this is the same hop. Costs nothing when no pad is taking audio.
         final String full = text + padAudioSink.getOverlayText();
 
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                performanceOverlayView.setText(full);
-            }
-        });
+        runOnUiThread(() -> performanceOverlayView.setText(full));
+    }
+
+    /** {@inheritDoc} Hands the plots to the view, which redraws from them. */
+    @Override
+    public void onPerfPlots(final java.util.List<SparklinePlot> plots) {
+        runOnUiThread(() -> performanceSparklines.setPlots(plots));
     }
 
     /** {@inheritDoc} Key events from the stream view, before the IME sees them. */
@@ -2457,7 +2466,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     public void togglePerformanceOverlay() {
         requestedPerformanceOverlayVisibility =
                 requestedPerformanceOverlayVisibility == View.VISIBLE ? View.GONE : View.VISIBLE;
-        performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
+        performanceOverlayContainer.setVisibility(requestedPerformanceOverlayVisibility);
     }
 
     /**
