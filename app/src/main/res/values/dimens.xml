@@ -34,6 +34,14 @@
     <dimen name="host_tile_width">150dp</dimen>
     <dimen name="host_tile_icon_size">72dp</dimen>
     <dimen name="host_tile_badge_size">40dp</dimen>
+    <!-- How far the badge and the spinner ride above the centre of the icon's box. ic_computer
+         draws a monitor whose screen aperture spans y 4..16 of its 24-unit viewport, so the
+         middle of the screen is at 10 while the middle of the box is at 12 - the stand under the
+         screen is what pulls the box centre down. Centring the badge on the box therefore drops
+         it two viewport units, far enough that the offline triangle's base lands on the bottom
+         bezel instead of inside the screen. Two units of a 72dp icon is 6dp. Keep this at
+         host_tile_icon_size / 12, and move it whenever that size moves. -->
+    <dimen name="host_tile_badge_rise">6dp</dimen>
 
     <!-- App tiles. One size, applied straight from the layout: there used to be a second, larger
          pair behind a "use small box art" preference, but the grid stretches its leftover row
