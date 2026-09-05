@@ -2407,6 +2407,23 @@ headings carry a `<`.
 **In this table, read p50, p90 and p99 and ignore p99.9 and max** — see the teardown artefact
 below, and the fix that followed it.
 
+**This table was recorded with the performance overlay visible, and its three columns were not
+collected under the same conditions.** At the time, the decoder and end-to-end histograms could
+only record while `perfMetricsEnabled` was set — that is, while the overlay was up — because their
+data source, `takeDecodeStartDelta()`, was gated on it. The receive-to-enqueue column was never so
+gated. So the runs above necessarily had the overlay on, which CLAUDE.md warns perturbs what it
+measures (a second composition layer, and a dozen resource lookups plus three JNI calls a second on
+the decode thread), and the first column covers a slightly larger frame population than the other
+two — the overlay flag is only latched at the 1 Hz window rollover, so roughly the first second of
+each run has receive-to-enqueue samples and no decoder samples.
+
+**Fixed.** Both gates are now `BuildConfig.DEBUG` alone, matching the trace markers alongside them,
+so a debug run with the overlay **off** fills all three histograms. That is the configuration
+CLAUDE.md asks for when benchmarking: harvest the end-of-stream summary rather than the overlay, so
+the measurement's own cost is not attributed to the change. **Do not compare a figure from the
+table above against one measured overlay-off** — re-baseline first, and note the overlay state of
+every run from here on.
+
 ### The recurring frame-loss event is HDR, not the network
 
 Every run reports exactly one loss event of 4–5 frames. That regularity is the tell: real network
