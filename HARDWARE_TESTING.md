@@ -1813,32 +1813,71 @@ non-debuggable release build, which is what makes this the only performance meth
 
 ---
 
-## 16. Loss recovery (carried patches 0003–0005)
+## 16. Loss recovery (upstream `62e0663` and carried patches 0004–0005)
 
-All three need deliberate packet loss to mean anything. Stream over Wi-Fi at a distance, or
+All of these need deliberate packet loss to mean anything. Stream over Wi-Fi at a distance, or
 shape the link — the point is to force the FEC queue to give up on whole frames, not merely
 to drop the odd packet.
 
-### IDR request on FEC-detected loss (patch 0003)
+### Loss without RFI (upstream `62e0663`, which retired patch 0003)
 
-This only reaches the patched branch on a client streaming **without** reference frame
-invalidation, which means an **Amlogic box** — the Shield TV keeps RFI and never takes it.
-Confirm which side you are on first: absence of `will use reference frame invalidation for
-HEVC` in logcat for the chosen decoder is the check.
+This only matters on a client streaming **without** reference frame invalidation, which
+means an **Amlogic box** — the Shield TV keeps RFI and never takes it. Confirm which side you
+are on first: absence of `will use reference frame invalidation for HEVC` in logcat for the
+chosen decoder is the check.
 
+Patch 0003 armed the keyframe request after every FEC-reported loss. Upstream's fix is
+narrower and better: the FEC queue no longer *predicts* a loss when it cannot issue an RFI,
+so a frame whose last packets were merely late is now completed rather than abandoned. A
+frame that really is lost still requests a keyframe on the next fully received frame,
+through the depacketizer's own frame-gap check — that path was never the broken one; the
+freeze was specifically a predicted loss that then arrived complete, leaving no gap to
+detect.
+
+- [ ] **`Sending speculative RFI request for predicted loss` never appears.** That line is
+      the prediction firing; without RFI it is now unreachable, and seeing it means the
+      submodule is behind `62e0663`.
 - [ ] **`Reached consecutive drop limit` stops appearing** on ordinary loss. That line was
       the old recovery mechanism firing, 120 frames after the loss; seeing it now means the
-      patch is not doing its job. This is the single most diagnostic line for the fix.
+      fix is not doing its job. This is the single most diagnostic line.
 - [ ] **Recovery is roughly a frame interval plus a round trip**, not the 2 s at 60 FPS / 4 s
       at 30 FPS it was. Time it against a moving scene rather than a menu.
-- [ ] **`Waiting for IDR frame` is followed promptly by a recovered picture**, rather than
-      repeating while the video stays frozen.
-- [ ] **No regression on the Shield TV.** RFI is on there, so the RFI request path is what
-      should still run — `Sending RFI request for unrecoverable frame` — and behaviour should
-      be identical to before the patch.
+- [ ] **`Network dropped 1 frame` is followed by `Waiting for IDR frame` and a recovered
+      picture**, rather than the wait repeating while the video stays frozen.
+- [ ] **Fewer frames are lost for the same packet loss than the build that carried 0003.**
+      Every prediction used to cost the frame even when it would have completed. The
+      end-of-stream `Frame losses: N in M loss events` line is the number to compare, on the
+      same link and the same scene.
 - [ ] **Fire TV Cube keeps its fast path.** `Enabling HEVC RFI on confirmed-safe Amlogic
       device` must still appear, since that device is the exception to the Amlogic rule and
-      should therefore also *not* take the new branch.
+      therefore keeps speculating, as the Shield does.
+
+### Loss with RFI (upstream `d85371c`)
+
+The **Shield TV** side of the same bump. When a frame spans several FEC blocks — 4K IDR
+frames routinely do — and one block is lost, the queue used to report the loss against the
+frame number it was *expecting* rather than the one it *received*, and then suppressed the
+report for the following frame if that was lost too.
+
+- [ ] **`Sending RFI request for unrecoverable frame N` names the frame that was actually
+      lost.** Cross-check `N` against the surrounding `Network dropped` lines: they should
+      agree, where before they could be one apart after a multi-block loss.
+- [ ] **Two consecutive lost frames produce two RFI lines**, not one. The second was the
+      suppressed case.
+- [ ] **No regression otherwise.** Single-block losses should behave exactly as before.
+
+### Dropping a partially received IDR frame (upstream `be43885`)
+
+Both devices. Loss that lands *inside* an IDR frame — which is likely, since it is the
+largest frame and follows a request the network was already struggling under — used to drop
+the frame state without insisting on a fresh keyframe, so an RFI client could resume on
+P-frames referencing a keyframe it never fully had.
+
+- [ ] **A loss during a keyframe is followed by `Waiting for IDR frame`**, even on the Shield
+      where RFI would otherwise be preferred.
+- [ ] **No smear or grey blocks that persist across several seconds** after a loss burst
+      that hit a keyframe. Persistent corruption that clears only on the next periodic
+      keyframe is the symptom this fixes.
 
 ### Atomics (patch 0004)
 

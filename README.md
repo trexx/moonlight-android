@@ -292,12 +292,16 @@ automatically and now is not unless asked for.
   enabled on Amlogic hardware only where it is confirmed to behave, which keeps the Fire TV
   Cubes on the fast path without breaking everything else.
 * **Two-second freezes after packet loss are gone on those same boxes.** Turning RFI off is
-  what exposed the bug: when the FEC queue declared a frame unrecoverable, `moonlight-common-c`
-  dropped the frame state but never armed the flag that requests a keyframe, because that flag
-  was only ever set by a different loss-detection path. Nothing then recovered the stream until
-  120 consecutive frames had been dropped — 2 seconds at 60 FPS, 4 at 30. The keyframe is now
-  requested on the next fully received frame, so recovery costs a frame interval plus a round
-  trip. Carried from upstream [#147](https://github.com/moonlight-stream/moonlight-common-c/pull/147).
+  what exposed the bug. The FEC queue *predicts* that a frame is unrecoverable before its last
+  packets have had a chance to arrive, and `moonlight-common-c` dropped the frame state on that
+  prediction. When the frame then arrived complete after all, the depacketizer saw no gap, the
+  flag that requests a keyframe was never armed, and nothing recovered the stream until 120
+  consecutive frames had been dropped — 2 seconds at 60 FPS, 4 at 30. Upstream's fix
+  (`62e0663`, closing [#147](https://github.com/moonlight-stream/moonlight-common-c/pull/147))
+  is to not speculate at all when RFI is off, which also stops throwing away a frame that was
+  about to be recovered; a frame that really is lost still requests a keyframe on the next
+  fully received one, as it always did. This fork carried its own patch for the freeze until
+  that landed.
 * **Intra refresh can be requested** (off by default, under Advanced & Diagnostics). The host encodes a
   rolling refresh wave instead of periodic keyframes, so recovery is spread over many frames
   rather than arriving as one bitrate spike and hitch. Sunshine has supported this since
@@ -426,15 +430,15 @@ applies is a hard error rather than a warning. The cost is that a patched submod
 as dirty for as long as the patch is carried; `git submodule update --force` resets it and
 the next build re-applies.
 
-Currently carried, all against `moonlight-common-c`: the decrypt-failure counters, an IDR
-request when the FEC queue reports a loss on a client running without reference frame
-invalidation, atomics for `ConnectionInterrupted` and the blocking queue's size, and the
-opt-in intra refresh capability.
+Currently carried, all against `moonlight-common-c`: the decrypt-failure counters, atomics
+for `ConnectionInterrupted` and the blocking queue's size, and the opt-in intra refresh
+capability.
 
-The IDR one matters most here. Without it a frame the FEC queue declares unrecoverable
-freezes the picture for 120 frames — 2 seconds at 60 FPS — on any client that streams without
-reference frame invalidation, which on this fork means every Amlogic box, since RFI is
-withheld from unconfirmed Amlogic decoders. The Shield TV keeps RFI and never takes that path.
+A fourth, requesting an IDR frame when the FEC queue reported a loss on a client running
+without reference frame invalidation, was dropped when upstream closed the same bug
+differently in `62e0663` — see *Streaming improvements* above. It is the precedent for how a
+carried patch retires: the submodule pointer moves past the upstream fix, the diff is deleted,
+and nothing of it is kept alongside.
 
 ## Testing
 
