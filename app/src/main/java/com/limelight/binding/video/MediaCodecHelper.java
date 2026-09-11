@@ -62,8 +62,6 @@ public class MediaCodecHelper {
     public static final boolean SHOULD_BYPASS_SOFTWARE_BLOCK =
             Build.HARDWARE.equals("ranchu") || Build.HARDWARE.equals("cheets") || Build.BRAND.equals("Android-x86");
 
-    private static boolean isLowEndSnapdragon = false;
-    private static boolean isAdreno620 = false;
     private static boolean isAmlogicRfiSafe = false;
     // Whether this Amlogic platform's HEVC decoder can be trusted at all. Fire OS is confirmed
     // working; the newer Codec2 parts wedge mid-stream. See isKnownBrokenHevcDecoder().
@@ -267,14 +265,15 @@ public class MediaCodecHelper {
     }
 
     /**
-     * Adds the quirks that can only be determined at runtime: SoC and GPU identification, and
+     * Adds the quirks that can only be determined at runtime: SoC identification and
      * device-family whitelists. Idempotent, and must be called before the query methods are
      * trusted.
      *
-     * @param glRenderer the GL renderer string, used to identify the GPU and hence the SoC where
-     *                   {@code Build} properties are not specific enough
+     * <p>Took a {@code glRenderer} string until the Adreno and PowerVR quirks were removed; the
+     * GL renderer is still collected by {@code GlPreferences} for the crash report, but nothing
+     * here needs it now. See the note on the GLES version block below.
      */
-    public static void initialize(Context context, String glRenderer) {
+    public static void initialize(Context context) {
         if (initialized) {
             return;
         }
@@ -326,17 +325,12 @@ public class MediaCodecHelper {
         if (configInfo.reqGlEsVersion != ConfigurationInfo.GL_ES_VERSION_UNDEFINED) {
             LimeLog.info("OpenGL ES version: "+configInfo.reqGlEsVersion);
 
-            // Resolved once and logged here rather than inside the parser. The parsing used to log
-            // on every call, so identifying the GPU emitted the same line three or four times per
-            // initialize(); more importantly, the log call is what kept this logic tied to Android
-            // and therefore untestable. See GlRendererParser.
-            int adrenoModel = GlRendererParser.getAdrenoRendererModelNumber(glRenderer);
-            if (adrenoModel != -1) {
-                LimeLog.info("Found Adreno GPU: "+adrenoModel);
-            }
-
-            isLowEndSnapdragon = GlRendererParser.isLowEndSnapdragonRenderer(glRenderer);
-            isAdreno620 = adrenoModel == 620;
+            // What used to sit here was GPU identification from the GL renderer string: Adreno
+            // model number, low-end Snapdragon detection, and a PowerVR check for MediaTek. All of
+            // it keyed on GPUs that neither supported device has - the Shield TV is Tegra X1 and
+            // the Homatics Box R 4K is an Amlogic S905X4 with a Mali - so none of those branches
+            // could ever be taken here. Removed under the rule about device code outside the
+            // supported set. Upstream Moonlight still needs it; this fork does not.
 
             // Tegra K1 and later can do reference frame invalidation properly
             if (configInfo.reqGlEsVersion >= 0x30000) {
@@ -360,42 +354,16 @@ public class MediaCodecHelper {
                 refFrameInvalidationHevcPrefixes.add("c2.qti");
             }
 
-            // Qualcomm's early HEVC decoders break hard on our HEVC stream. The best check to
-            // tell the good from the bad decoders are the generation of Adreno GPU included:
-            // 3xx - bad
-            // 4xx - good
+            // Two more GPU-keyed blocks stood here: one splitting Qualcomm's early HEVC decoders
+            // from the later ones by Adreno generation, and one whitelisting omx.mtk for HEVC on
+            // PowerVR MediaTek parts. Both are unreachable on this fork's hardware for the reason
+            // above, and neither box exposes a Qualcomm or MediaTek decoder for their list entries
+            // to match in the first place.
             //
-            // The "good" GPUs support GLES 3.1, but we can't just check that directly
-            // (see comment on isGLES31SnapdragonRenderer).
-            //
-            if (GlRendererParser.isGLES31SnapdragonRenderer(glRenderer)) {
-                LimeLog.info("Added omx.qcom/c2.qti to HEVC decoders based on GLES 3.1+ support");
-                whitelistedHevcDecoders.add("omx.qcom");
-                whitelistedHevcDecoders.add("c2.qti");
-            }
-            else {
-                blacklistedDecoderPrefixes.add("OMX.qcom.video.decoder.hevc");
-
-                // These older decoders need 4 slices per frame for best performance
-                useFourSlicesPrefixes.add("omx.qcom");
-            }
-
-            // Older MediaTek SoCs have issues with HEVC rendering but the newer chips with
-            // PowerVR GPUs have good HEVC support.
-            if (GlRendererParser.isPowerVR(glRenderer)) {
-                LimeLog.info("Added omx.mtk to HEVC decoders based on PowerVR GPU");
-                whitelistedHevcDecoders.add("omx.mtk");
-
-                // This SoC (MT8176 in GPD XD+) supports AVC RFI too, but the maxNumReferenceFrames setting
-                // required to make it work adds a huge amount of latency. However, RFI on HEVC causes
-                // decoder hangs on the newer GE8100, GE8300, and GE8320 GPUs, so we limit it to the
-                // Series6XT GPUs where we know it works.
-                if (glRenderer.contains("GX6")) {
-                    LimeLog.info("Added omx.mtk/c2.mtk to RFI list for HEVC");
-                    refFrameInvalidationHevcPrefixes.add("omx.mtk");
-                    refFrameInvalidationHevcPrefixes.add("c2.mtk");
-                }
-            }
+            // Their absence changes nothing here: c2.qti was already whitelisted for HEVC by the
+            // unconditional "c2." prefix, and omx.mtk still reaches the whitelist through the
+            // Amazon Fire and BRAVIA_ branches above, which key on Build properties rather than
+            // on the GPU.
         }
 
         initialized = true;
@@ -471,8 +439,11 @@ public class MediaCodecHelper {
         //
         // NB: Even on Android 10, this optimization still provides significant
         // performance gains on Pixel 2.
-        return isDecoderInList(qualcommDecoderPrefixes, decoderName) &&
-                !isAdreno620;
+        //
+        // The Adreno 620 exclusion that used to qualify this went with the GPU identification in
+        // initialize(): the flag could only ever be false on this fork's hardware, and neither
+        // supported device has a Qualcomm decoder for the list check to match anyway.
+        return isDecoderInList(qualcommDecoderPrefixes, decoderName);
     }
 
     /**
@@ -717,10 +688,9 @@ public class MediaCodecHelper {
      * @return true if RFI can be enabled for H.264 on this decoder
      */
     public static boolean decoderSupportsRefFrameInvalidationAvc(String decoderName, int videoHeight) {
-        // Reference frame invalidation is broken on low-end Snapdragon SoCs at 1080p.
-        if (videoHeight > 720 && isLowEndSnapdragon) {
-            return false;
-        }
+        // A low-end-Snapdragon exclusion at 1080p stood here. It went with the GPU identification
+        // in initialize(), which is the only thing that could ever have set the flag, and which
+        // could not identify a GPU either supported device actually has.
 
         // This device seems to crash constantly at 720p, so try disabling
         // RFI to see if we can get that under control.

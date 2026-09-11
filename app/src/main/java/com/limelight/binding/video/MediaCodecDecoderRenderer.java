@@ -17,6 +17,9 @@ import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.nvstream.av.video.VideoDecoderRenderer;
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.profiling.LatencyHistogram;
+import com.limelight.profiling.Profiler;
+import com.limelight.profiling.ProfilingCategory;
 import com.limelight.utils.TrafficStatsHelper;
 import com.limelight.preferences.PreferenceConfiguration;
 
@@ -921,6 +924,23 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         }
 
+        // Traced from here rather than at entry: this method runs several times per frame across
+        // three threads, and the no-op path above would cost more in markers than the check it
+        // guards. Everything below happens only when recovery is genuinely under way.
+        if (ProfilingCategory.VIDEO) {
+            Profiler.begin("MC.codecRecovery");
+        }
+        try {
+            return doCodecRecovery(quiescenceFlag);
+        } finally {
+            if (ProfilingCategory.VIDEO) {
+                Profiler.end();
+            }
+        }
+    }
+
+    /** The uncommon half of {@link #doCodecRecoveryIfRequired}: recovery is actually needed. */
+    private boolean doCodecRecovery(int quiescenceFlag) {
         // We need some sort of recovery, so quiesce all threads before starting that
         synchronized (codecRecoveryMonitor) {
             if (choreographerHandlerThread == null) {
@@ -1193,10 +1213,26 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      */
     @Override
     public void doFrame(long frameTimeNanos) {
-        // Do nothing if we're stopping
+        // Split so the span can wrap the whole callback without the early returns below having to
+        // carry a finally each. The stopping check stays outside it: a traced section on a
+        // callback that does nothing is noise.
         if (stopping) {
             return;
         }
+
+        if (ProfilingCategory.VIDEO) {
+            Profiler.begin("MC.doFrame");
+        }
+        try {
+            doFrameInternal(frameTimeNanos);
+        } finally {
+            if (ProfilingCategory.VIDEO) {
+                Profiler.end();
+            }
+        }
+    }
+
+    private void doFrameInternal(long frameTimeNanos) {
 
         // Only read the clock when there's a hint session to report to, so devices without
         // ADPF (the Shield, on Android 11) pay nothing for this.
@@ -1225,7 +1261,21 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             int nextOutputBuffer = outputBufferQueue.poll();
             if (nextOutputBuffer != OutputBufferRing.EMPTY) {
                 try {
-                    videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                    if (ProfilingCategory.VIDEO) {
+                        Profiler.begin("MC.releaseOutput");
+                    }
+                    try {
+                        videoDecoder.releaseOutputBuffer(nextOutputBuffer, frameTimeNanos);
+                    } finally {
+                        if (ProfilingCategory.VIDEO) {
+                            Profiler.end();
+                        }
+                    }
+
+                    // The frame reached the display, so its span ends here.
+                    if (ProfilingCategory.VIDEO) {
+                        endFrameSpanForBuffer(nextOutputBuffer);
+                    }
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
                     activeWindowVideoStats.totalFramesRendered++;
@@ -1422,21 +1472,45 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 while ((outIndex = videoDecoder.dequeueOutputBuffer(info, 0)) >= 0) {
                                     videoDecoder.releaseOutputBuffer(lastIndex, false);
 
+                                    // Superseded before it could be shown. Close its span here or
+                                    // it stays open forever, and a trace full of unterminated
+                                    // spans is harder to read than one that shows the drop.
+                                    if (ProfilingCategory.VIDEO) {
+                                        Profiler.endAsync(FRAME_SPAN_NAME,
+                                                frameSpanCookie(presentationTimeUs));
+                                    }
+
                                     numFramesOut++;
 
                                     lastIndex = outIndex;
                                     presentationTimeUs = info.presentationTimeUs;
                                 }
 
-                                if (neverDropFrames) {
-                                    // In max smoothness or cap FPS mode, we want to never drop frames
-                                    // Use a PTS that will cause this frame to never be dropped
-                                    videoDecoder.releaseOutputBuffer(lastIndex, 0);
+                                if (ProfilingCategory.VIDEO) {
+                                    Profiler.begin("MC.releaseOutput");
                                 }
-                                else {
-                                    // Use a PTS that will cause this frame to be dropped if another comes in within
-                                    // the same V-sync period
-                                    videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());
+                                try {
+                                    if (neverDropFrames) {
+                                        // In max smoothness or cap FPS mode, we want to never drop frames
+                                        // Use a PTS that will cause this frame to never be dropped
+                                        videoDecoder.releaseOutputBuffer(lastIndex, 0);
+                                    }
+                                    else {
+                                        // Use a PTS that will cause this frame to be dropped if another comes in within
+                                        // the same V-sync period
+                                        videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());
+                                    }
+                                } finally {
+                                    if (ProfilingCategory.VIDEO) {
+                                        Profiler.end();
+                                    }
+                                }
+
+                                // This thread presents in every mode except balanced, so the span
+                                // closes here rather than in doFrame().
+                                if (ProfilingCategory.VIDEO) {
+                                    Profiler.endAsync(FRAME_SPAN_NAME,
+                                            frameSpanCookie(presentationTimeUs));
                                 }
 
                                 activeWindowVideoStats.totalFramesRendered++;
@@ -1461,10 +1535,33 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 // Evicting and inserting are one call, so there is no window between
                                 // them for the consumer to empty the ring. See OutputBufferRing for what
                                 // used to go wrong here.
+                                // Record the timestamp before the offer: once the buffer is in the
+                                // ring the Choreographer thread may poll it immediately, and it
+                                // has only the index to identify the frame by.
+                                if (ProfilingCategory.VIDEO) {
+                                    rememberTracedPts(lastIndex, presentationTimeUs);
+                                }
+
                                 int evictedIndex = outputBufferQueue.offerEvictingOldest(lastIndex);
                                 if (evictedIndex != OutputBufferRing.EMPTY) {
                                     videoDecoder.releaseOutputBuffer(evictedIndex, false);
+
+                                    // Dropped without ever being shown; close its span rather than
+                                    // leaving it open.
+                                    if (ProfilingCategory.VIDEO) {
+                                        endFrameSpanForBuffer(evictedIndex);
+                                    }
                                 }
+
+                                // Queue depth is only meaningful here: the ring is used solely in
+                                // balanced pacing, and every other mode presents immediately.
+                                if (ProfilingCategory.VIDEO) {
+                                    Profiler.counter("video.queue_depth", outputBufferQueue.size());
+                                }
+                            }
+
+                            if (ProfilingCategory.VIDEO) {
+                                Profiler.counter("video.frames_in_flight", numFramesIn - numFramesOut);
                             }
 
                             // Add delta time to the totals (excluding probable outliers).
@@ -1476,12 +1573,43 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                             // the overlay reported a flat 0.00 ms while the decoder was really
                             // taking several milliseconds a frame - and kept reporting 0.00
                             // through a decoder hang, which is when the number mattered most.
-                            long delta = (BuildConfig.DEBUG && perfMetricsEnabled)
+                            long delta = BuildConfig.DEBUG
                                     ? takeDecodeStartDelta(presentationTimeUs) : -1;
                             if (delta >= 0 && delta < 1000) {
                                 activeWindowVideoStats.decoderTimeMs += delta;
                                 if (!USE_FRAME_RENDER_TIME) {
                                     activeWindowVideoStats.totalTimeMs += delta;
+                                }
+
+                                if (BuildConfig.DEBUG) {
+                                    // Same sanity window as the millisecond path above, applied
+                                    // in microseconds so an outlier cannot poison the tail.
+                                    long decUs = lastMatchedDecoderUs;
+                                    long recvUs = lastMatchedRecvUs;
+                                    if (decUs >= 0 && decUs < 1000000) {
+                                        decoderHist.record(decUs);
+                                        if (recvUs >= 0) {
+                                            endToEndHist.record(recvUs + decUs);
+                                        }
+
+                                        // Per-window worst, for the overlay. The histogram above
+                                        // is session-scoped by design and cannot answer "was the
+                                        // last second bad", which is what someone watching the
+                                        // overlay mid-stream is asking.
+                                        if (decUs > activeWindowVideoStats.worstDecoderTimeUs) {
+                                            activeWindowVideoStats.worstDecoderTimeUs = decUs;
+                                        }
+
+                                        // Log the tail samples with their position in the session
+                                        // so they can be correlated against loss events and codec
+                                        // restarts. Roughly six per 90 s run, so the cost of the
+                                        // string build is not on any path that matters.
+                                        if (decUs > 50000) {
+                                            LimeLog.info("Slow frame at t+" +
+                                                    ((SystemClock.uptimeMillis() - streamStartUptimeMs) / 1000.0)
+                                                    + "s: " + (decUs / 1000.0) + "ms in decoder");
+                                        }
+                                    }
                                 }
                             }
                         } else {
@@ -1514,6 +1642,33 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // the frame paths, written from the decode thread, hence volatile.
     private volatile boolean perfMetricsEnabled;
 
+    // The overlay's time-series plots. Every other figure on the overlay is a number with no time
+    // axis, so a step change, a spike and a slow drift read identically; these carry the axis.
+    //
+    // Built once and mutated in place, so a window rollover pushes four floats and formats three
+    // labels rather than allocating a plot structure a second. Touched only on the overlay
+    // handler, never on a frame path - the samples come from figures the stats window has already
+    // computed, so collecting them costs nothing extra.
+    private final SparklineSeries incomingFpsSeries = new SparklineSeries();
+    private final SparklineSeries renderedFpsSeries = new SparklineSeries();
+    private final SparklineSeries rttSeries = new SparklineSeries();
+    // Decoder time is only measured in debug builds, so its plot exists only there rather than
+    // drawing a flat zero - the same rule the debug-only text rows follow.
+    private final SparklineSeries decoderTimeSeries =
+            BuildConfig.DEBUG ? new SparklineSeries() : null;
+
+    private List<SparklinePlot> perfPlots;
+    private SparklinePlot fpsPlot;
+    private SparklinePlot rttPlot;
+    private SparklinePlot decoderPlot;
+
+    // Plot colours. Incoming and rendered share an axis, so they have to be told apart at a glance
+    // from across a room: cyan against amber rather than two shades of one hue.
+    private static final int PLOT_COLOUR_INCOMING = 0xFF4FC3F7;
+    private static final int PLOT_COLOUR_RENDERED = 0xFFFFB74D;
+    private static final int PLOT_COLOUR_RTT = 0xFF81C784;
+    private static final int PLOT_COLOUR_DECODER = 0xFFE57373;
+
     // Presentation gaps, measured from the codec's own render timestamps. Debug builds only.
     //
     // This is the counter that catches a frozen picture. "Rendering frame rate" counts frames
@@ -1521,12 +1676,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // while the decoder discarded every frame it was handed. Render timestamps say what actually
     // reached the display.
     //
-    // Written from the codec's callback thread and read by the stats tick, so both are volatile.
     // Counters rather than a log line per gap: logging here would mean up to sixty writes a second
     // on a callback thread during precisely the stall being diagnosed.
+    //
+    // The counters themselves now live in VideoStats, so they reset with the window. They used to
+    // be volatile fields here that nothing ever cleared, which meant one hitch pinned the overlay's
+    // worst-gap figure for the remainder of the stream. VideoStats is written from the decode
+    // threads as well as from this callback thread, which is already true of totalFramesRendered
+    // and is covered by that class's unsynchronised stance - the values are statistics, and a torn
+    // read costs an odd number on screen for one second.
     private long lastPresentedFrameNanos;
-    private volatile int presentationGapCount;
-    private volatile long worstPresentationGapNanos;
 
     /**
      * Notes how long the display went without a new frame. Called once per presented frame on the
@@ -1540,10 +1699,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // interval has to come from the stream rate rather than a constant because
             // refreshRate is whatever the stream negotiated.
             if (refreshRate > 0 && gapNanos > (2 * 1000000000L / refreshRate)) {
-                presentationGapCount++;
+                final VideoStats activeWindow = activeWindowVideoStats;
+                activeWindow.presentationGapCount++;
 
-                if (gapNanos > worstPresentationGapNanos) {
-                    worstPresentationGapNanos = gapNanos;
+                if (gapNanos > activeWindow.worstPresentationGapNanos) {
+                    activeWindow.worstPresentationGapNanos = gapNanos;
                 }
             }
         }
@@ -1552,26 +1712,142 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     // Submit times for frames the decoder still holds, so decode latency can be measured in one
-    // clock. Debug builds only, and only while the overlay is up - see CLAUDE.md on keeping
-    // per-frame instrumentation out of release. Sized well past any sane decoder's depth and never
-    // allocated on the hot path: both operations are a bounded walk over a fixed array, which
-    // costs less than the map lookup the obvious implementation would need.
+    // clock. Debug builds only - see CLAUDE.md on keeping per-frame instrumentation out of
+    // release. Sized well past any sane decoder's depth and never allocated on the hot path: both
+    // operations are a bounded walk over a fixed array, which costs less than the map lookup the
+    // obvious implementation would need.
+    //
+    // Gated on BuildConfig.DEBUG alone, deliberately, and not additionally on perfMetricsEnabled.
+    // These feed the end-of-stream percentiles, and CLAUDE.md says to benchmark from that summary
+    // rather than from the overlay precisely so the overlay's own cost is not attributed to the
+    // change being measured. Requiring the overlay to be up in order to collect them made that
+    // impossible: a run with the overlay off reported "Decoder: no samples" while receive-to-
+    // enqueue, which was never so gated, filled normally. The trace markers alongside these make
+    // the same choice via ProfilingCategory.VIDEO.
     private static final int DECODE_START_SLOTS = 16;
-    private final long[] decodeStartPtsUs = new long[DECODE_START_SLOTS];
-    private final long[] decodeStartUptimeMs = new long[DECODE_START_SLOTS];
+    private final long[] decodeStartPtsUs =
+            BuildConfig.DEBUG ? new long[DECODE_START_SLOTS] : null;
+    private final long[] decodeStartUptimeMs =
+            BuildConfig.DEBUG ? new long[DECODE_START_SLOTS] : null;
     private int decodeStartPos;
 
+    // Microsecond-resolution companions to the millisecond fields above, for the percentile
+    // histograms. nanoTime() rather than uptimeMillis() because a decoder that holds a frame for
+    // 1.4 ms is otherwise recorded as 1 or 2, and that quantisation is a large part of why the
+    // session means are unusable. Both ends of the subtraction use the same clock, which is the
+    // property the millisecond version had to be fixed to get - see takeDecodeStartDelta.
+    private final long[] decodeStartNanos =
+            BuildConfig.DEBUG ? new long[DECODE_START_SLOTS] : null;
+    private final long[] decodeStartRecvUs =
+            BuildConfig.DEBUG ? new long[DECODE_START_SLOTS] : null;
+
+    // Receive-to-enqueue time for the frame currently being submitted, carried from
+    // updateFrameCounters() to recordDecodeStart() so the two halves of a frame's latency can be
+    // joined into one end-to-end sample. Both run on the submit thread for a given frame.
+    private long pendingRecvToEnqueueUs = -1;
+
+    // Debug-only percentile histograms. A session mean cannot tell a stream where every frame
+    // takes 5 ms from one where most take 2 ms and a few take 60, and four identical 90-second
+    // runs produced decoder means of 1, 4, 2 and 2 ms - noise wide enough to hide anything worth
+    // finding.
+    private final LatencyHistogram recvToEnqueueHist =
+            BuildConfig.DEBUG ? new LatencyHistogram("Receive to enqueue") : null;
+    private final LatencyHistogram decoderHist =
+            BuildConfig.DEBUG ? new LatencyHistogram("Decoder") : null;
+    private final LatencyHistogram endToEndHist =
+            BuildConfig.DEBUG ? new LatencyHistogram("End to end") : null;
+
+    /** Perfetto track name for the per-frame async span. */
+    private static final String FRAME_SPAN_NAME = "frame";
+
+    /**
+     * Presentation timestamp of each output buffer the renderer thread has handed to the ring,
+     * indexed by MediaCodec buffer index.
+     *
+     * <p>Only needed for balanced frame pacing, where the producer and consumer are different
+     * threads and {@link OutputBufferRing} carries an index but not a timestamp. The span's cookie
+     * is derived from the timestamp, so the consumer has to be able to recover it.
+     *
+     * <p>A side table rather than two more arrays inside {@link OutputBufferRing}: widening that
+     * class's signature would put the stores on the release hot path, where nothing could remove
+     * them, whereas this whole field is null in release and every access to it sits behind
+     * {@link ProfilingCategory#VIDEO}.
+     *
+     * <p>Written on the renderer thread and read on the Choreographer thread without
+     * synchronisation, matching how the surrounding statistics are handled. A stale read closes
+     * one span against the wrong cookie, which shows up as a single odd-looking span in a trace
+     * rather than as bad data.
+     *
+     * <p>Sized well above any plausible output buffer count; an index outside it is treated as
+     * "no span" rather than as an error, so an unusual codec cannot turn tracing into a crash.
+     */
+    private final long[] tracedPtsByBufferIndex =
+            ProfilingCategory.VIDEO ? new long[64] : null;
+
+    /**
+     * Cookie identifying one frame's span across the threads that handle it.
+     *
+     * <p>The renderer threads know a buffer only by its presentation timestamp, never by frame
+     * number, so the timestamp is the one identifier available on both sides. Truncating to 32
+     * bits wraps about every 71 minutes, which cannot collide in practice because a span lives for
+     * milliseconds.
+     */
+    private static int frameSpanCookie(long presentationTimeUs) {
+        return (int) presentationTimeUs;
+    }
+
+    /**
+     * Records a buffer's timestamp so {@link #endFrameSpanForBuffer} can recover it later.
+     *
+     * <p>Call only under {@link ProfilingCategory#VIDEO}: the side table is null otherwise, which
+     * is what keeps it out of release entirely. The guard belongs at the call site rather than in
+     * here so javac can fold the whole thing away.
+     */
+    private void rememberTracedPts(int bufferIndex, long presentationTimeUs) {
+        if (bufferIndex >= 0 && bufferIndex < tracedPtsByBufferIndex.length) {
+            tracedPtsByBufferIndex[bufferIndex] = presentationTimeUs;
+        }
+    }
+
+    /**
+     * Closes the span for a buffer identified only by its index, which is all the consumer side of
+     * the ring has. Does nothing if the index was never recorded.
+     *
+     * <p>Call only under {@link ProfilingCategory#VIDEO}, for the reason given on
+     * {@link #rememberTracedPts}.
+     */
+    private void endFrameSpanForBuffer(int bufferIndex) {
+        if (bufferIndex >= 0 && bufferIndex < tracedPtsByBufferIndex.length) {
+            Profiler.endAsync(FRAME_SPAN_NAME, frameSpanCookie(tracedPtsByBufferIndex[bufferIndex]));
+        }
+    }
+
     {
-        // -1 rather than the default 0, so an empty slot can never match a real timestamp.
-        java.util.Arrays.fill(decodeStartPtsUs, -1);
+        if (BuildConfig.DEBUG) {
+            // -1 rather than the default 0, so an empty slot can never match a real timestamp.
+            // Guarded because the array itself is null in release.
+            java.util.Arrays.fill(decodeStartPtsUs, -1);
+        }
     }
 
     /** Records when a frame went into the decoder, keyed by the timestamp it was submitted with. */
     private void recordDecodeStart(long timestampUs) {
         decodeStartPtsUs[decodeStartPos] = timestampUs;
         decodeStartUptimeMs[decodeStartPos] = SystemClock.uptimeMillis();
+        decodeStartNanos[decodeStartPos] = System.nanoTime();
+        decodeStartRecvUs[decodeStartPos] = pendingRecvToEnqueueUs;
         decodeStartPos = (decodeStartPos + 1) % DECODE_START_SLOTS;
     }
+
+    // Uptime of the first frame submitted, so debug logging can place an event in the session
+    // rather than on the wall clock. Debug-only; never read in release.
+    private long streamStartUptimeMs;
+
+    // Set by takeDecodeStartDelta() when it matches a slot, so the caller can pair the decoder
+    // time it just measured with that frame's receive-to-enqueue time. Single-threaded with
+    // respect to the output loop, which is the only reader.
+    private long lastMatchedRecvUs = -1;
+    private long lastMatchedDecoderUs = -1;
 
     /**
      * @return milliseconds the decoder held this frame, or -1 if its submit time is no longer
@@ -1584,6 +1860,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // Clear the slot so a stale entry can't match a later frame that happens to
                 // reuse the timestamp after a flush resets the sequence.
                 decodeStartPtsUs[i] = -1;
+                lastMatchedDecoderUs = (System.nanoTime() - decodeStartNanos[i]) / 1000;
+                lastMatchedRecvUs = decodeStartRecvUs[i];
                 return SystemClock.uptimeMillis() - decodeStartUptimeMs[i];
             }
         }
@@ -1614,6 +1892,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         startTime = SystemClock.uptimeMillis();
 
+        // Traced, unlike dequeueOutputBuffer: this one blocking wide means the decoder is
+        // genuinely backed up, whereas the output side blocks on every idle iteration by design
+        // and a span there would say nothing.
+        if (ProfilingCategory.VIDEO) {
+            Profiler.begin("MC.fetchInputBuffer");
+        }
         try {
             // If we don't have an input buffer index yet, fetch one now.
             //
@@ -1648,6 +1932,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         } finally {
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+
+            if (ProfilingCategory.VIDEO) {
+                Profiler.end();
+            }
         }
 
         // If codec recovery is required, always return false to ensure the caller will request
@@ -1855,8 +2143,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private boolean queueNextInputBuffer(long timestampUs, int codecFlags) {
         boolean codecRecovered;
 
+        if (ProfilingCategory.VIDEO) {
+            Profiler.begin("MC.queueInputBuffer");
+        }
         try {
-            if (BuildConfig.DEBUG && perfMetricsEnabled) {
+            if (BuildConfig.DEBUG) {
                 recordDecodeStart(timestampUs);
             }
 
@@ -1883,6 +2174,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return false;
         } finally {
             codecRecovered = doCodecRecoveryIfRequired(CR_FLAG_INPUT_THREAD);
+
+            if (ProfilingCategory.VIDEO) {
+                Profiler.end();
+            }
         }
 
         // If codec recovery is required, always return false to ensure the caller will request
@@ -2128,12 +2423,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         if (lastFrameNumber == 0) {
             activeWindow.measurementStartTimestamp = SystemClock.uptimeMillis();
+            if (BuildConfig.DEBUG) {
+                streamStartUptimeMs = activeWindow.measurementStartTimestamp;
+            }
         } else if (frameNumber != lastFrameNumber && frameNumber != lastFrameNumber + 1) {
             // We can receive the same "frame" multiple times if it's an IDR frame.
             // In that case, each frame start NALU is submitted independently.
             activeWindow.framesLost += frameNumber - lastFrameNumber - 1;
             activeWindow.totalFrames += frameNumber - lastFrameNumber - 1;
             activeWindow.frameLossEvents++;
+
+            if (BuildConfig.DEBUG) {
+                // When in the session a loss happened, to test whether the recurring single
+                // loss event is a startup artefact (a display mode switch renegotiating HDMI)
+                // rather than network loss, and whether it coincides with the decoder tail.
+                // Inside the loss branch, which a healthy stream never takes.
+                LimeLog.info("Frame loss at t+" +
+                        ((SystemClock.uptimeMillis() - streamStartUptimeMs) / 1000.0) + "s: " +
+                        (frameNumber - lastFrameNumber - 1) + " frames");
+            }
         }
 
         boolean frameAdvanced = lastFrameNumber != frameNumber;
@@ -2193,11 +2501,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     decoder = "(unknown)";
                 }
 
-                overlayHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        perfListener.onPerfUpdate(buildPerfOverlayText(lastTwo, fps, decoder));
-                    }
+                overlayHandler.post(() -> {
+                    updatePerfPlots(lastTwo, fps);
+                    perfListener.onPerfPlots(perfPlots);
+                    perfListener.onPerfUpdate(buildPerfOverlayText(lastTwo, fps, decoder));
                 });
             }
 
@@ -2233,7 +2540,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             // Count time from first packet received to enqueue time as receive time
             // We will count DU queue time as part of decoding, because it is directly
             // caused by a slow decoder.
-            activeWindow.totalTimeMs += (enqueueTimeUs - receiveTimeUs) / 1000;
+            long recvToEnqueueUs = enqueueTimeUs - receiveTimeUs;
+            activeWindow.totalTimeMs += recvToEnqueueUs / 1000;
+
+            // Kept in release, unlike the rest of the instrumentation here, because it is a
+            // compare against a value the line above already computed - no clock read, no
+            // allocation, one predictable not-taken branch per decode unit. The mean beside it
+            // cannot show a hitch: a single 200 ms frame moves a sixty-frame average by 3 ms and
+            // then vanishes when the window rolls. Without this the release overlay cannot answer
+            // the one question it gets opened for.
+            if (recvToEnqueueUs > activeWindow.worstRecvToEnqueueUs) {
+                activeWindow.worstRecvToEnqueueUs = recvToEnqueueUs;
+            }
+        }
+
+        if (BuildConfig.DEBUG) {
+            // Full microsecond resolution, unlike the truncating division above. Carried to
+            // recordDecodeStart() so the decoder half can be added to it per frame.
+            pendingRecvToEnqueueUs = enqueueTimeUs - receiveTimeUs;
+            recvToEnqueueHist.record(pendingRecvToEnqueueUs);
         }
     }
 
@@ -2369,7 +2694,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         nextInputBuffer.position(nextInputBuffer.position() + bytesWritten);
 
+        // Open the frame's span here rather than in submitDecodeUnit(): since the copy-free path
+        // landed, that method only ever carries parameter sets, and picture data - the thing worth
+        // following to the display - reaches the decoder through startPicData/submitPicData.
+        if (ProfilingCategory.VIDEO) {
+            Profiler.beginAsync(FRAME_SPAN_NAME, frameSpanCookie(pendingTimestampUs));
+        }
+
         if (!queueNextInputBuffer(pendingTimestampUs, pendingCodecFlags)) {
+            // The frame never reached the decoder, so nothing downstream will ever close its span.
+            if (ProfilingCategory.VIDEO) {
+                Profiler.endAsync(FRAME_SPAN_NAME, frameSpanCookie(pendingTimestampUs));
+            }
             return MoonBridge.DR_NEED_IDR;
         }
 
@@ -2549,6 +2885,73 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     /**
+     * Pushes this window's figures onto the plots and refreshes their labels.
+     *
+     * <p>Called on {@link #overlayHandler}, immediately before the text is built. Every value here
+     * has already been computed for the text, so the plots add no measurement of their own -
+     * they add an axis to numbers that already existed.
+     *
+     * <p>Builds the plots on first use rather than in the constructor, because the frame rate
+     * axis is fixed to the stream's rate and {@code refreshRate} is not known until
+     * {@link #setup} has run.
+     */
+    private void updatePerfPlots(VideoStats lastTwo, VideoStatsFps fps) {
+        if (perfPlots == null) {
+            buildPerfPlots();
+        }
+
+        incomingFpsSeries.push(fps.receivedFps);
+        renderedFpsSeries.push(fps.renderedFps);
+
+        long rttInfo = MoonBridge.getEstimatedRttInfo();
+        int rttMs = (int) (rttInfo >> 32);
+        rttSeries.push(rttMs);
+
+        fpsPlot.setLabel(context.getString(R.string.perf_overlay_plot_fps,
+                fps.receivedFps, fps.renderedFps));
+        rttPlot.setLabel(context.getString(R.string.perf_overlay_plot_rtt, rttMs, (int) rttInfo));
+
+        if (BuildConfig.DEBUG) {
+            float decodeTimeMs = (float) lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
+            decoderTimeSeries.push(decodeTimeMs);
+            decoderPlot.setLabel(context.getString(R.string.perf_overlay_plot_dectime,
+                    decodeTimeMs, lastTwo.worstDecoderTimeUs / 1000.f));
+        }
+    }
+
+    /**
+     * Assembles the plot list once the stream's frame rate is known.
+     *
+     * <p>Incoming and rendered frame rate share one plot deliberately: the gap between the two
+     * lines is the diagnosis, as {@link VideoStats} already says in prose - total above received
+     * means network loss, received above rendered means the device cannot keep up. On separate
+     * axes that relationship is invisible.
+     *
+     * <p>The frame rate axis is fixed at the stream rate rather than autoscaled. A stream holding
+     * 59.9 to 60.0 autoscales into a mountain range, which reads as instability that is not there.
+     * Latency autoscales, because no fixed ceiling suits both a 3 ms network and a 190 ms stall.
+     */
+    private void buildPerfPlots() {
+        var plots = new ArrayList<SparklinePlot>(3);
+
+        fpsPlot = new SparklinePlot("", refreshRate > 0 ? refreshRate : 60,
+                new int[] {PLOT_COLOUR_INCOMING, PLOT_COLOUR_RENDERED},
+                incomingFpsSeries, renderedFpsSeries);
+        plots.add(fpsPlot);
+
+        rttPlot = new SparklinePlot("", 0, new int[] {PLOT_COLOUR_RTT}, rttSeries);
+        plots.add(rttPlot);
+
+        if (BuildConfig.DEBUG) {
+            decoderPlot = new SparklinePlot("", 0, new int[] {PLOT_COLOUR_DECODER},
+                    decoderTimeSeries);
+            plots.add(decoderPlot);
+        }
+
+        perfPlots = plots;
+    }
+
+    /**
      * Formats one overlay update from a snapshot of the window that just closed.
      *
      * <p>Called on {@link #overlayHandler}, never on the decode thread. Everything expensive
@@ -2561,17 +2964,15 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * @param decoder the decoder name for the format actually in use
      */
     private String buildPerfOverlayText(VideoStats lastTwo, VideoStatsFps fps, String decoder) {
-        float decodeTimeMs = (float)lastTwo.decoderTimeMs / lastTwo.totalFramesReceived;
-        long rttInfo = MoonBridge.getEstimatedRttInfo();
         StringBuilder sb = new StringBuilder();
         sb.append(context.getString(R.string.perf_overlay_streamdetails, initialWidth + "x" + initialHeight, fps.totalFps)).append('\n');
         sb.append(context.getString(R.string.perf_overlay_decoder, decoder)).append('\n');
-        sb.append(context.getString(R.string.perf_overlay_incomingfps, fps.receivedFps)).append('\n');
-        sb.append(context.getString(R.string.perf_overlay_renderingfps, fps.renderedFps)).append('\n');
+        // Incoming and rendered frame rate, network latency and decode time are no longer rows:
+        // they are the sparkline plots, whose labels carry the same current values. Graphing them
+        // instead of listing them keeps the overlay roughly the size it was, which matters more
+        // than the CPU here - this is a TV, and every row covers part of the picture.
         sb.append(context.getString(R.string.perf_overlay_netdrops,
                 (float)lastTwo.framesLost / lastTwo.totalFrames * 100)).append('\n');
-        sb.append(context.getString(R.string.perf_overlay_netlatency,
-                (int)(rttInfo >> 32), (int)rttInfo)).append('\n');
         trafficStats.sample();
         sb.append(context.getString(R.string.perf_overlay_bandwidth,
                 trafficStats.getRxKBps() / 1024.f, trafficStats.getTxKBps() / 1024.f)).append('\n');
@@ -2599,13 +3000,19 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     (float)lastTwo.maxHostProcessingLatency / 10,
                     (float)lastTwo.totalHostProcessingLatency / 10 / lastTwo.framesWithHostProcessingLatency)).append('\n');
         }
+        // The worst single frame, beside the averages above. Every other figure here is a mean
+        // over the window, and a mean of sixty frames moves by 3 ms for a frame that took 200 -
+        // then loses it entirely at the next rollover. This is the row that shows a hitch.
+        sb.append(context.getString(R.string.perf_overlay_worstframe,
+                lastTwo.worstRecvToEnqueueUs / 1000.f)).append('\n');
+
         // Debug only, because the measurements behind them are. Release builds must not show these
         // rows at all rather than show them reading zero - that is exactly the failure the decode
         // time metric had for its whole existence, and a blank row invites the same misreading.
         if (BuildConfig.DEBUG) {
-            sb.append(context.getString(R.string.perf_overlay_dectime, decodeTimeMs)).append('\n');
             sb.append(context.getString(R.string.perf_overlay_presentgaps,
-                    presentationGapCount, (float)worstPresentationGapNanos / 1000000));
+                    lastTwo.presentationGapCount,
+                    (float)lastTwo.worstPresentationGapNanos / 1000000));
         }
 
         return sb.toString();
@@ -2688,9 +3095,25 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     /**
-     * @return mean milliseconds from a frame arriving to it being presented, over the whole
-     *         session, or 0 if no frames have been received
+     * Stops the latency histograms recording, leaving what they hold readable by
+     * {@link #logStreamSummary(String)}.
+     *
+     * <p>Called when the game menu opens, which is the last moment the numbers still describe
+     * streaming. Showing the menu stalls the decoder for roughly 190 ms; the frames queued behind
+     * it drain afterwards as a burst of large samples that lands entirely in p99.9 and max. That
+     * burst is what made those two figures meaningless in the measurements recorded in
+     * HARDWARE_TESTING.md section 26, which were taken before this existed.
+     *
+     * <p>No-op in release, where the histograms are not allocated at all.
      */
+    public void freezeLatencyHistograms() {
+        if (BuildConfig.DEBUG) {
+            recvToEnqueueHist.freeze();
+            decoderHist.freeze();
+            endToEndHist.freeze();
+        }
+    }
+
     /**
      * Logs the session's video totals, for comparing one run against another.
      *
@@ -2699,8 +3122,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * {@code RendererException}, which is built on a crash, or the post-stream latency toast, which
      * rounds to milliseconds and cannot be read back off the device.
      *
-     * <p>Totals rather than the overlay's per-second window: the overlay forces GPU composition on
-     * this hardware, so it changes frame timing as well as measuring it.
+     * <p>Totals rather than the overlay's per-second window, because the overlay perturbs what it
+     * measures: it adds a second layer to the composition pass, and its formatting costs the decode
+     * thread a dozen resource lookups and three JNI calls a second. It does <em>not</em> force GPU
+     * composition - that claim was measured and found wrong, since this box's composer routes every
+     * layer through a scratch buffer whatever is on screen. See HARDWARE_TESTING.md section 14.
      */
     public void logStreamSummary(String label) {
         if (!BuildConfig.DEBUG) {
@@ -2712,26 +3138,29 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 globalVideoStats.totalFramesRendered + " rendered, " +
                 globalVideoStats.framesLost + " lost in " +
                 globalVideoStats.frameLossEvents + " events, " +
-                getAverageEndToEndLatency() + " ms end-to-end, " +
-                getAverageDecoderLatency() + " ms decoder");
+                getAverageReceiveToEnqueueLatency() + " ms receive-to-enqueue");
+
+        LimeLog.info("Stream latency [" + label + "]: " + recvToEnqueueHist.summarise());
+        LimeLog.info("Stream latency [" + label + "]: " + decoderHist.summarise());
+        LimeLog.info("Stream latency [" + label + "]: " + endToEndHist.summarise());
     }
 
-    public int getAverageEndToEndLatency() {
+    /**
+     * @return mean milliseconds from a frame's first packet arriving to it being handed to the
+     *         decoder, over the whole session, or 0 if no frames have been received
+     *
+     * <p>Receive-to-enqueue, not end-to-end, despite what this figure was called for years. The
+     * decoder's own time is added to {@code totalTimeMs} only in debug builds, so in release this
+     * has never covered anything past the enqueue. Naming it for what it actually measures is the
+     * alternative to deleting it: the number itself is sound, and the post-stream toast wants one.
+     * For the whole frame, read {@code endToEndHist} in a debug build - a mean at millisecond
+     * resolution cannot separate a uniformly slow stream from a fast one with a bad tail anyway.
+     */
+    public int getAverageReceiveToEnqueueLatency() {
         if (globalVideoStats.totalFramesReceived == 0) {
             return 0;
         }
         return (int)(globalVideoStats.totalTimeMs / globalVideoStats.totalFramesReceived);
-    }
-
-    /**
-     * @return mean milliseconds spent inside the decoder per frame, over the whole session, or 0
-     *         if no frames have been received
-     */
-    public int getAverageDecoderLatency() {
-        if (globalVideoStats.totalFramesReceived == 0) {
-            return 0;
-        }
-        return (int)(globalVideoStats.decoderTimeMs / globalVideoStats.totalFramesReceived);
     }
 
     /** Raised when the decoder stops accepting input buffers entirely; see {@link #fetchNextInputBuffer()}. */
@@ -2915,8 +3344,22 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     audioRtp[MoonBridge.RTP_STAT_OOS]+", "+audioRtp[MoonBridge.RTP_STAT_INVALID]+", "+
                     audioRtp[MoonBridge.RTP_STAT_DECRYPT_FAILED]+DELIMITER;
         }
-        str += "Average end-to-end client latency: "+renderer.getAverageEndToEndLatency()+"ms"+DELIMITER;
-        str += "Average hardware decoder latency: "+renderer.getAverageDecoderLatency()+"ms"+DELIMITER;
+        // Named for what it measures. There is deliberately no decoder figure beside it: the
+        // decoder's time is only ever accumulated in a debug build, so "Average hardware decoder
+        // latency" read a flat 0ms in every release crash report ever filed - the same failure as
+        // the old "Average decoding time", which read 0.00 through a total decoder hang and sent a
+        // day of debugging at the network, the host, the CPU and the display before the decoder.
+        // A number that cannot be trusted is worse than no number, so it is gone rather than
+        // explained. Debug builds get the percentiles below, which answer the question properly.
+        str += "Average receive-to-enqueue latency: "+renderer.getAverageReceiveToEnqueueLatency()+"ms"+DELIMITER;
+        if (BuildConfig.DEBUG) {
+            // The average above is a mean over the whole session at millisecond resolution, which
+            // cannot separate a uniformly slow stream from a fast one with a bad tail. These are
+            // the same data as percentiles, in microseconds, and cover the decoder too. Prefer them.
+            str += renderer.recvToEnqueueHist.summarise()+DELIMITER;
+            str += renderer.decoderHist.summarise()+DELIMITER;
+            str += renderer.endToEndHist.summarise()+DELIMITER;
+        }
         str += "Frame pacing mode: "+renderer.prefs.framePacing+DELIMITER;
 
         // Which cases the copy-free picture data path actually reached. Without these a clean

@@ -21,6 +21,8 @@ import com.limelight.binding.video.FramePacingSelector;
 import com.limelight.binding.video.MediaCodecDecoderRenderer;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.binding.video.PerfOverlayListener;
+import com.limelight.binding.video.SparklinePlot;
+import com.limelight.ui.SparklineView;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.NvConnectionListener;
 import com.limelight.nvstream.StreamConfiguration;
@@ -255,6 +257,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private TextView notificationOverlayView;
     private int requestedNotificationOverlayVisibility = View.GONE;
     private TextView performanceOverlayView;
+    // Text and plots are shown and hidden together, so visibility is set on the container that
+    // holds both rather than on either one.
+    private View performanceOverlayContainer;
+    private SparklineView performanceSparklines;
     private int requestedPerformanceOverlayVisibility = View.GONE;
 
     private MediaCodecDecoderRenderer decoderRenderer;
@@ -436,6 +442,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         notificationOverlayView = findViewById(R.id.notificationOverlay);
 
         performanceOverlayView = findViewById(R.id.performanceOverlay);
+        performanceOverlayContainer = findViewById(R.id.performanceOverlayContainer);
+        performanceSparklines = findViewById(R.id.performanceSparklines);
 
         imePreviewOverlay = findViewById(R.id.imePreviewOverlay);
 
@@ -494,7 +502,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
         // Initialize the MediaCodec helper before creating the decoder
         GlPreferences glPrefs = GlPreferences.readPreferences(this);
-        MediaCodecHelper.initialize(this, glPrefs.glRenderer);
+        MediaCodecHelper.initialize(this);
 
         // Check if the user has enabled HDR
         boolean willStreamHdr = false;
@@ -520,7 +528,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // The preference sets the initial state only. From here it's owned by the game menu,
         // which can toggle the overlay on and off without restarting the stream.
         requestedPerformanceOverlayVisibility = prefConfig.enablePerfOverlay ? View.VISIBLE : View.GONE;
-        performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
+        performanceOverlayContainer.setVisibility(requestedPerformanceOverlayVisibility);
 
         decoderRenderer = new MediaCodecDecoderRenderer(
                 this,
@@ -1014,17 +1022,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             stopConnection();
 
             if (prefConfig.enableLatencyToast) {
-                int averageEndToEndLat = decoderRenderer.getAverageEndToEndLatency();
-                int averageDecoderLat = decoderRenderer.getAverageDecoderLatency();
+                // Receive-to-enqueue only. The decoder half used to be shown in brackets beside
+                // it, but the decoder's time is accumulated only in debug builds, so in a release
+                // build that figure was always 0 and the bracket silently never appeared. Showing
+                // one honest number beats a compound one whose second half is a coin flip.
+                int averageReceiveToEnqueueLat = decoderRenderer.getAverageReceiveToEnqueueLatency();
                 String message = null;
-                if (averageEndToEndLat > 0) {
-                    message = getResources().getString(R.string.conn_client_latency)+" "+averageEndToEndLat+" ms";
-                    if (averageDecoderLat > 0) {
-                        message += " ("+getResources().getString(R.string.conn_client_latency_hw)+" "+averageDecoderLat+" ms)";
-                    }
-                }
-                else if (averageDecoderLat > 0) {
-                    message = getResources().getString(R.string.conn_hardware_latency)+" "+averageDecoderLat+" ms";
+                if (averageReceiveToEnqueueLat > 0) {
+                    message = getResources().getString(R.string.conn_client_latency)+" "+averageReceiveToEnqueueLat+" ms";
                 }
 
                 // Add the video codec to the post-stream toast
@@ -2427,12 +2432,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // format, and this is the same hop. Costs nothing when no pad is taking audio.
         final String full = text + padAudioSink.getOverlayText();
 
-        runOnUiThread(new Runnable() {
-            @Override
-            public void run() {
-                performanceOverlayView.setText(full);
-            }
-        });
+        runOnUiThread(() -> performanceOverlayView.setText(full));
+    }
+
+    /** {@inheritDoc} Hands the plots to the view, which redraws from them. */
+    @Override
+    public void onPerfPlots(final java.util.List<SparklinePlot> plots) {
+        runOnUiThread(() -> performanceSparklines.setPlots(plots));
     }
 
     /** {@inheritDoc} Key events from the stream view, before the IME sees them. */
@@ -2460,7 +2466,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     public void togglePerformanceOverlay() {
         requestedPerformanceOverlayVisibility =
                 requestedPerformanceOverlayVisibility == View.VISIBLE ? View.GONE : View.VISIBLE;
-        performanceOverlayView.setVisibility(requestedPerformanceOverlayVisibility);
+        performanceOverlayContainer.setVisibility(requestedPerformanceOverlayVisibility);
     }
 
     /**
@@ -2471,6 +2477,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      */
     @Override
     public void showGameMenu(GameInputDevice device) {
+        // Close the latency measurement first: showing the menu stalls the decoder, and the
+        // frames that queue behind it would otherwise be recorded as the worst samples of the
+        // session. No-op in release.
+        decoderRenderer.freezeLatencyHistograms();
+
         new GameMenu(this, conn, device);
     }
 

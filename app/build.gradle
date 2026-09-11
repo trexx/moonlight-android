@@ -65,8 +65,9 @@ android {
 
             // Gradle turns assertions on for test JVMs by default. Android disables them at
             // runtime, so leaving them on would let a test fail on a constraint that never
-            // holds in production - VideoStats.add() has such an assert. Tests should see the
-            // same semantics the app does.
+            // holds in production. Tests should see the same semantics the app does - which
+            // also means an `assert` in main source is dead code, and belongs in a real check
+            // or nowhere.
             enableAssertions = false
 
             testLogging {

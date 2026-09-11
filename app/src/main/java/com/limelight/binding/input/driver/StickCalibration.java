@@ -161,10 +161,28 @@ final class StickCalibration {
         // for a stick whose flash centre is exactly 0x800. See the Y-axis note in
         // HARDWARE_TESTING.md; it needs a controller to settle, so it is recorded rather than
         // changed here.
-        x.negExtent = (float) ((xCenter - x.min) * -0.7);
-        x.posExtent = (float) ((x.max - xCenter) * 0.7);
-        y.negExtent = (float) ((yCenter - y.min) * -0.7);
-        y.posExtent = (float) ((y.max - yCenter) * 0.7);
+        //
+        // Both extents are floored away from zero. A flash record whose deflection delta is zero
+        // - erased flash, a partial SPI read, a clone pad - otherwise yields an extent of exactly
+        // 0.0f, and apply() has no branch that can escape it: all three of its comparisons are
+        // strict, so a reading at the centre falls through to `-value / negExtent` as 0.0f / 0.0f
+        // and returns NaN. That NaN is then the axis value for the rest of the session, since the
+        // extents only ever widen. One clamp is cheaper than teaching the per-sample path to
+        // recognise the case.
+        x.negExtent = negativeExtent(xCenter - x.min);
+        x.posExtent = positiveExtent(x.max - xCenter);
+        y.negExtent = negativeExtent(yCenter - y.min);
+        y.posExtent = positiveExtent(y.max - yCenter);
+    }
+
+    /** @return 70% of {@code travel} as a negative extent, never zero. See {@link #applyCalibration}. */
+    private static float negativeExtent(int travel) {
+        return Math.min(-1.0f, (float) (travel * -0.7));
+    }
+
+    /** @return 70% of {@code travel} as a positive extent, never zero. See {@link #applyCalibration}. */
+    private static float positiveExtent(int travel) {
+        return Math.max(1.0f, (float) (travel * 0.7));
     }
 
     /** Nominal full-scale 12-bit calibration, used when flash can't be read. */
