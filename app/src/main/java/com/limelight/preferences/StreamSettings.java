@@ -27,10 +27,12 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
+import com.limelight.BuildConfig;
 import com.limelight.LimeLog;
 import com.limelight.R;
 import com.limelight.binding.video.MediaCodecHelper;
 import com.limelight.nvstream.jni.MoonBridge;
+import com.limelight.utils.BuildLabel;
 import com.limelight.utils.Dialog;
 import com.limelight.utils.UiHelper;
 
@@ -52,6 +54,11 @@ import java.util.Arrays;
  *
  * <p>Some changes require rebuilding a screen, which is why the fragment is recreated rather than
  * updated in place after those.
+ *
+ * <p>The corner of the screen carries the build label - version, how far past the release tag,
+ * commit, and whether this is the debug build - formatted by {@link BuildLabel}. It is the one
+ * place in the UI that says which build is installed, which is the first question to settle when
+ * a box misbehaves.
  */
 public class StreamSettings extends Activity {
     private int previousDisplayPixelCount;
@@ -158,6 +165,12 @@ public class StreamSettings extends Activity {
         super.onCreate(savedInstanceState);
 
         setContentView(R.layout.activity_stream_settings);
+
+        // Set once: every input is a compile-time constant, and the view lives outside the
+        // fragment that reloadSettings() replaces.
+        TextView buildLabel = findViewById(R.id.settings_build_label);
+        buildLabel.setText(BuildLabel.format(BuildConfig.VERSION_NAME, BuildConfig.GIT_COMMITS_SINCE_TAG,
+                BuildConfig.GIT_SHA, BuildConfig.DEBUG));
 
         UiHelper.notifyNewRootView(this);
     }

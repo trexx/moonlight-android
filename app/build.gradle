@@ -1,10 +1,112 @@
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.provider.ValueSource
+import org.gradle.api.provider.ValueSourceParameters
 import org.gradle.api.tasks.PathSensitivity
+import org.gradle.process.ExecOperations
+import org.gradle.process.ExecSpec
+
+import javax.inject.Inject
+import java.nio.charset.StandardCharsets
 
 plugins {
     id 'com.android.application'
     // Coverage for the JVM unit tests only. This instruments the test JVM's copy of the
     // classes; it does not touch the APK. See the jacoco block below.
     id 'jacoco'
+}
+
+// Build identity: the version comes from the nearest v* tag, and the commit goes into the label in
+// the corner of the settings screen. Releasing is tagging - there is no version string to edit -
+// and two builds between tags are no longer indistinguishable, which they were when versionName
+// was the only thing an APK carried: a report against "12.1" could be any of dozens of commits.
+//
+// One `git describe` supplies all of it:
+//
+//     v12.1-f10085f-xow-88-g1147b9a-dirty
+//      ^^^^              ^^   ^^^^^^^^^^^^^
+//      version           |    commit, -dirty when tracked files have uncommitted changes
+//                        commits since the tag; 0 on a release build
+//
+// --match limits it to tags that start with a version, so backup/* tags are never described
+// against; --long keeps the count and commit even when they are 0 and the tag's own; --always
+// falls back to the bare commit when no such tag is reachable, which is the shallow-clone case
+// caught below. Content changes inside the submodules do not count as dirty, which matters here:
+// applyNativePatches modifies every native submodule's working tree, so every local build would
+// otherwise read as dirty.
+//
+// A ValueSource rather than providers.exec: the configuration cache re-runs a ValueSource on every
+// build and invalidates the cache if its value changed, whereas providers.exec's result is stored
+// with the cache and would report the commit the cache was written at. The cache is not on today,
+// but a stale SHA is exactly the kind of wrong that is worse than no SHA, so this should not be
+// the thing that breaks when it is.
+//
+// The repository is passed in rather than assumed: a ValueSource has no project, and exec's
+// default working directory is the daemon's, which is wherever the daemon was first started -
+// with several worktrees of this repository on one machine, that is a different checkout's SHA.
+interface GitDescribeParameters extends ValueSourceParameters {
+    DirectoryProperty getRepositoryDir()
+}
+
+abstract class GitDescribeSource implements ValueSource<String, GitDescribeParameters> {
+    @Inject
+    abstract ExecOperations getExecOperations()
+
+    @Override
+    String obtain() {
+        try {
+            def stdout = new ByteArrayOutputStream()
+            // The spec is named rather than reached through the closure's delegate: Gradle only
+            // decorates closures in the build script itself, so inside a class an undeclared
+            // `commandLine` resolves against this object and throws, which the catch below
+            // would then quietly turn into "no repository".
+            def result = execOperations.exec { ExecSpec spec ->
+                spec.workingDir = parameters.repositoryDir.get().asFile
+                spec.commandLine('git', 'describe', '--tags', '--match', 'v[0-9]*', '--long',
+                        '--always', '--dirty', '--abbrev=7')
+                spec.standardOutput = stdout
+                spec.errorOutput = new ByteArrayOutputStream()
+                spec.ignoreExitValue = true
+            }
+            if (result.exitValue == 0) {
+                return stdout.toString(StandardCharsets.UTF_8).trim()
+            }
+        } catch (Exception ignored) {
+            // No git on PATH, or no repository - a source tarball. Fall through.
+        }
+        return ''
+    }
+}
+
+def gitDescribe = providers.of(GitDescribeSource) {
+    parameters.repositoryDir = rootProject.layout.projectDirectory
+}.get()
+
+// Only for a build with no repository to ask - a source tarball, or a machine without git. Not
+// for a clone that has no tag: that is a fetch-depth problem, and building it with a guessed
+// version would put a wrong number on a device, which is worse than a build that says why it
+// stopped. Keep this at the last release; it is what such a build will report.
+def fallbackVersionName = '12.1'
+
+// The version is the digits-and-dots after the v; the rest of the tag name is free-form, so the
+// lazy middle absorbs whatever follows up to describe's own -<count>-g<commit> suffix.
+def described = java.util.regex.Pattern
+        .compile('^v(\\d+(?:\\.\\d+)*)\\S*?-(\\d+)-g([0-9a-f]+(?:-dirty)?)$')
+        .matcher(gitDescribe)
+def versionFromTag
+def commitsSinceTag
+def gitSha
+if (described.matches()) {
+    versionFromTag = described.group(1)
+    commitsSinceTag = described.group(2) as int
+    gitSha = described.group(3)
+} else if (gitDescribe.isEmpty()) {
+    versionFromTag = fallbackVersionName
+    commitsSinceTag = 0
+    gitSha = ''
+} else {
+    throw new GradleException("No v* tag is reachable from HEAD (git describe gave '${gitDescribe}'), " +
+            "so the version cannot be determined. A shallow clone is the usual cause: run " +
+            "`git fetch --unshallow --filter=tree:0 --tags origin`, which is what CI does after checkout.")
 }
 
 android {
@@ -25,8 +127,15 @@ android {
         // a fullscreen streaming client. Lint's OldTargetApi is suppressed in lint.xml.
         targetSdk = 34
 
-        versionName = "12.1"
+        // From the nearest v* tag - see the top of this file. versionCode stays by hand: Android
+        // needs it integer and monotonic, and nothing about a tag name guarantees either.
+        versionName = versionFromTag
         versionCode = 314
+
+        // Compile-time constants like the rest of BuildConfig; BuildLabel formats them with
+        // VERSION_NAME and DEBUG.
+        buildConfigField 'String', 'GIT_SHA', "\"${gitSha}\""
+        buildConfigField 'int', 'GIT_COMMITS_SINCE_TAG', "${commitsSinceTag}"
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
         ndk.debugSymbolLevel = 'FULL'

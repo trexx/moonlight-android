@@ -4,12 +4,17 @@
 
   The list itself is built by the framework PreferenceFragment from one of the res/xml/preferences*
   files. What this adds is the screen's edge padding, including the television overscan inset,
-  which the fragment has no way to apply for itself, and the heading above it.
+  which the fragment has no way to apply for itself, the heading above it, and the build label
+  below it.
 
   The heading is here rather than in an action bar because AppTheme sets windowNoTitle: without it
   a sub-screen would give no indication of which one you are on. StreamSettings sets its text as it
   navigates. The ground colour comes from the theme's windowBackground; painting it here as well
   would be overdraw over the whole screen.
+
+  The build label sits in the bottom-end corner, outside the fragment, so it reads the same on
+  every sub-screen and takes no focus: a plain TextView is not focusable, so the d-pad never lands
+  on it. StreamSettings sets its text once, at creation.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
@@ -35,5 +40,14 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1" />
+
+    <TextView
+        android:id="@+id/settings_build_label"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingTop="@dimen/space_2"
+        android:gravity="end"
+        android:textAppearance="@style/TextAppearance.Moonlight.Caption"
+        tools:text="12.1+88 (1147b9a)" />
 
 </LinearLayout>

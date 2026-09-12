@@ -46,6 +46,15 @@ jobs:
         with:
           submodules: recursive
 
+      # versionName comes from the nearest v* tag (see app/build.gradle), which git describe can
+      # only find by walking history from HEAD, and the default checkout is one commit deep with
+      # no tags - Gradle configuration fails on that rather than guess a version. Fetched here as
+      # a step rather than with fetch-depth: 0 on the checkout because that un-shallows the
+      # submodule clones as well, and mbedtls's history alone is over 200 MB. tree:0 leaves the
+      # blobs and trees behind: the commit graph is all describe needs.
+      - name: Fetch history for versioning
+        run: git fetch --unshallow --filter=tree:0 --tags origin
+
       - name: Run unit tests
         uses: burrunan/gradle-cache-action@404534c34a2faa40430357a3183522a845b04f3b # v3
         with:
@@ -90,6 +99,10 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: recursive
+
+      # See the same step in the test job.
+      - name: Fetch history for versioning
+        run: git fetch --unshallow --filter=tree:0 --tags origin
 
       # NB: assembleRelease, not assembleNonRoot. The nonRoot task came from a fork lineage
       # that defined a product flavour of that name; this project has no flavours, so that
