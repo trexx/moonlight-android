@@ -30,9 +30,9 @@ plugins {
 // --match limits it to tags that start with a version, so backup/* tags are never described
 // against; --long keeps the count and commit even when they are 0 and the tag's own; --always
 // falls back to the bare commit when no such tag is reachable, which is the shallow-clone case
-// caught below. Content changes inside the submodules do not count as dirty, which matters here:
-// applyNativePatches modifies every native submodule's working tree, so every local build would
-// otherwise read as dirty.
+// caught below. applyNativePatches modifies moonlight-common-c's working tree on every build,
+// which would make every local build read as dirty; it does not because .gitmodules sets
+// `ignore = dirty` on that submodule, and --dirty honours it. Keep the two in step.
 //
 // A ValueSource rather than providers.exec: the configuration cache re-runs a ValueSource on every
 // build and invalidates the cache if its value changed, whereas providers.exec's result is stored
@@ -106,7 +106,7 @@ if (described.matches()) {
 } else {
     throw new GradleException("No v* tag is reachable from HEAD (git describe gave '${gitDescribe}'), " +
             "so the version cannot be determined. A shallow clone is the usual cause: run " +
-            "`git fetch --unshallow --filter=tree:0 --tags origin`, which is what CI does after checkout.")
+            "`git fetch --unshallow --tags origin`. CI checks out with fetch-depth: 0 for this.")
 }
 
 android {

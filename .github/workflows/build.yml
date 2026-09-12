@@ -37,23 +37,28 @@ jobs:
         with:
             packages: ''
 
+      # Full history, because versionName comes from the nearest v* tag (see app/build.gradle),
+      # which git describe finds by walking back from HEAD, and the default one-commit checkout
+      # has neither the walk nor the tags - Gradle configuration fails on that rather than guess
+      # a version. About 130 MB. The one thing that fetched less, un-shallowing afterwards into a
+      # tree:0 partial clone, hung on the runner: git's post-fetch connectivity check lazily
+      # fetches the missing trees one round trip at a time.
+      #
       # Submodules are the vendored C libraries, which no unit test touches - testDebugUnitTest
       # does not run ndk-build. They are checked out anyway so Gradle configuration cannot
       # depend on their absence; dropping them here would roughly halve this job if it proves
-      # safe.
+      # safe. They are checked out in the next step rather than here: with fetch-depth 0 the
+      # action clones them in full as well, and mbedtls's history alone is over 200 MB.
       - name: Checkout Repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          submodules: recursive
+          fetch-depth: 0
+          submodules: false
 
-      # versionName comes from the nearest v* tag (see app/build.gradle), which git describe can
-      # only find by walking history from HEAD, and the default checkout is one commit deep with
-      # no tags - Gradle configuration fails on that rather than guess a version. Fetched here as
-      # a step rather than with fetch-depth: 0 on the checkout because that un-shallows the
-      # submodule clones as well, and mbedtls's history alone is over 200 MB. tree:0 leaves the
-      # blobs and trees behind: the commit graph is all describe needs.
-      - name: Fetch history for versioning
-        run: git fetch --unshallow --filter=tree:0 --tags origin
+      # The same one-commit clone of each pinned submodule commit that the action made before
+      # fetch-depth changed; it is what the action runs itself for a shallow checkout.
+      - name: Checkout submodules
+        run: git submodule update --init --recursive --depth 1
 
       - name: Run unit tests
         uses: burrunan/gradle-cache-action@404534c34a2faa40430357a3183522a845b04f3b # v3
@@ -95,14 +100,15 @@ jobs:
         with:
             packages: ''
 
+      # Full history for the version tag, submodules shallow - see the test job for both.
       - name: Checkout Repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          submodules: recursive
+          fetch-depth: 0
+          submodules: false
 
-      # See the same step in the test job.
-      - name: Fetch history for versioning
-        run: git fetch --unshallow --filter=tree:0 --tags origin
+      - name: Checkout submodules
+        run: git submodule update --init --recursive --depth 1
 
       # NB: assembleRelease, not assembleNonRoot. The nonRoot task came from a fork lineage
       # that defined a product flavour of that name; this project has no flavours, so that
