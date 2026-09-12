@@ -124,6 +124,8 @@ Robolectric:
 - `StickCalibration` — split from `ProConController`, which needs a USB device.
 - `FramePacingSelector` — split from `Game`, which needs an `Activity` and a `Display`; it returns
   a `Decision` and `Game` logs it, rather than logging from inside the decision.
+- `PresentationTimestamps` — the PTS clock choice and uniqueness bump, split from the submit
+  path in `MediaCodecDecoderRenderer`; static methods so the hot path pays no dispatch.
 - `HttpInterrupts` — was already pure apart from one log call; the caller logs instead.
 - `KeyMapper` — was already pure.
 - `TextKeyPlanner`, `ImeTextModel`, `ImePreview` — split from the IME path, which needs an

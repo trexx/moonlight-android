@@ -57,7 +57,10 @@ import android.view.SurfaceHolder;
  *   <li><b>Frame pacing.</b> Four modes, chosen by preference. In
  *       {@code FRAME_PACING_BALANCED} a dedicated Choreographer thread presents at most one frame
  *       per vsync via {@link #doFrame}; every other mode presents from the renderer thread as
- *       soon as frames come out, dropping all but the newest to stay current.</li>
+ *       soon as frames come out, dropping all but the newest to stay current. Min-latency also
+ *       relies on SurfaceFlinger dropping a queued frame once a newer one is due, which on the
+ *       Shield hinges on the input PTS rather than the render timestamp — see
+ *       {@link PresentationTimestamps}.</li>
  *   <li><b>Scheduler hints.</b> An ADPF hint session ({@link #createPerformanceHintSession()})
  *       tells the platform the per-frame deadline so CPU clocks are held where they need to be
  *       rather than ramped reactively after frames have already been missed.</li>
@@ -176,6 +179,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final TrafficStatsHelper trafficStats = new TrafficStatsHelper();
 
     private long lastTimestampUs;
+    // Whether input timestamps come from System.nanoTime() rather than common-c's enqueue time.
+    // Fixed in setup(): Game writes prefConfig.framePacing before startConnection() and never
+    // again (see startRendererThread()), and setup() runs on the connection thread before the
+    // decode thread exists. Plain rather than volatile for the same reason videoFormat and
+    // refreshRate are - the thread that reads it is created after the write.
+    private boolean monotonicPts;
     private int lastFrameNumber;
     // The stream's frame rate, not the display's, despite the name
     private int refreshRate;
@@ -861,6 +870,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 @Override
                 public void onFrameRendered(MediaCodec mediaCodec, long presentationTimeUs, long renderTimeNanos) {
                     if (USE_FRAME_RENDER_TIME) {
+                        // Only meaningful under min-latency pacing, where the PTS is
+                        // System.nanoTime() in microseconds and this is submit-to-present on
+                        // one clock. In every other mode the PTS is session-relative, the delta
+                        // is hugely negative, and the filter below discards it.
                         long delta = (renderTimeNanos / 1000000L) - (presentationTimeUs / 1000);
                         if (delta >= 0 && delta < 1000) {
                             activeWindowVideoStats.totalTimeMs += delta;
@@ -894,6 +907,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // already treats a zero rate as reachable, and a rate that never arrives should present every
         // vsync rather than throw once per frame.
         this.minPresentIntervalNanos = redrawRate > 0 ? 800000000L / redrawRate : 0;
+        // Decided here rather than per frame so the submit path reads a field, and so the class
+        // is initialised off the frame path. See PresentationTimestamps for why the clock the
+        // PTS comes from matters on the Shield.
+        this.monotonicPts = PresentationTimestamps.useMonotonicClock(prefs.framePacing);
 
         return initializeDecoder(false);
     }
@@ -1491,13 +1508,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 }
                                 try {
                                     if (neverDropFrames) {
-                                        // In max smoothness or cap FPS mode, we want to never drop frames
-                                        // Use a PTS that will cause this frame to never be dropped
+                                        // In max smoothness or cap FPS mode, we want to never drop
+                                        // frames. A render timestamp of zero lies outside
+                                        // SurfaceFlinger's drop window, so every frame is shown.
                                         videoDecoder.releaseOutputBuffer(lastIndex, 0);
                                     }
                                     else {
-                                        // Use a PTS that will cause this frame to be dropped if another comes in within
-                                        // the same V-sync period
+                                        // A timely render timestamp lets SurfaceFlinger drop this
+                                        // frame if another is queued before the same vsync. On the
+                                        // Shield this value is ignored and the input PTS takes its
+                                        // place, which is why prepareInputBufferForData() draws the
+                                        // PTS from this same clock in this mode - see
+                                        // PresentationTimestamps.
                                         videoDecoder.releaseOutputBuffer(lastIndex, System.nanoTime());
                                     }
                                 } finally {
@@ -1688,10 +1710,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long lastPresentedFrameNanos;
 
     /**
-     * Notes how long the display went without a new frame. Called once per presented frame on the
-     * codec's callback thread.
+     * Counts a frame the display actually showed, and notes how long it went without one. Called
+     * once per presented frame on the codec's callback thread.
      */
     private void recordPresentedFrame(long renderTimeNanos) {
+        activeWindowVideoStats.totalFramesPresented++;
+
         if (lastPresentedFrameNanos != 0) {
             long gapNanos = renderTimeNanos - lastPresentedFrameNanos;
 
@@ -2135,7 +2159,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     /**
      * Submits the filled input buffer to the decoder.
      *
-     * @param timestampUs presentation timestamp, also used to measure decoder latency
+     * @param timestampUs presentation timestamp: {@code System.nanoTime()} in microseconds under
+     *                    min-latency pacing, moonlight-common-c's enqueue time otherwise (see
+     *                    {@link PresentationTimestamps}); also the key the decoder-latency ring
+     *                    matches output frames to input by
      * @param codecFlags  {@code MediaCodec.BUFFER_FLAG_*} for this buffer
      * @return true if the buffer was accepted. False means the caller must request an IDR frame,
      *         because whatever was queued before it can no longer be decoded.
@@ -2464,9 +2491,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-        // Flip stats windows roughly every second. Read once and reused below: this is the only
-        // clock read left on the steady-state path, and the window that closes here and the one
-        // that opens should meet at the same instant rather than a few microseconds apart.
+        // Flip stats windows roughly every second. Read once and reused below: apart from the PTS
+        // that prepareInputBufferForData() takes from System.nanoTime() in min-latency pacing,
+        // this is the only clock read left on the steady-state path, and the window that closes
+        // here and the one that opens should meet at the same instant rather than a few
+        // microseconds apart.
         final long nowUptimeMs = SystemClock.uptimeMillis();
         if (nowUptimeMs >= activeWindow.measurementStartTimestamp + 1000) {
             // Cache the overlay's visibility for the per-frame paths. They need it 60 times a
@@ -2859,12 +2888,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
         }
 
-        long timestampUs = enqueueTimeUs;
-        if (timestampUs <= lastTimestampUs) {
-            // We can't submit multiple buffers with the same timestamp
-            // so bump it up by one before queuing
-            timestampUs = lastTimestampUs + 1;
-        }
+        // The PTS ought to be decorative - every pacing mode passes its own render timestamp at
+        // release - but the Shield's codec stack hands SurfaceFlinger the PTS instead, so in
+        // min-latency pacing it has to come from SurfaceFlinger's clock or a backlog is never
+        // shed. Read here rather than at entry: fetchNextInputBuffer() above can block, and the
+        // PTS should be the instant the buffer is actually submitted. See PresentationTimestamps.
+        long timestampUs = PresentationTimestamps.strictlyAfter(
+                monotonicPts ? System.nanoTime() / 1000 : enqueueTimeUs, lastTimestampUs);
         lastTimestampUs = timestampUs;
 
         numFramesIn++;
@@ -3012,7 +3042,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if (BuildConfig.DEBUG) {
             sb.append(context.getString(R.string.perf_overlay_presentgaps,
                     lastTwo.presentationGapCount,
-                    (float)lastTwo.worstPresentationGapNanos / 1000000));
+                    (float)lastTwo.worstPresentationGapNanos / 1000000)).append('\n');
+            // Presented against released is the frames SurfaceFlinger dropped after release -
+            // the number that shows whether the PTS clock choice in PresentationTimestamps is
+            // doing its job. Expect a small lag between the two from callbacks still in flight.
+            sb.append(context.getString(R.string.perf_overlay_presented,
+                    lastTwo.totalFramesRendered, lastTwo.totalFramesPresented));
         }
 
         return sb.toString();
@@ -3361,6 +3396,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             str += renderer.endToEndHist.summarise()+DELIMITER;
         }
         str += "Frame pacing mode: "+renderer.prefs.framePacing+DELIMITER;
+        if (BuildConfig.DEBUG) {
+            // Frames SurfaceFlinger showed against frames handed to it. A shortfall beyond the
+            // handful still in flight at teardown is frames it dropped as stale, which is what
+            // min-latency pacing asks for and what PresentationTimestamps makes possible on the
+            // Shield. Debug only because the listener that counts presented frames is.
+            str += "Frames presented by display: "+renderer.globalVideoStats.totalFramesPresented+
+                    " of "+renderer.globalVideoStats.totalFramesRendered+" released"+DELIMITER;
+        }
 
         // Which cases the copy-free picture data path actually reached. Without these a clean
         // run is not evidence: the offset arithmetic is only exercised when CSD was prepended,

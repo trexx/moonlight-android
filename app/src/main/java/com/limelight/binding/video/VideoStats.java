@@ -66,6 +66,13 @@ class VideoStats {
     // free - which is what the summary wanted from them anyway.
     int presentationGapCount;
     long worstPresentationGapNanos;
+    // Frames whose render timestamp came back from the codec - the ones SurfaceFlinger actually
+    // put on screen. Debug builds only, like the gaps above: the listener that feeds it is not
+    // attached in release. Read against totalFramesRendered it is the count SurfaceFlinger
+    // dropped between release and the display, which is the observable for the PTS clock choice
+    // in PresentationTimestamps. Callbacks arrive late and batched, so a window's figure can lag
+    // the released count by the frames still in flight; the session total is the number to trust.
+    int totalFramesPresented;
 
     long measurementStartTimestamp;
 
@@ -102,6 +109,7 @@ class VideoStats {
         this.worstDecoderTimeUs = Math.max(this.worstDecoderTimeUs, other.worstDecoderTimeUs);
         this.presentationGapCount += other.presentationGapCount;
         this.worstPresentationGapNanos = Math.max(this.worstPresentationGapNanos, other.worstPresentationGapNanos);
+        this.totalFramesPresented += other.totalFramesPresented;
 
         // Keeps the earlier of the two starts, so a summed window still spans from when the
         // oldest of its parts opened. Callers add in chronological order.
@@ -127,6 +135,7 @@ class VideoStats {
         this.worstDecoderTimeUs = other.worstDecoderTimeUs;
         this.presentationGapCount = other.presentationGapCount;
         this.worstPresentationGapNanos = other.worstPresentationGapNanos;
+        this.totalFramesPresented = other.totalFramesPresented;
         this.measurementStartTimestamp = other.measurementStartTimestamp;
     }
 
@@ -147,6 +156,7 @@ class VideoStats {
         this.worstDecoderTimeUs = 0;
         this.presentationGapCount = 0;
         this.worstPresentationGapNanos = 0;
+        this.totalFramesPresented = 0;
         this.measurementStartTimestamp = 0;
     }
 

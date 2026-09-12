@@ -2463,6 +2463,10 @@ the measurement's own cost is not attributed to the change. **Do not compare a f
 table above against one measured overlay-off** — re-baseline first, and note the overlay state of
 every run from here on.
 
+None of these figures see the display. Decode-complete to on-screen is measured from outside the
+app with `dumpsys SurfaceFlinger --latency` in §30, which is also where the Shield's handling of the
+PTS these histograms key on is recorded.
+
 ### The recurring frame-loss event is HDR, not the network
 
 Every run reports exactly one loss event of 4–5 frames. That regularity is the tell: real network
@@ -2612,6 +2616,161 @@ for the text at the 1 Hz window rollover; the plots add a float store per series
 
 ---
 
+## 30. SurfaceFlinger never drops a stale frame on the Shield
+
+**Measured 2026-09-11 on the Shield TV**, release build `com.limelight.unofficial` 12.1 (314),
+4K HEVC 10-bit HDR at 60 fps from Turk-PC, display mode 23 (3840x2160 @ 60.000 Hz), thermal
+status 0. Everything below came from read-only `dumpsys` during a live session; nothing in the
+app was changed to take it.
+
+### How to see it
+
+SurfaceFlinger keeps a ring of the last 511 frames per layer (8.517 s at 60 Hz), read-only:
+
+```bash
+adb shell "dumpsys SurfaceFlinger --latency 'SurfaceView - com.limelight.unofficial/com.limelight.Game#0'"
+```
+
+(`com.limelight.debug` for a debug build. The whole remote command is double-quoted: `adb shell`
+joins its arguments with spaces and the device's shell splits them again, so single quotes alone
+leave `--latency` with the argument `SurfaceView` and the dump returns only the refresh period.)
+The first line is the refresh period; every other line
+is `desiredPresent actualPresent frameReady` in nanoseconds of `CLOCK_MONOTONIC`. Two derived
+figures are worth computing:
+
+- **present-to-present** — successive `actualPresent` deltas. A healthy stream is 16.67 ms with a
+  handful of 33 ms repeats; anything longer is a stall.
+- **ready→present** — `actualPresent − frameReady`, the time from decode complete to on screen.
+  The floor is the phase between decode completion and the next vsync, 13–27 ms here; every
+  16.7 ms above that band is a whole frame sitting in the BufferQueue.
+
+Sample at most 8.3 s apart and de-duplicate rows on `actualPresent`; overlap is harmless, holes
+are not. The ring is 8.517 s long and `adb` adds ~50 ms, so dumps 8.5 s apart leave two to four
+frames in neither ring, and each hole reads as a 50–83 ms "stall" on the dump boundary — 20 of 24
+boundaries did on 2026-09-12. A hole is told from a stall by the rows either side: its PTS gap
+equals its present gap and submit→present is unchanged, i.e. nothing was queued and nothing
+recovered. The 67 ms stall that one of 21 dumps landed on the day before was real (PTS gap 16 ms
+against a 68 ms present gap, then 12 s of backlog); the dumps themselves did not stall the stream
+in 24 attempts, so the `mStateLock` worry is unfounded.
+
+### What the dump showed
+
+**Column 1 is the stream PTS, not the render timestamp.** Every `desiredPresent` read around
+`387098305000` ns, i.e. 387 s — the age of the session — while `actualPresent` read `1.728e15`,
+twenty days of uptime. That is moonlight-common-c's `enqueueTimeUs` (`PltGetMicroseconds()`,
+`CLOCK_MONOTONIC_RAW` minus a start time) scaled ×1000, which is exactly what the codec does with a
+buffer's PTS. The app never passes it: min-latency releases with `System.nanoTime()`, the
+never-drop modes with `0`, balanced with the vsync time. Two more things pin it as the PTS rather
+than any of those: the column's deltas tracked the network cadence (16.7 ms) through a burst in
+which decode output came 7.5 ms apart, and it kept the network cadence through the 20:54:29 HDR
+codec restart. NVIDIA's ACodec logs `Enable timestamp filtering for Video Decoder` at every codec
+start; that is the substitution.
+
+**So the drop window is never met.** `BufferQueueConsumer::acquireBuffer` drops the older of two
+queued buffers only if the newer one's timestamp lies in `[expectedPresent − 1 s, expectedPresent]`;
+the SDK javadoc for `releaseOutputBuffer(int, long)` describes the same window and says that
+outside it "it will not drop frames". A timestamp hundreds of seconds old is outside it, so
+SurfaceFlinger shows every queued frame, one per vsync, in order. The consequences were all in the
+dump:
+
+| t (s) | present gap | PTS gap | ready→present after | reading |
+|---|---|---|---|---|
+| 8.65 | **67.7 ms** | 16.3 ms | 54 ms for ~12 s | Local stall (frames were decoded on time); two frames stayed queued until source-side gaps at 20.7 s freed slots |
+| 30.3 | 33.3 ms | 27.4 ms | 35 → 14 ms over 45 s | One late frame; one vsync of extra latency drained only by clock drift at ~0.45 ms/s |
+| 248.1 | 33.3 ms | 17.7 ms | 12 → 25 ms | Phase wrap: the host runs ≈59.98 Hz against 60.000; benign, one repeat per ~60 s |
+
+Baseline pacing was otherwise tight: over 8,560 unique frames p99 present-to-present was
+17.4 ms and 99.7 % of intervals were a single vsync. The problem is not the stalls, which are
+rare; it is that nothing ever recovers from one.
+
+### What changed
+
+`PresentationTimestamps` draws the PTS from `System.nanoTime() / 1000` in min-latency pacing —
+`CLOCK_MONOTONIC`, the clock SurfaceFlinger compares against — so whatever the Shield substitutes,
+the newer of two queued frames is timely and the older is dropped. The other modes keep the
+session-relative PTS: the never-drop modes must stay outside the window, and balanced never queues
+two. Section 28's `takeDecodeStartDelta()` keys on the PTS by equality and is unaffected. Debug
+builds now also count frames the display actually presented (`totalFramesPresented`, from the
+codec's render callback) and show it against frames released, in the overlay and the summary.
+
+Cost: one `System.nanoTime()` per decode unit on the submit thread in min-latency, plus a static
+call and a branch; the other modes gain the branch. No allocation. The output loop is untouched.
+
+### Verified — Shield, release build, min-latency
+
+**Measured 2026-09-12**, release build `com.limelight.unofficial` 12.1 (314) carrying this change,
+same host, stream and display mode as above, thermal status 0. 24 dumps at 8.5 s over 205 s,
+12,182 presented frames, taken during a live session that was not paused or otherwise touched.
+A release build carries the PTS change but not the debug-only presented counter, so two boxes
+below wait for a debug build.
+
+- [x] **Column 1 moves clocks.** `desiredPresent` read `1816024.75 s` against `/proc/uptime`
+      1816033 s — `CLOCK_MONOTONIC`, where the day before it read the session's 387 s. It sits
+      32–37 ms behind `actualPresent`: ~8 ms of decode (`frameReady − desiredPresent`) plus the
+      ready→present phase, so inside the 1 s window with 960 ms to spare. That it moved at all also
+      says the session was in min-latency pacing, the only mode that draws from this clock.
+- [x] **Backlogs clear at once.** ready→present never exceeded **29.5 ms** in 12,182 frames — at
+      most the phase wait, never a whole frame queued — where the day before a single event held
+      54 ms for 12 s and 35 ms for 45 s. Nineteen rows went missing at normal pacing, which is
+      SurfaceFlinger dropping the older of two queued frames, and after every one of the nineteen
+      the next row's ready→present fell from ~27 ms to ~12 ms and submit→present from 35 to
+      20 ms: the extra vsync is shed the moment a newer frame is available, not 40 s later.
+- [ ] **The presented counter discriminates.** Needs a debug build; not exercised. Over a window
+      containing at least one drop, `released − presented` in the summary must move with
+      `released − rows in the dump` (only latched frames produce rows). The SDK warns the callback
+      "can be significantly delayed and batched" and that frames "may have been rendered even if
+      there was no callback", and AOSP's `FrameRenderTracker` on ACodec cannot always tell a
+      consumer-dropped frame from a rendered one. **If the counter reads 0 while rows go missing,
+      delete the row and the counters** — a metric that can be wrong is worse than none. The dump
+      stays as the verification either way.
+- [ ] **Gating holds.** Needs a pacing-mode change, which ends the session; not exercised. In
+      cap-FPS, column 1 still reads session seconds and `released − presented` stays 0. A drop
+      there would be the change reaching a mode it must not.
+- [x] **The decoder accepts the new base.** 30+ minutes continuous at 60 fps from a PTS starting
+      at 1.8e12 µs, 99.54 % of intervals a single vsync (99.7 % the day before, before the phase
+      hunting described below), no crash in the dropbox, no stall that could be a "Waiting for
+      IDR" loop. `LimeLog` is stripped from release, so logcat has nothing to add. Whether an HDR
+      restart or a flush occurred during the window is unknown; neither was provoked.
+- [x] Nothing in §28's percentiles moves: `USE_FRAME_RENDER_TIME` is compiled out and the
+      decode-time accounting is `BuildConfig.DEBUG`-only, so no release code reads the PTS as a
+      clock, and §28's ring matches on it by equality.
+
+**What the drops cost.** Between 144 s and 172 s the host's frame phase sat within network jitter
+(±3 ms) of SurfaceFlinger's latch deadline, and the mode hunted: a frame arriving early enough to
+share a vsync with its predecessor dropped the predecessor and put ready→present at ~12 ms; a
+frame arriving a hair late repeated its predecessor and put it back at ~27 ms. Fifteen drops and
+fifteen repeats in 28 s, about one visible hiccup a second. Before this change the 27 ms state was
+absorbing — no drops, so no hunting, but a vsync slower until drift moved the phase. That trade is
+what min-latency pacing promises, and the other three modes are untouched; it is recorded here so
+that the hiccups are not mistaken for a regression when they show up in the overlay. Outside that
+window, and in 38 of the 56 repeats, the gaps were the host's: PTS gap equal to present gap, one
+second of frames at a 33 ms cadence around 154 s, nothing queued on this side.
+
+**The phase itself is the larger number.** For most of the 205 s ready→present sat at 25–28 ms,
+the unlucky end of the band: frames completed decode just after the latch and waited nearly a full
+vsync, so 27 of the 35 ms from submit to screen was waiting. The 12 ms phase, seen for 504 frames,
+is the same pipeline 15 ms faster. That is phase alignment between host capture and this
+display's vsync, not anything this change controls, and it is the next thing worth measuring.
+
+### To verify — Homatics, debug build, min-latency
+
+Regression only. Amlogic's stack is presumed to pass the render timestamp through, in which case
+the PTS change is invisible to SurfaceFlinger there; what needs checking is that the decoder does
+not object to a PTS that starts at ~1.7e12 µs.
+
+- [ ] `adb shell setprop persist.log.tag '""'` first, or nothing below is visible; restore
+      `persist.log.tag S` afterwards.
+- [ ] Stream starts and stays up; no PTS-related complaint from the vendor decoder in logcat.
+- [ ] The same dump (`com.limelight.debug` layer) shows a sane column 1 and the usual
+      ready→present band.
+- [ ] Presentation gaps in the overlay are no worse than before.
+
+Not attempted here: whether the Shield also substitutes the PTS for the `0` the never-drop modes
+pass. It does not matter to the fix — those modes keep a PTS outside the window either way — but
+it would say whether "never drop" was ever more than an accident of the PTS base on this box.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2638,6 +2797,7 @@ for the text at the 1 Hz window rollover; the plots add a float store per series
 | §17 refresh rate | A display or output mode that reports a fractional rate (59.94, 29.97, 23.976) |
 | §17.1 sub-50 fractional | A 23.976 or 29.97 Hz output mode specifically — 59.94 takes the other branch and cannot settle it |
 | §18.2 two-client check | A second Moonlight client against the same host |
+| §30 debug boxes | Shield: a debug build in min-latency for the presented counter, then cap-FPS for the gating check. Homatics: any build in min-latency. The mechanism itself is verified on the Shield's release build |
 | §19 | Both target devices; the survey differs per SoC |
 | §26 badge centring | Either box, on a television at normal viewing distance |
 | §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |
