@@ -105,11 +105,4 @@
         <item name="android:textColor">@color/on_surface_variant</item>
     </style>
 
-    <!-- The build label in the corner of the settings screen. Deliberately the smallest step on
-         the scale: it is there to be read off when asked for, not to compete with the list. -->
-    <style name="TextAppearance.Moonlight.Caption">
-        <item name="android:textSize">12sp</item>
-        <item name="android:textColor">@color/on_surface_variant</item>
-    </style>
-
 </resources>

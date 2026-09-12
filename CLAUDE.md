@@ -44,12 +44,9 @@ Toolchain: AGP 9.3.1, Gradle 9.6.1, Java 25 toolchain, NDK pinned in `app/build.
 and NDK are downloaded automatically. `git submodule update --init --recursive` is required
 before any native build.
 
-`versionName` is read from the nearest `v<major>.<minor>*` tag at configuration time, and the
-settings screen shows it with the commit (`12.1+88 (1147b9a)`, `-dirty` for an edited tree).
-Releasing is tagging; there is no version string to edit. A clone without that tag reachable
-fails to configure rather than guess — `git fetch --unshallow --tags origin` fixes a shallow
-one; CI checks out with `fetch-depth: 0` and clones the submodules shallow in a separate step,
-because a full-history checkout would otherwise pull mbedtls's 200+ MB history too.
+`versionName` is the highest `v<major>.<minor>*` tag in the clone, and the settings screen shows
+it with the commit. Releasing is tagging. A clone with no such tag fails to configure —
+`git fetch --depth=1 origin '+refs/tags/v*:refs/tags/v*'`, which CI runs after checkout.
 `versionCode` is still set by hand.
 
 Run `lintRelease` explicitly when touching anything UI or API-level related — it catches a

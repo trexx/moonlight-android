@@ -12,9 +12,9 @@
   navigates. The ground colour comes from the theme's windowBackground; painting it here as well
   would be overdraw over the whole screen.
 
-  The build label sits in the bottom-end corner, outside the fragment, so it reads the same on
-  every sub-screen and takes no focus: a plain TextView is not focusable, so the d-pad never lands
-  on it. StreamSettings sets its text once, at creation.
+  The build label is a string build.gradle generates per build type, like app_label. It sits
+  outside the fragment so it reads the same on every sub-screen, and a plain TextView is not
+  focusable, so the d-pad never lands on it.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
@@ -42,12 +42,12 @@
         android:layout_weight="1" />
 
     <TextView
-        android:id="@+id/settings_build_label"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:paddingTop="@dimen/space_2"
         android:gravity="end"
-        android:textAppearance="@style/TextAppearance.Moonlight.Caption"
-        tools:text="12.1+88 (1147b9a)" />
+        android:textAppearance="?android:attr/textAppearanceSmall"
+        android:textColor="?android:attr/textColorSecondary"
+        android:text="@string/build_label" />
 
 </LinearLayout>
