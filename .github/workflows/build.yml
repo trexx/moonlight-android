@@ -46,6 +46,10 @@ jobs:
         with:
           submodules: recursive
 
+      # The version is the highest v* tag (app/build.gradle); a one-commit checkout has none.
+      - name: Fetch version tags
+        run: git fetch --depth=1 origin '+refs/tags/v*:refs/tags/v*'
+
       - name: Run unit tests
         uses: burrunan/gradle-cache-action@404534c34a2faa40430357a3183522a845b04f3b # v3
         with:
@@ -90,6 +94,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           submodules: recursive
+
+      - name: Fetch version tags
+        run: git fetch --depth=1 origin '+refs/tags/v*:refs/tags/v*'
 
       # NB: assembleRelease, not assembleNonRoot. The nonRoot task came from a fork lineage
       # that defined a product flavour of that name; this project has no flavours, so that

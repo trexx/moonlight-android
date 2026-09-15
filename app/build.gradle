@@ -7,6 +7,27 @@ plugins {
     id 'jacoco'
 }
 
+// Build identity. The version is the highest v* tag in the clone - releasing is tagging - and
+// the label under the settings list adds the commit, "-dirty" for uncommitted changes to
+// tracked files (the carried native patches do not count: .gitmodules sets ignore = dirty on
+// that submodule). Read with providers.exec, which is enough while the configuration cache is
+// off; it would go stale if that were turned on - revisit then.
+def gitOutput = { String... args ->
+    providers.exec {
+        workingDir = rootProject.projectDir
+        commandLine(['git'] + args.toList())
+        ignoreExitValue = true
+    }.standardOutput.asText.get().trim()
+}
+def highestTag = gitOutput('tag', '--list', 'v[0-9]*', '--sort=-v:refname').readLines().find { it } ?: ''
+def tagVersion = (highestTag =~ /^v(\d+(?:\.\d+)*)/)
+if (!tagVersion.find()) {
+    // A one-commit clone has no tags. Fail rather than put a guessed version on a device.
+    throw new GradleException("No v* tag in this clone; run: git fetch --depth=1 origin '+refs/tags/v*:refs/tags/v*'")
+}
+def versionFromTag = tagVersion.group(1)
+def buildLabel = "${versionFromTag} (${gitOutput('describe', '--always', '--dirty', '--abbrev=7', '--exclude=*')})"
+
 android {
     // Pinned so every build produces identical native binaries; the NDK is not source
     // compatible across major versions.
@@ -25,7 +46,8 @@ android {
         // a fullscreen streaming client. Lint's OldTargetApi is suppressed in lint.xml.
         targetSdk = 34
 
-        versionName = "12.1"
+        // versionCode stays by hand: Android needs it integer and monotonic, and a tag is neither.
+        versionName = versionFromTag
         versionCode = 314
 
         // Generate native debug symbols to allow Google Play to symbolicate our native crashes
@@ -103,6 +125,7 @@ android {
             // Suffixed so a debug build installs alongside a release one
             applicationIdSuffix = ".debug"
             resValue "string", "app_label", "Moonlight (Debug)"
+            resValue "string", "build_label", "${buildLabel} debug"
 
             minifyEnabled = true
             shrinkResources = true
@@ -141,6 +164,7 @@ android {
             // TL;DR: Leave the following line alone!
             applicationIdSuffix = ".unofficial"
             resValue "string", "app_label", "Moonlight"
+            resValue "string", "build_label", buildLabel
 
             minifyEnabled = true
             shrinkResources = true

@@ -44,6 +44,11 @@ Toolchain: AGP 9.3.1, Gradle 9.6.1, Java 25 toolchain, NDK pinned in `app/build.
 and NDK are downloaded automatically. `git submodule update --init --recursive` is required
 before any native build.
 
+`versionName` is the highest `v<major>.<minor>*` tag in the clone, and the settings screen shows
+it with the commit. Releasing is tagging. A clone with no such tag fails to configure —
+`git fetch --depth=1 origin '+refs/tags/v*:refs/tags/v*'`, which CI runs after checkout.
+`versionCode` is still set by hand.
+
 Run `lintRelease` explicitly when touching anything UI or API-level related — it catches a
 broader issue set than the `lintVitalRelease` that `assembleRelease` triggers on its own.
 
