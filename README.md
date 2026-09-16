@@ -48,10 +48,13 @@ Taken on an Android TV box streaming Steam from Sunshine.
 * **Xbox Wireless Adapter, natively.** The USB dongle is driven by a GIP driver derived from
   [medusalix/xow](https://github.com/medusalix/xow) (`d335d602`, see
   [`UPSTREAM.md`](app/src/main/jni/xow_driver/UPSTREAM.md)) — no Bluetooth, no root, several
-  pads on one adapter. Since the port: fragmented-message reassembly, both security
-  handshakes (v1 RSA and v2 ECDH), battery reporting, a guide-LED brightness setting, and
-  **stream audio to the pad's headphone jack**, wirelessly or over a cable (isochronous USB),
-  toggled per pad from the in-stream menu.
+  pads on one adapter. Since the port:
+  * **Audio to the pad's headphone jack**, wirelessly or over a cable (isochronous USB),
+    toggled per pad from the in-stream menu
+  * Both security handshakes, v1 RSA and v2 ECDH
+  * Fragmented-message reassembly
+  * Battery reporting
+  * A guide-LED brightness setting
 * **Switch Pro Controller over USB with motion.** Gyro, accelerometer and rumble reach the
   host, with factory and user calibration read from the pad's flash. Opt-in: both USB-driver
   settings must be on, otherwise the kernel driver keeps it.
@@ -116,9 +119,11 @@ Taken on an Android TV box streaming Steam from Sunshine.
   submodule with only AES-CBC, AES-GCM and CTR-DRBG. Hardware AES is compiled in for both
   ABIs, including the ARMv8 extensions in the 32-bit build. Native library: 2.2 MB →
   ~0.4 MB, and 22 MB of prebuilt static libraries left the repository.
-* Toolchain: AGP 9.4.0, Gradle 9.6.1, Java 25, NDK r29, compileSdk 37 / minSdk 30 /
-  targetSdk 34 (deliberately — API 35 changes insets handling for no benefit to a fullscreen
-  client), OkHttp 5.5.0, BouncyCastle 1.86, libusb 1.0.30. Renovate keeps them current.
+* Toolchain, kept current by Renovate:
+  * AGP 9.4.0, Gradle 9.6.1, Java 25, NDK r29
+  * compileSdk 37, minSdk 30, targetSdk 34 — the last deliberately, since API 35 changes
+    insets handling for no benefit to a fullscreen client
+  * OkHttp 5.5.0, BouncyCastle 1.86, libusb 1.0.30
 * Raising minSdk to 30 removed 111 OS-version checks and the rooted build flavour; the branch is
   roughly 48,000 lines lighter than upstream.
 * A JVM unit test suite (`./gradlew testDebugUnitTest`) with coverage, run by CI alongside the
