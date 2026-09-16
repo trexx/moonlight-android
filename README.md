@@ -193,18 +193,22 @@ protocol work draws on [xone](https://github.com/medusalix/xone) and Microsoft's
 [GIP USB spec](docs/ms-gipusb-spec.pdf).
 
 Backported from upstream Moonlight:
-[#1219](https://github.com/moonlight-stream/moonlight-android/pull/1219),
-[#1461](https://github.com/moonlight-stream/moonlight-android/pull/1461),
-[#1478](https://github.com/moonlight-stream/moonlight-android/pull/1478),
-[#1516](https://github.com/moonlight-stream/moonlight-android/pull/1516),
-[#1565](https://github.com/moonlight-stream/moonlight-android/pull/1565),
-[#1582](https://github.com/moonlight-stream/moonlight-android/pull/1582); from
-moonlight-common-c: [#97](https://github.com/moonlight-stream/moonlight-common-c/pull/97),
-[#147](https://github.com/moonlight-stream/moonlight-common-c/pull/147); and from
-ClassicOldSong's Artemis fork:
-[#571](https://github.com/ClassicOldSong/moonlight-android/pull/571), with
-[#567](https://github.com/ClassicOldSong/moonlight-android/pull/567) diagnosing the AudioTrack
-fast-path problem (see also upstream issues
-[#1423](https://github.com/moonlight-stream/moonlight-android/issues/1423),
-[#1238](https://github.com/moonlight-stream/moonlight-android/issues/1238) and
-[#1161](https://github.com/moonlight-stream/moonlight-android/issues/1161)).
+
+* [moonlight-android#1219](https://github.com/moonlight-stream/moonlight-android/pull/1219) — Allow toggling performance overlay while streaming
+* [moonlight-android#1461](https://github.com/moonlight-stream/moonlight-android/pull/1461) — Add vendor 8BitDo to XboxOneController
+* [moonlight-android#1478](https://github.com/moonlight-stream/moonlight-android/pull/1478) — Add Xbox Series S/X controllers to the Xbox One driver
+* [moonlight-android#1516](https://github.com/moonlight-stream/moonlight-android/pull/1516) — Update UI helper to not fail on Meta Quest devices
+* [moonlight-android#1565](https://github.com/moonlight-stream/moonlight-android/pull/1565) — Disable HEVC RFI on unconfirmed Amlogic decoders
+* [moonlight-android#1582](https://github.com/moonlight-stream/moonlight-android/pull/1582) — Fix missing shift modifier for plus key
+* [moonlight-common-c#97](https://github.com/moonlight-stream/moonlight-common-c/pull/97) — Intra refresh support
+* [moonlight-common-c#147](https://github.com/moonlight-stream/moonlight-common-c/pull/147) — Request an IDR frame when the FEC queue reports a loss without RFI
+
+From ClassicOldSong's Artemis fork:
+
+* [ClassicOldSong#571](https://github.com/ClassicOldSong/moonlight-android/pull/571) — Add PowerA Pro controller support
+* [ClassicOldSong#567](https://github.com/ClassicOldSong/moonlight-android/pull/567) — Native AAudio low-latency renderer, which diagnosed
+  the AudioTrack fast-path problem behind upstream issues
+  [#1423](https://github.com/moonlight-stream/moonlight-android/issues/1423),
+  [#1238](https://github.com/moonlight-stream/moonlight-android/issues/1238) and
+  [#1161](https://github.com/moonlight-stream/moonlight-android/issues/1161) (audio delay on
+  Android TV). This fork's renderer is its own implementation, not a port.
