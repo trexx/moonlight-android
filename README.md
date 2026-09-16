@@ -48,10 +48,10 @@ Taken on an Android TV box streaming Steam from Sunshine.
 * **Xbox Wireless Adapter, natively.** The USB dongle is driven by a GIP driver derived from
   [medusalix/xow](https://github.com/medusalix/xow) (`d335d602`, see
   [`UPSTREAM.md`](app/src/main/jni/xow_driver/UPSTREAM.md)) — no Bluetooth, no root, several
-  pads on one adapter. Since the port: fragmented-message reassembly, the security handshake
-  (v1; v2 ECDH implemented but not yet verified on hardware), battery reporting, a guide-LED
-  brightness setting, and **stream audio to the pad's headphone jack**, wirelessly or over a
-  cable (isochronous USB), toggled per pad from the in-stream menu.
+  pads on one adapter. Since the port: fragmented-message reassembly, both security
+  handshakes (v1 RSA and v2 ECDH), battery reporting, a guide-LED brightness setting, and
+  **stream audio to the pad's headphone jack**, wirelessly or over a cable (isochronous USB),
+  toggled per pad from the in-stream menu.
 * **Switch Pro Controller over USB with motion.** Gyro, accelerometer and rumble reach the
   host, with factory and user calibration read from the pad's flash. Opt-in: both USB-driver
   settings must be on, otherwise the kernel driver keeps it.
