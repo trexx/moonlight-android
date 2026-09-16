@@ -110,12 +110,18 @@
 #define RUMBLE_SCALE(magnitude) \
     static_cast<uint8_t>((static_cast<uint32_t>(magnitude) * RUMBLE_MAX_POWER) / UINT16_MAX)
 
-// Initialiser order follows declaration order in the header, which -Wreorder checks
+// Initialiser order follows declaration order in the header, which -Wreorder checks.
+//
+// Pattern and intensity are separate fields of the LED command (MS-GIPUSB Table 42), so an
+// intensity of zero on a lit pattern is not what the spec means by off. A zero brightness
+// therefore selects the off pattern rather than a maximally dimmed on one.
 Controller::Controller(
     SendPacket sendPacket,
     uint8_t ledBrightness
 ) : GipDevice(std::move(sendPacket)),
-    stopRumbleThread(false), ledBrightness(ledBrightness), jvm(nullptr), jthis(nullptr) {}
+    stopRumbleThread(false),
+    ledPattern(ledBrightness == 0 ? LED_OFF : LED_ON), ledBrightness(ledBrightness),
+    jvm(nullptr), jthis(nullptr) {}
 
 Controller::~Controller()
 {
@@ -401,7 +407,24 @@ void Controller::statusReceived(uint8_t id, const StatusData *status)
         Log::info("Controller is powering off or resetting");
     }
 
-    notifyJavaBattery(type, level, charge);
+    /*
+     * If Java was not there to hear it, leave the filter unarmed so the next status gets through.
+     *
+     * A cabled pad's read thread is running before the Java object that wraps it exists -
+     * WiredController::start() precedes it - so the first status can land with no jthis to
+     * deliver to. With the filter armed regardless, Java heard nothing until the battery actually
+     * moved, which on a full pad is hours. Status is periodic (MS-GIPUSB 2.2.9: every second for
+     * the first 10 s after START, every 20 s after that), so the next one is at most a second away
+     * and finds the Java side registered. The adapter path never needs this: a pad's Java object
+     * exists before its first packet is read.
+     */
+    if (!notifyJavaBattery(type, level, charge))
+    {
+        batteryType = 0xff;
+        batteryLevel = 0xff;
+        batteryCharge = 0xff;
+        powerLevel = 0xff;
+    }
 }
 
 /*
@@ -513,21 +536,23 @@ void Controller::inputReceived(uint8_t id, const InputData *input)
                         stickLeftX, stickLeftY, stickRightX, stickRightY);
 }
 
-void Controller::notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge)
+bool Controller::notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge)
 {
     if (jthis == nullptr || updateBatteryMethod == nullptr) {
-        return;
+        return false;
     }
 
     JNIEnv *env = getAttachedEnv(jvm);
     if (env == nullptr) {
-        return;
+        return false;
     }
 
     // Raw GIP values: the mapping onto Moonlight's battery constants lives on the Java side,
     // where those constants are defined.
     env->CallVoidMethod(jthis, updateBatteryMethod, static_cast<jbyte>(type),
                         static_cast<jbyte>(level), static_cast<jbyte>(charge));
+
+    return true;
 }
 
 void Controller::initInput()
@@ -799,30 +824,17 @@ void Controller::startDevice()
         return;
     }
 
-    LedModeData ledMode = {};
-
     /*
-     * Guide button brightness, from the user's setting.
-     *
-     * The range is 0x00 to 0x2F, not the 0x00 to 0x20 xow claimed here: MS-GIPUSB 3.1.5.5.7
-     * Table 41 gives the intensity field as "0 - 47%", and xone caps it at 50. Whether a pad
-     * actually honours anything above 0x20 is untested - see HARDWARE_TESTING.md 22.
-     *
-     * Pattern and intensity are separate fields (Table 42), so an intensity of zero on a lit
-     * pattern is not what the spec means by off. A zero brightness therefore selects the off
-     * pattern rather than a maximally dimmed on one.
+     * The guide button LED, from the user's setting - or, if the battery has already reported by
+     * now, from wherever the battery ladder left it: this applies whatever is stored rather than
+     * recomputing the start value, so a report that beat the start is not overwritten by it.
      */
-    ledMode.mode = ledBrightness == 0 ? LED_OFF : LED_ON;
-    ledMode.brightness = ledBrightness;
-
-    if (!setLedMode(ledMode))
+    if (!applyLed())
     {
         Log::error("Failed to set initial LED mode");
 
         return;
     }
-
-    Log::info("Guide button LED set to mode %d intensity 0x%02x", ledMode.mode, ledBrightness);
 
     if (!requestSerialNumber())
     {
@@ -1941,6 +1953,69 @@ void Controller::sendRumble() {
 
     rumbleBuffer.put(rumble);
     rumbleCondition.notify_one();
+}
+
+bool Controller::applyLed()
+{
+    LedModeData ledMode = {};
+
+    /*
+     * The range is 0x00 to 0x2F, not the 0x00 to 0x20 xow claimed here: MS-GIPUSB 3.1.5.5.7
+     * Table 41 gives the intensity field as "0 - 47%", and xone caps it at 50. Whether a pad
+     * actually honours anything above 0x20 is untested - see HARDWARE_TESTING.md 22. Both values
+     * arrive already checked, by the constructor's caller and by the JNI layer.
+     */
+    ledMode.mode = ledPattern.load();
+    ledMode.brightness = ledBrightness.load();
+
+    if (!setLedMode(ledMode))
+    {
+        return false;
+    }
+
+    // HARDWARE_TESTING.md 22 and 31 grep for this line; keep its wording
+    Log::info("Guide button LED set to mode %d intensity 0x%02x", ledMode.mode, ledMode.brightness);
+
+    return true;
+}
+
+bool Controller::setLed(uint8_t pattern, uint8_t brightness)
+{
+    /*
+     * The Java side carries its own copy of these constants in GuideButtonLed, and refusing
+     * anything outside the enum is what catches the two drifting apart: an unknown pattern is
+     * logged and refused here rather than sent to the pad.
+     */
+    switch (pattern)
+    {
+        case LED_OFF:
+        case LED_ON:
+        case LED_BLINK_FAST:
+        case LED_BLINK_MED:
+        case LED_BLINK_SLOW:
+        case LED_FADE_SLOW:
+        case LED_FADE_FAST:
+            break;
+
+        default:
+            Log::error("Refused unknown LED pattern 0x%02x", pattern);
+
+            return false;
+    }
+
+    ledPattern.store(pattern);
+    ledBrightness.store(brightness);
+
+    // Stored but not sent: the device is still in Arrival, where an LED command goes unanswered,
+    // and startDevice() applies whatever is stored when it gets there. The store above and this
+    // load are both seq_cst against startDevice()'s exchange on deviceStarted and its loads in
+    // applyLed(), so one of the two sides always sends the state stored here.
+    if (!deviceStarted.load())
+    {
+        return true;
+    }
+
+    return applyLed();
 }
 
 void Controller::inputRumble(short lowFreqMotor, short highFreqMotor) {
