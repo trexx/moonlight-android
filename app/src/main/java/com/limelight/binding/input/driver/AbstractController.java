@@ -24,6 +24,17 @@ public abstract class AbstractController {
     private final int vendorId;
     private final int productId;
 
+    /** {@link #getPlayerNumber()} before the host has been told about this pad. */
+    public static final int NO_PLAYER_NUMBER = -1;
+
+    // The host's player number for this pad, 0-based. Assigned by ControllerHandler on the pad's
+    // first input report - not before, because the arrival it sends with it is lost if the
+    // stream is not up yet - and cleared when the pad goes away. Written on the driver thread,
+    // read on the UI thread by the game menu, hence volatile. Lives here rather than only on the
+    // handler's context so the menu, which holds the controller and nothing else, need not reach
+    // into the handler's maps from a thread that does not own them.
+    private volatile int playerNumber = NO_PLAYER_NUMBER;
+
     private UsbDriverListener listener;
 
     // Current controller state, written by the subclass's parser and read by reportInput().
@@ -44,6 +55,20 @@ public abstract class AbstractController {
     /** @return this driver's own controller ID, as assigned by {@link UsbDriverService} */
     public int getControllerId() {
         return deviceId;
+    }
+
+    /**
+     * @return the host's player number for this pad, 0-based, or {@link #NO_PLAYER_NUMBER} until
+     *         its first input report has been sent. It is what the game on the host calls this
+     *         pad, so it is what the game menu calls it too.
+     */
+    public int getPlayerNumber() {
+        return playerNumber;
+    }
+
+    /** For {@code ControllerHandler}, which owns the numbering. */
+    public void setPlayerNumber(int playerNumber) {
+        this.playerNumber = playerNumber;
     }
 
     /** @return the USB vendor ID of the physical device */

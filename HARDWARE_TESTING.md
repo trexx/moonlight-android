@@ -2131,9 +2131,11 @@ app touches first takes that path for the other two.
 ## 22. Guide button LED brightness
 
 The intensity the driver sends at `startDevice()` is now the user's setting rather than a
-hardcoded `0x14`, mapped from four presets in `PreferenceConfiguration.getGuideButtonLedValue()`:
+hardcoded `0x14`, mapped from the presets in `PreferenceConfiguration.getGuideButtonLedValue()`:
 off `0x00`, dim `0x0A`, normal `0x14`, bright `0x2F`. `normal` is what the driver sent before, so
-an untouched install behaves exactly as it did.
+an untouched install behaves exactly as it did. A fifth setting, "Battery level", starts at
+`normal` and then moves the LED with each battery report — that is section 31's to verify; this
+section covers the four fixed presets.
 
 Two of those values are assertions about hardware that nothing off a device can settle.
 
@@ -2176,8 +2178,9 @@ next created — the next stream — not on re-plugging a pad. That is the exist
       constructor path is wired up, not just the adapter's.
 - [ ] **Both ABIs.** The change is in the shared driver, but the Shield is `arm64-v8a` and the
       Homatics `armeabi-v7a`, and only a run on each proves the JNI signature change
-      (`createDriver` is now `(II)J`) binds. A mismatch fails at library load, so the symptom would
-      be the adapter not starting at all rather than the LED misbehaving.
+      (`createDriver` is now `(II)J`, and since section 31 `setLedNative` is `(JII)Z`) binds. A
+      mismatch fails at library load, so the symptom would be the adapter not starting at all
+      rather than the LED misbehaving.
 
 ---
 
@@ -2771,6 +2774,93 @@ it would say whether "never drop" was ever more than an accident of the PTS base
 
 ---
 
+## 31. Controller battery: the in-game label, and the guide LED following it
+
+Two additions built on the battery reports the app already collected and only ever forwarded to
+the host. Neither touches a per-frame path: battery writes happen at battery-change frequency on
+driver threads, the label is built once per menu level while the decoder is already stalled behind
+the dialog, and the LED sends one GIP frame per *level* change on the driver's read thread.
+
+**The label.** While any level of the in-game menu is up, a small end-aligned line along the
+bottom of the screen lists every controller's battery, one entry per host player number:
+`Controller 1: 75%  ·  Controller 2: 50%, charging  ·  Controller 3: wired`. "wired" is a GIP pad
+running off its cable with no battery pack — it reports `NOT_CHARGING` and no percentage, and the
+cable is the only fact in that. The store behind it is `ControllerBatteries`; the menu keeps it
+shown across submenus with a `DialogChain` token and hides it when its last dialog closes.
+
+The GIP percentages are the spec's four levels mapped as `GipController.updateBattery()` always
+has: full 100, medium 50, low 25, critical 10. Shield and Bluetooth pads report real percentages.
+
+Also fixed on the way: a GIP pad's first status packet usually arrives before its first input
+report, which is what assigns its player number, so that first battery report used to reach the
+host as player 0. It is now held on the context until the number is assigned. And on the cabled
+path, a status that landed before the Java object existed used to arm the driver's change filter
+with nobody listening, so Java heard nothing until the battery actually moved; the filter now
+stays unarmed until a report is delivered, and MS-GIPUSB 2.2.9 has the pad repeat status every
+second for its first ten seconds.
+
+**The LED.** "Battery level" is a fifth value of the Xbox button brightness setting. The guide LED
+is monochrome, so following the battery means brightness steps, taken from the presets so each one
+is a level the user has already seen: full → bright `0x2F`, medium → normal `0x14`, low → dim
+`0x0A`, and critical → a **slow blink** (`LED_BLINK_SLOW`, `0x04`) at normal intensity, because a
+warning has to look like one and a dimmer steady LED across a room does not. A pad with no battery
+fitted (type 0, running off its cable) goes bright. Before the first report, and for any level the
+spec does not define, the pad shows the normal start value. The ladder is
+`GuideButtonLed.forBattery()`, on the Java side so it is tested; the native side only applies what
+it is handed and refuses a pattern outside `enum LedMode`.
+
+Like section 22, the setting is read once in `UsbDriverService.onCreate()`, so the procedure is
+"change setting, leave the stream, start it again".
+
+The open hardware questions:
+
+- [ ] **The label is legible under the dim.** Open the menu with two pads in different states.
+      The dialog dims everything behind it at the theme's default 60%; the text is the primary
+      colour rather than the secondary one the settings version label uses for exactly this
+      reason. If it is still too faint from the sofa, that is a colour change, not a dim change.
+- [ ] **Several controllers, in player order.** Both pads listed, numbered as the host numbers
+      them. The pad-audio submenu now uses the same numbers (it used to count pads by their
+      position in the driver's list, which disagreed whenever the Shield controller or a
+      Bluetooth pad held a slot): with the Shield controller as player 1, a GIP pad should read
+      "Controller 2" in both places. A paired pad nobody has touched reads "Unused controller" in
+      the audio menu until it sends input, and is absent from the label. With multi-controller
+      off the audio menu keeps positional numbers, since every pad is player 0 there.
+- [ ] **The label survives the menu's own navigation.** Open Controllers, then Back: the label
+      stays. Cancel, or Back at the root: the label goes. Choose Disconnect: the label goes.
+- [ ] **A pad that unplugs mid-menu is gone on the next open.** Its number is released, which
+      clears its slot.
+- [ ] **A battery-less cabled pad reads "wired".** Requires a pad with the pack removed, on the
+      wired GIP path (`wiredPadAudio` on).
+- [ ] **The LED steps down over a discharge.** With "Battery level" set, run a pad down: bright at
+      full, visibly dimmer at medium, dimmer again at low. Each step is one log line:
+      ```bash
+      adb shell setprop persist.log.tag '""'
+      adb logcat -d | grep -a "Guide button LED set to"
+      adb shell setprop persist.log.tag S
+      ```
+      One line per level change, and none for a charge-state-only change (plug and unplug the
+      cable at a steady level): `GipController` deduplicates against the last command sent.
+- [ ] **Critical actually blinks.** Table 42 marks every pattern except On as "not implemented by
+      host" — which describes Microsoft's host, not the pad — so whether a pad honours
+      `LED_BLINK_SLOW` is unverified, and xone's exposing the patterns through sysfs is inference
+      rather than proof. If the pad sits steady at `0x14` instead, or logs `Refused`/no ack, try
+      `BLINK_MED`, `BLINK_FAST` and the two `FADE`s in turn and record which of them reads as a
+      warning; only if none does, fall back to `PATTERN_ON` at `0x04` and note that critical then
+      reads like "dim". The spec also has hosts wait for two consecutive critical reports before
+      warning the user; the LED reacts to the first.
+- [ ] **A battery-less cabled pad goes bright.** Type 0 in the status byte, whatever the level
+      field says (the spec has such a pad report critical in the level bits).
+- [ ] **A pad pairing mid-stream picks the ladder up.** Its first status after `startDevice()`
+      drives it; nothing about the setting is per-pad.
+- [ ] **The cabled pad, wired GIP path.** Same ladder through `WiredController`, plus the
+      first-status fix above: the label and the LED should both reflect the pad within a couple of
+      seconds of it being claimed, not only after the battery next moves.
+- [ ] **Both ABIs load.** `setLedNative` is a new `(JII)Z` entry in the controller's JNI table; a
+      mismatch fails at library load, so the symptom is the adapter or cabled pad not starting
+      at all rather than the LED misbehaving.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2798,6 +2888,7 @@ it would say whether "never drop" was ever more than an accident of the PTS base
 | §17.1 sub-50 fractional | A 23.976 or 29.97 Hz output mode specifically — 59.94 takes the other branch and cannot settle it |
 | §18.2 two-client check | A second Moonlight client against the same host |
 | §30 debug boxes | Shield: a debug build in min-latency for the presented counter, then cap-FPS for the gating check. Homatics: any build in min-latency. The mechanism itself is verified on the Shield's release build |
+| §31 ladder | A rechargeable adapter pad run down to critical, a play-and-charge cable for the charge-only case, and a cabled pad with its battery pack removed for the "wired" and type-0 cases |
 | §19 | Both target devices; the survey differs per SoC |
 | §26 badge centring | Either box, on a television at normal viewing distance |
 | §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |
