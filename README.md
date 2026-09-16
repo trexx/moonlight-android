@@ -126,12 +126,21 @@ Taken on an Android TV box streaming Steam from Sunshine.
 
 ### Removed
 
-Each of these was deleted rather than carried: mDNS host discovery (add PCs by address),
-translations, GeForce Experience-specific handling, pen and touchscreen input (controller
-touchpads still work), the in-app help `WebView`, the metered-network bitrate, the system
-equalizer, Wake-on-LAN and STUN, the on-screen virtual controller, picture-in-picture / DeX /
-multi-window, phone-vibrator rumble and phone-sensor motion, the network connection test,
-"small box art", and the "Soft keyboard text input" setting.
+Each of these was deleted rather than carried:
+
+* mDNS host discovery — PCs are added by address
+* Translations — the fork is English-only
+* GeForce Experience-specific handling
+* Pen and touchscreen input — controller touchpads still work
+* The in-app help `WebView`
+* The metered-network bitrate
+* The system equalizer
+* Wake-on-LAN and STUN
+* The on-screen virtual controller
+* Picture-in-picture, DeX and multi-window
+* Phone-vibrator rumble and phone-sensor motion
+* The network connection test
+* The "small box art" and "Soft keyboard text input" settings
 
 ## Building
 
