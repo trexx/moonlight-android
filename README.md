@@ -2,9 +2,9 @@
 
 A fork of [Moonlight for Android](https://github.com/moonlight-stream/moonlight-android), the
 open-source client for [Sunshine](https://github.com/LizardByte/Sunshine) and NVIDIA GameStream,
-cut down to two Android TV boxes — the **NVIDIA Shield TV** and the **Homatics Box R 4K** — and
-tuned for latency on them. It requires **Android 11 (API 30)** or newer, targets Sunshine hosts,
-and is English-only.
+cut down for Android TV boxes and tuned for latency. It runs on any device with **Android 11
+(API 30)** or newer and an **ARM CPU** (`arm64-v8a` or `armeabi-v7a`; there is no x86 build),
+targets Sunshine hosts, and is English-only.
 
 It is not published to any store. Build it from source (below) or take the signed APK from a
 [Build workflow](.github/workflows/build.yml) run. Upstream's own releases are on
@@ -39,7 +39,7 @@ It is not published to any store. Build it from source (below) or take the signe
   </tr>
 </table>
 
-Taken on a Shield TV streaming Steam from Sunshine.
+Taken on an Android TV box streaming Steam from Sunshine.
 
 ## What this fork changes
 
@@ -62,9 +62,9 @@ Taken on a Shield TV streaming Steam from Sunshine.
 ### Streaming and latency
 
 * Picture data is written straight into the decoder's input buffer; the min-latency pacer
-  stamps frames from the clock SurfaceFlinger uses, so the Shield drops stale frames instead
-  of queueing them; the output queue is an int ring buffer; ADPF performance hints report the
-  frame's work (API 31 — Homatics only).
+  stamps frames with SurfaceFlinger's own clock, so stale frames are dropped instead of
+  queued; the output queue is an int ring buffer; ADPF performance hints report the frame's
+  work (API 31 and newer).
 * Per-controller and per-packet allocation, JNI round-trips and logging are off the hot paths,
   and the overlay is formatted off the decode thread.
 * Frame timestamps in microseconds end-to-end; fractional refresh rates (59.94) actually reach
@@ -114,7 +114,7 @@ Taken on a Shield TV streaming Steam from Sunshine.
 
 * **Mbed TLS 3.6.7** on its PSA API replaces OpenSSL 1.1.1 for stream crypto, built from a
   submodule with only AES-CBC, AES-GCM and CTR-DRBG. Hardware AES is compiled in for both
-  ABIs, including the ARMv8 extensions on the 32-bit Homatics build. Native library: 2.2 MB →
+  ABIs, including the ARMv8 extensions in the 32-bit build. Native library: 2.2 MB →
   ~0.4 MB, and 22 MB of prebuilt static libraries left the repository.
 * Toolchain: AGP 9.4.0, Gradle 9.6.1, Java 25, NDK r29, compileSdk 37 / minSdk 30 /
   targetSdk 34 (deliberately — API 35 changes insets handling for no benefit to a fullscreen
