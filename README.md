@@ -121,8 +121,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
   ~0.4 MB, and 22 MB of prebuilt static libraries left the repository.
 * Toolchain, kept current by Renovate:
   * AGP 9.4.0, Gradle 9.6.1, Java 25, NDK r29
-  * compileSdk 37, minSdk 30, targetSdk 34 — the last deliberately, since API 35 changes
-    insets handling for no benefit to a fullscreen client
+  * compileSdk 37, minSdk 30, targetSdk 34
   * OkHttp 5.5.0, BouncyCastle 1.86, libusb 1.0.30
 * Raising minSdk to 30 removed 111 OS-version checks and the rooted build flavour; the branch is
   roughly 48,000 lines lighter than upstream.
