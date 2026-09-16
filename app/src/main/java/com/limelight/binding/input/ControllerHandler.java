@@ -460,6 +460,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             batteries.clear(context.controllerNumber);
         }
 
+        if (context instanceof UsbDeviceContext usbContext) {
+            usbContext.device.setPlayerNumber(AbstractController.NO_PLAYER_NUMBER);
+        }
+
         // If this device sent data as a gamepad, zero the values before removing.
         // We must do this after clearing the currentControllers entry so this
         // causes the device to be removed on the server PC.
@@ -614,11 +618,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         // Report attributes of this new controller to the host
         context.sendControllerArrival();
 
-        // A GIP pad's first status packet usually lands before its first input report, which is
-        // what brought us here, so its battery was cached rather than sent - see
-        // reportControllerBattery. Now that the pad has a number, hand it on.
-        if (context instanceof UsbDeviceContext usbContext && usbContext.hasBatteryReading) {
-            publishBattery(usbContext, usbContext.batteryState, usbContext.batteryPercentage);
+        if (context instanceof UsbDeviceContext usbContext) {
+            // The game menu names a pad by this number, and holds only the controller
+            usbContext.device.setPlayerNumber(context.controllerNumber);
+
+            // A GIP pad's first status packet usually lands before its first input report, which
+            // is what brought us here, so its battery was cached rather than sent - see
+            // reportControllerBattery. Now that the pad has a number, hand it on.
+            if (usbContext.hasBatteryReading) {
+                publishBattery(usbContext, usbContext.batteryState, usbContext.batteryPercentage);
+            }
         }
     }
 

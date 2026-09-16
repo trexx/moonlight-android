@@ -165,4 +165,40 @@ class GameMenuLayoutTest {
                     new State(fromGamepad, dongle, pads, formatSupported)));
         }
     }
+
+    @Nested
+    @DisplayName("padNumber")
+    class PadNumber {
+
+        /**
+         * The player number is what the game on the host shows and what the battery label
+         * shows, so it is what a pad-audio row must show: a pad that is player 2 because the
+         * Shield controller holds slot 1 reads "Controller 2", whatever its position in the
+         * driver's list. The position is only a fallback.
+         */
+        @ParameterizedTest(name = "multi={0} player={1} position={2} -> {3}")
+        @CsvSource({
+                "true,   0, 1, 1",
+                "true,   1, 1, 2",   // player 2 in position 1: the Shield controller is player 1
+                "true,   0, 2, 1",   // player 1 in position 2: touched second, paired first
+                "true,  -1, 1, 0",   // no number yet: nothing has been pressed on it
+                "false,  0, 1, 1",
+                "false,  0, 2, 2",   // every pad is player 0 here, so the position tells them apart
+                "false, -1, 3, 3",
+        })
+        @DisplayName("shows the player number, falling back to the position")
+        void showsThePlayerNumber(boolean multiController, int playerNumber, int position,
+                                  int expected) {
+            assertEquals(expected, GameMenuLayout.padNumber(multiController, playerNumber, position));
+        }
+
+        /** Zero is the sentinel because rows count from one; a real number can never be zero. */
+        @Test
+        @DisplayName("the unnumbered sentinel is not a row number")
+        void unnumberedIsNotARowNumber() {
+            assertEquals(0, GameMenuLayout.PAD_UNNUMBERED);
+            assertTrue(GameMenuLayout.padNumber(true, 0, 1) > GameMenuLayout.PAD_UNNUMBERED);
+            assertTrue(GameMenuLayout.padNumber(false, -1, 1) > GameMenuLayout.PAD_UNNUMBERED);
+        }
+    }
 }

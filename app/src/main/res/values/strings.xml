@@ -132,6 +132,8 @@
     <string name="game_menu_pair_xbox_controller">Pair Xbox Wireless Controller</string>
     <string name="game_menu_pad_audio">Controller headphone audio</string>
     <string name="game_menu_pad_audio_entry">Controller %1$d: %2$s</string>
+    <!-- A pad the host has not been told about yet: it is numbered on its first input -->
+    <string name="game_menu_pad_audio_entry_unnumbered">Unused controller: %1$s</string>
     <string name="game_menu_pad_audio_on">On</string>
     <string name="game_menu_pad_audio_off">Off</string>
     <string name="game_menu_pad_audio_unavailable">Off (two controllers already)</string>

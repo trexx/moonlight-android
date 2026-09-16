@@ -13,6 +13,7 @@ import com.limelight.utils.DialogChain;
 import com.limelight.utils.MenuDialog;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -170,14 +171,33 @@ public class GameMenu {
      * cannot be enabled because the two-pad limit is reached says so on the row. The cap is a
      * bandwidth budget on a link shared with controller input, so it is worth showing rather
      * than letting a selection quietly do nothing.
+     *
+     * <p>Pads are named by the host's player number - see {@link GameMenuLayout#padNumber} for
+     * why, and for the two cases that cannot be - and listed in that order, with any pad that
+     * has no number yet at the end.
      */
     private void showPadAudioMenu() {
         List<GipController> controllers = game.getGipControllers();
         PadAudioSink sink = game.getPadAudioSink();
         List<MenuOption> options = new ArrayList<>();
+        boolean multiController = game.isMultiControllerEnabled();
 
-        int number = 1;
-        for (GipController controller : controllers) {
+        // Number before sorting: the position fallback is the driver's order, which is this one
+        var numbers = new int[controllers.size()];
+        for (int i = 0; i < controllers.size(); i++) {
+            numbers[i] = GameMenuLayout.padNumber(multiController,
+                    controllers.get(i).getPlayerNumber(), i + 1);
+        }
+        var order = new ArrayList<Integer>();
+        for (int i = 0; i < controllers.size(); i++) {
+            order.add(i);
+        }
+        order.sort(Comparator.comparingInt(i ->
+                numbers[i] == GameMenuLayout.PAD_UNNUMBERED ? Integer.MAX_VALUE : numbers[i]));
+
+        for (int i : order) {
+            GipController controller = controllers.get(i);
+            int number = numbers[i];
             boolean enabled = sink.isEnabled(controller);
 
             /*
@@ -215,8 +235,9 @@ public class GameMenu {
                 state = getString(R.string.game_menu_pad_audio_unavailable);
             }
 
-            String label = game.getResources().getString(
-                    R.string.game_menu_pad_audio_entry, number++, state);
+            String label = number == GameMenuLayout.PAD_UNNUMBERED
+                    ? game.getResources().getString(R.string.game_menu_pad_audio_entry_unnumbered, state)
+                    : game.getResources().getString(R.string.game_menu_pad_audio_entry, number, state);
 
             options.add(new MenuOption(label, () -> game.togglePadAudio(controller)));
         }

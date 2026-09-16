@@ -2498,9 +2498,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
      * no controller has anything to show. One entry per controller, in player order, so several
      * pads read side by side rather than the last one reported winning.
      *
-     * <p>Numbered as the host numbers them - player 1 is controller number 0 - which is not the
-     * order the pad-audio submenu uses; that lists GIP pads by their position in the driver's
-     * list, so the two can disagree when an Android-enumerated pad is also attached.
+     * <p>Numbered as the host numbers them - player 1 is controller number 0 - which is also how
+     * the pad-audio submenu names pads, so a number here is the same pad there.
      *
      * <p>UI thread only: the menu opens from {@link #onBackPressed} or a controller button on the
      * main thread and calls this before showing each level. The label is a child of this
@@ -2570,6 +2569,11 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     /** @return which pads are currently taking the stream's audio */
     public PadAudioSink getPadAudioSink() {
         return padAudioSink;
+    }
+
+    /** @return the multi-controller setting, which decides how the game menu numbers pads */
+    public boolean isMultiControllerEnabled() {
+        return prefConfig.multiController;
     }
 
     /**

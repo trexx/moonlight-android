@@ -2819,8 +2819,12 @@ The open hardware questions:
       colour rather than the secondary one the settings version label uses for exactly this
       reason. If it is still too faint from the sofa, that is a colour change, not a dim change.
 - [ ] **Several controllers, in player order.** Both pads listed, numbered as the host numbers
-      them. Note the pad-audio submenu numbers GIP pads by their position in the driver's list
-      instead, so the two can disagree when an Android-enumerated pad is also present.
+      them. The pad-audio submenu now uses the same numbers (it used to count pads by their
+      position in the driver's list, which disagreed whenever the Shield controller or a
+      Bluetooth pad held a slot): with the Shield controller as player 1, a GIP pad should read
+      "Controller 2" in both places. A paired pad nobody has touched reads "Unused controller" in
+      the audio menu until it sends input, and is absent from the label. With multi-controller
+      off the audio menu keeps positional numbers, since every pad is player 0 there.
 - [ ] **The label survives the menu's own navigation.** Open Controllers, then Back: the label
       stays. Cancel, or Back at the root: the label goes. Choose Disconnect: the label goes.
 - [ ] **A pad that unplugs mid-menu is gone on the next open.** Its number is released, which
