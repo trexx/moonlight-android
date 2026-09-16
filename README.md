@@ -413,7 +413,7 @@ or take the signed APK artifact from a [Build workflow](.github/workflows/build.
 * Run ‘git submodule update --init --recursive’ from within moonlight-android/
 * Build the APK using Android Studio or ‘./gradlew assembleRelease’
 
-The NDK (pinned by ‘ndkVersion’ in app/build.gradle) and the JDK 25 toolchain used to
+The NDK (pinned by ‘ndkVersion’ in app/build.gradle) and the JDK 26 toolchain used to
 compile Java are both downloaded automatically. Python 3 is needed at build time for the
 patch step below, which runs from `preBuild`.
 
