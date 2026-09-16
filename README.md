@@ -156,8 +156,12 @@ under [`patches/`](patches) and applied to the submodule's working tree before `
 [`scripts/apply-native-patches.py`](scripts/apply-native-patches.py), which runs from
 `preBuild` (hence Python). The submodule pointer never moves, so the parent repo still shows
 exactly which upstream commit is built against. Currently carried against `moonlight-common-c`
-(pinned at `62e0663`): decrypt-failure counters, atomics for `ConnectionInterrupted` and the
-blocking queue's size, and the intra-refresh capability.
+(pinned at `62e0663`):
+
+* Decrypt-failure counters ([`0002`](patches/moonlight-common-c/0002-count-decrypt-failures.patch))
+* Atomics for `ConnectionInterrupted` and the blocking queue's size
+  ([`0004`](patches/moonlight-common-c/0004-atomic-connection-interrupted.patch))
+* The intra-refresh capability ([`0005`](patches/moonlight-common-c/0005-intra-refresh-capability.patch))
 
 ## Testing
 
