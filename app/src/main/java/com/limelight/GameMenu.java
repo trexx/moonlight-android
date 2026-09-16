@@ -9,6 +9,7 @@ import com.limelight.binding.input.KeyboardTranslator;
 import com.limelight.binding.input.driver.GipController;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.KeyboardPacket;
+import com.limelight.utils.DialogChain;
 import com.limelight.utils.MenuDialog;
 
 import java.util.ArrayList;
@@ -17,7 +18,9 @@ import java.util.List;
 /**
  * Provide options for ongoing Game Stream.
  * <p>
- * Shown on back action in game activity.
+ * Shown on back action in game activity. While any level of it is up, {@link Game} also shows the
+ * controllers' battery levels along the bottom of the screen; the menu is what decides when that
+ * label appears and goes away.
  */
 public class GameMenu {
 
@@ -40,6 +43,9 @@ public class GameMenu {
     private final Game game;
     private final NvConnection conn;
     private final GameInputDevice device;
+
+    // One menu is one chain of dialogs; see showMenuDialog for what it settles.
+    private final DialogChain chain = new DialogChain();
 
     /** Building the menu shows it immediately; there is no separate show call. */
     public GameMenu(Game game, NvConnection conn, GameInputDevice device) {
@@ -129,6 +135,11 @@ public class GameMenu {
      * own dialog with no relationship to the one that opened it, so without this a submenu's Back
      * dropped straight to the stream - further out than the user asked to go. The root passes
      * null, where dismissing really does mean returning to the game.
+     *
+     * <p>The battery label is shown afresh at every level, so a reading that changed while a
+     * submenu was up is picked up on the way back, and hidden only when the whole chain ends.
+     * Every dialog's {@code onDismiss} fires, including a parent's after its child has opened, so
+     * each one takes a {@link DialogChain} token and only the latest holder hides the label.
      */
     private void showMenuDialog(String title, MenuOption[] options, Runnable onBack) {
         List<MenuDialog.Option> rows = new ArrayList<>();
@@ -142,7 +153,14 @@ public class GameMenu {
                                                      : runnable));
         }
 
-        MenuDialog.show(game, title, 0, rows, onBack, null);
+        int token = chain.opened();
+        game.showControllerBatteryLabel();
+
+        MenuDialog.show(game, title, 0, rows, onBack, () -> {
+            if (chain.closes(token)) {
+                game.hideControllerBatteryLabel();
+            }
+        });
     }
 
     /**

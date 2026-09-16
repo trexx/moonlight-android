@@ -4,6 +4,7 @@ package com.limelight;
 import com.limelight.binding.PlatformBinding;
 import com.limelight.binding.audio.LowLatencyAudioRenderer;
 import com.limelight.binding.audio.PadAudioSink;
+import com.limelight.binding.input.ControllerBatteries;
 import com.limelight.binding.input.ControllerHandler;
 import com.limelight.binding.input.GameInputDevice;
 import com.limelight.binding.input.KeyboardTranslator;
@@ -89,6 +90,7 @@ import java.security.cert.CertificateException;
 import java.security.cert.CertificateFactory;
 import java.security.cert.X509Certificate;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
@@ -165,6 +167,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     // picture does not also cover what is being typed into it. Never focused - see the layout
     // comment.
     private TextView imePreviewOverlay;
+
+    // The controllers' battery levels, along the bottom edge while the in-game menu is up. Never
+    // focused either; the menu's dialog owns focus for as long as this is visible.
+    private TextView controllerBatteryOverlay;
 
     // Bottom margin currently applied to the echo, so the insets listener only re-lays it out when
     // the keyboard actually changes size rather than on every insets change during a stream.
@@ -446,6 +452,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         performanceSparklines = findViewById(R.id.performanceSparklines);
 
         imePreviewOverlay = findViewById(R.id.imePreviewOverlay);
+        controllerBatteryOverlay = findViewById(R.id.controllerBatteryOverlay);
 
         inputCaptureProvider = InputCaptureManager.getInputCaptureProvider(this);
 
@@ -2470,7 +2477,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     /**
-     * Opens the in-stream menu.
+     * Opens the in-stream menu. The menu also shows every controller's battery along the bottom
+     * of the screen for as long as it is up - see {@link #showControllerBatteryLabel}.
      *
      * @param device the controller that requested it, so the menu can offer that controller's own
      *               options, or null when opened from a keyboard or gesture
@@ -2483,6 +2491,50 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         decoderRenderer.freezeLatencyHistograms();
 
         new GameMenu(this, conn, device);
+    }
+
+    /**
+     * Fills the battery label from the controllers' last readings and shows it, or hides it when
+     * no controller has anything to show. One entry per controller, in player order, so several
+     * pads read side by side rather than the last one reported winning.
+     *
+     * <p>Numbered as the host numbers them - player 1 is controller number 0 - which is not the
+     * order the pad-audio submenu uses; that lists GIP pads by their position in the driver's
+     * list, so the two can disagree when an Android-enumerated pad is also attached.
+     *
+     * <p>UI thread only: the menu opens from {@link #onBackPressed} or a controller button on the
+     * main thread and calls this before showing each level. The label is a child of this
+     * activity's window, not a new layer, and the decoder is already stalled behind the menu's
+     * dialog, so the cost of building the text is not on any frame.
+     */
+    public void showControllerBatteryLabel() {
+        var parts = new ArrayList<String>();
+        for (ControllerBatteries.Reading reading : controllerHandler.batterySnapshot()) {
+            int player = reading.controllerNumber() + 1;
+            switch (reading.display()) {
+                case LEVEL -> parts.add(getString(R.string.controller_battery_level,
+                        player, reading.percentage()));
+                case CHARGING -> parts.add(getString(R.string.controller_battery_charging,
+                        player, reading.percentage()));
+                case WIRED -> parts.add(getString(R.string.controller_battery_wired, player));
+                // Never in a snapshot; listed so the switch stays exhaustive when Display grows
+                case HIDDEN -> { }
+            }
+        }
+
+        if (parts.isEmpty()) {
+            controllerBatteryOverlay.setVisibility(View.GONE);
+            return;
+        }
+
+        controllerBatteryOverlay.setText(
+                String.join(getString(R.string.controller_battery_separator), parts));
+        controllerBatteryOverlay.setVisibility(View.VISIBLE);
+    }
+
+    /** Takes the battery label down. UI thread; the menu calls it when its last dialog closes. */
+    public void hideControllerBatteryLabel() {
+        controllerBatteryOverlay.setVisibility(View.GONE);
     }
 
     /**
