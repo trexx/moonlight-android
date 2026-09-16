@@ -120,7 +120,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
   ABIs, including the ARMv8 extensions in the 32-bit build. Native library: 2.2 MB →
   ~0.4 MB, and 22 MB of prebuilt static libraries left the repository.
 * Toolchain, kept current by Renovate:
-  * AGP 9.4.0, Gradle 9.6.1, Java 25, NDK r29
+  * AGP 9.4.0, Gradle 9.6.1, Java 26, NDK r29
   * compileSdk 37, minSdk 30, targetSdk 34
   * OkHttp 5.5.0, BouncyCastle 1.86, libusb 1.0.30
 * Raising minSdk to 30 removed 111 OS-version checks and the rooted build flavour; the branch is
@@ -152,7 +152,7 @@ Each of these was deleted rather than carried:
 * `git submodule update --init --recursive`
 * `git fetch --depth=1 origin '+refs/tags/v*:refs/tags/v*'` — `versionName` comes from the
   highest `v*` tag, and a clone without one fails to configure.
-* `./gradlew assembleRelease` (or Android Studio). The JDK 25 toolchain that compiles Java and
+* `./gradlew assembleRelease` (or Android Studio). The JDK 26 toolchain that compiles Java and
   the pinned NDK are downloaded automatically.
 
 **Carried patches.** Upstream fixes this fork needs but that have not merged are kept as diffs
