@@ -70,8 +70,8 @@ android {
     compileOptions {
         // Explicit so the build does not depend on the platform default encoding
         encoding = "UTF-8"
-        sourceCompatibility = JavaVersion.VERSION_25
-        targetCompatibility = JavaVersion.VERSION_25
+        sourceCompatibility = JavaVersion.VERSION_26
+        targetCompatibility = JavaVersion.VERSION_26
     }
 
     lint {
@@ -181,10 +181,13 @@ android {
     }
 }
 
-// Compile with JDK 25 regardless of the JDK running Gradle.
+// Compile with JDK 26 regardless of the JDK running Gradle. 26 is the newest JDK whose class files
+// (major version 70) Android Lint can read: JDK 27 output makes lint log "Unsupported class file
+// major version 71" for every class and still exit green with its bytecode checks skipped, so a
+// bump past 26 needs that re-checked, not just a green CI run.
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(25)
+        languageVersion = JavaLanguageVersion.of(26)
     }
 }
 
@@ -197,8 +200,9 @@ tasks.withType(Test).configureEach {
             .withPathSensitivity(PathSensitivity.RELATIVE)
 }
 
-// 0.8.15 is the first release that understands class file major version 69, which is what the
-// JDK 25 toolchain above emits. Older versions fail instrumentation outright.
+// 0.8.15 is the first release with official support for class file major version 70, which is
+// what the JDK 26 toolchain above emits; 0.8.14 only read it experimentally, and older versions
+// fail instrumentation outright.
 jacoco {
     toolVersion = '0.8.15'
 }

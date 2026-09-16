@@ -40,7 +40,7 @@ because the alternative has cost something here.
 ./gradlew assembleRelease lintRelease # what CI gates on; runs ndk-build for both ABIs, slow
 ```
 
-Toolchain: AGP 9.3.1, Gradle 9.6.1, Java 25 toolchain, NDK pinned in `app/build.gradle`. The JDK
+Toolchain: AGP 9.4.0, Gradle 9.6.1, Java 26 toolchain, NDK pinned in `app/build.gradle`. The JDK
 and NDK are downloaded automatically. `git submodule update --init --recursive` is required
 before any native build.
 
@@ -245,7 +245,7 @@ how regressions get reintroduced.
 
 ## Modernisation
 
-Source and target level are **Java 25**. Of the modern constructs, three are in use: `var`
+Source and target level are **Java 26**. Of the modern constructs, three are in use: `var`
 (`UsbDriverService`, `XboxWirelessDongle`), records (`GameMenu.MenuOption`,
 `ComputerDetails.AddressTuple`) and switch expressions (`BrowseState`). Pattern-matching
 `instanceof` and text blocks appear nowhere yet. Nothing is known to be broken; they simply have
