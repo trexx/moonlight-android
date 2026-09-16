@@ -85,15 +85,32 @@ class Controller : public GipDevice
 {
 public:
     /*
-     * @param ledBrightness guide button LED intensity to apply once the device starts, as the
-     *                      protocol's own 0 - 0x2F field. Taken at construction because
-     *                      startDevice() sends the LED command as soon as metadata arrives, which
-     *                      can be before the Java object for this pad exists - a setter would race
-     *                      that packet. The default reproduces the value the driver sent
-     *                      unconditionally before this was configurable.
+     * @param ledBrightness guide button LED intensity to start with, as the protocol's own
+     *                      0 - 0x2F field. Taken at construction because startDevice() sends the
+     *                      LED command as soon as metadata arrives, which can be before the Java
+     *                      object for this pad exists. Later changes go through setLed(), which
+     *                      defers until the device has started rather than racing that packet.
+     *                      The default reproduces the value the driver sent unconditionally before
+     *                      this was configurable.
      */
     Controller(SendPacket sendPacket, uint8_t ledBrightness = 0x14);
     ~Controller();
+
+    /*
+     * Changes the guide button LED. Stores the command, and sends it only once the device has
+     * started - a command sent in Arrival gets no answer, see the auth comment in startDevice() -
+     * so a call that lands early is applied by startDevice() rather than lost.
+     *
+     * Called from the Java battery callback, on this pad's read thread. That is the thread
+     * startDevice() itself sends from in the normal case, so no new cross-thread sender is
+     * introduced; the startThread fallback is the one path that can overlap it, and the atomics
+     * below plus deviceStarted settle that overlap with at worst a harmless double send.
+     *
+     * @param pattern    a LedMode value; anything else is refused, not sent
+     * @param brightness 0 - 0x2F, already clamped by the JNI layer
+     * @return true if the pad took it, or it was stored for startDevice() to send
+     */
+    bool setLed(uint8_t pattern, uint8_t brightness);
 
     /*
      * Takes a global reference to thiz and resolves the callback methods once. Called from the
@@ -538,11 +555,21 @@ private:
     bool audioVolumeKnown = false;
 
     /*
-     * Guide button LED intensity applied at startDevice(), from the user's setting. Const because
-     * it is fixed for the life of this pad: nothing re-sends the LED command, so changing it after
-     * the fact would leave the member and the hardware disagreeing.
+     * The guide button LED command last asked for: applied by startDevice() and re-sent by
+     * setLed(). Atomic rather than const because the Java side rewrites them from the read thread
+     * as the battery moves while startDevice() may be running on startThread's metadata-timeout
+     * path; with seq_cst stores and loads on both sides, whichever of the two sends last sends the
+     * newer state, and a state stored after the other's load is sent by the storer itself.
+     * Declared in this order, which the constructor's initialiser list follows.
      */
-    const uint8_t ledBrightness;
+    std::atomic<uint8_t> ledPattern;
+    std::atomic<uint8_t> ledBrightness;
+
+    /*
+     * Builds and sends the LED command from the two members above. The one place the frame is
+     * built, so startDevice() and setLed() cannot disagree about what a brightness of zero means.
+     */
+    bool applyLed();
 
     /*
      * The level in force, 0 - 100. Starts as a guess and is replaced by the device's own reported
@@ -566,7 +593,11 @@ private:
      */
     std::atomic<uint16_t> audioSoftwareScale{256};
 
-    void notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge);
+    /*
+     * @return whether the Java side was there to take it. False before registerJavaContext(),
+     *         which statusReceived() uses to leave its change filter unarmed - see there.
+     */
+    bool notifyJavaBattery(uint8_t type, uint8_t level, uint8_t charge);
 
     // Last reported status fields, so only changes are forwarded. 0xff is "nothing seen yet",
     // which no GIP value collides with - each of these is two bits wide.

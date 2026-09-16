@@ -37,7 +37,9 @@ namespace
      * The guide button LED intensity the protocol accepts, 0 to 47 (MS-GIPUSB Table 41).
      *
      * Clamped rather than trusted on the way in, as setAudioVolume() clamps its percentage: the
-     * Java mapping cannot currently produce anything outside this, but a jint is a jint.
+     * two Java producers - PreferenceConfiguration.getGuideButtonLedValue() for the presets and
+     * GuideButtonLed.forBattery() for the battery ladder - cannot currently produce anything
+     * outside this, but a jint is a jint.
      */
     constexpr jint LED_BRIGHTNESS_MAX = 0x2F;
 
@@ -103,6 +105,25 @@ namespace
     {
         auto *controller = (Controller *) handle;
         controller->inputRumbleTrigger(left_trigger, right_trigger);
+    }
+
+    /*
+     * The battery ladder's LED command. The pattern is checked against the protocol's enum in
+     * Controller::setLed rather than here - the enum is GipDevice's, and protected - so this only
+     * keeps it inside a byte on the way there. See Controller::setLed for the threading.
+     */
+    jboolean setLedNative(JNIEnv *env, jobject thiz, jlong handle, jint pattern, jint brightness)
+    {
+        if (pattern < 0 || pattern > 0xFF)
+        {
+            Log::error("Refused LED pattern 0x%x: not a byte", pattern);
+
+            return JNI_FALSE;
+        }
+
+        auto *controller = (Controller *) handle;
+        return controller->setLed((uint8_t) pattern, clampLedBrightness(brightness))
+               ? JNI_TRUE : JNI_FALSE;
     }
 
     jboolean setAudioEnabledNative(JNIEnv *env, jobject thiz, jlong handle, jboolean enable)
@@ -248,6 +269,7 @@ namespace
         {"queueAudioNative",        "(J[SI)V",  (void *) queueAudioNative},
         {"sendRumble",              "(JSS)V",   (void *) sendRumble},
         {"sendrumbleTriggers",      "(JSS)V",   (void *) sendrumbleTriggers},
+        {"setLedNative",            "(JII)Z",   (void *) setLedNative},
     };
 
     const JNINativeMethod WIRED_METHODS[] = {
