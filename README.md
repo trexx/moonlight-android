@@ -1,462 +1,214 @@
-# Moonlight Android
-
-Custom build with some PR's merged from the community:
-* Support for the "Microsoft Xbox Wireless Adapter for Windows" (Thanks to [summershrimp](https://github.com/summershrimp)) [(PR)](https://github.com/moonlight-stream/moonlight-android/pull/1415) [(Branch)](https://github.com/summershrimp/moonlight-android/tree/xow-support)
-
-[Moonlight for Android](https://moonlight-stream.org) is an open source client for NVIDIA GameStream and [Sunshine](https://github.com/LizardByte/Sunshine).
-
-Moonlight for Android will allow you to stream your full collection of games from your Windows PC to your Android device,
-whether in your own home or over the internet.
-
-Moonlight also has a [PC client](https://github.com/moonlight-stream/moonlight-qt) and [iOS/tvOS client](https://github.com/moonlight-stream/moonlight-ios).
-
-You can follow development on our [Discord server](https://moonlight-stream.org/discord).
-
-## About this fork
-
-This fork tracks upstream Moonlight but adds native Xbox Wireless Adapter support, an
-in-stream game menu, a Switch Pro motion driver, a modernised build, and a rebuilt crypto
-stack. **It requires Android 11 (API 30) or newer.**
-
-It also carries less than upstream does: GeForce Experience-specific handling, mDNS host
-discovery, the in-app help viewer and several settings have been removed outright. See
-[Removed features](#removed-features) for the full list and what replaces each.
-
-### Xbox Wireless Adapter support
-
-Connect Xbox One and Xbox Series controllers through the official **Xbox Wireless
-Adapter** (the USB dongle) — no Bluetooth pairing, and no root. The adapter is driven
-directly over USB with a native driver ported from
-[medusalix/xow](https://github.com/medusalix/xow), including the MT76 wireless chipset
-driver and the GIP controller protocol, and handles multiple controllers on a single
-adapter.
-
-The driver is vendored from **xow `master` @ `d335d602` (2022-04-24)** with Android
-adaptations — a JNI bridge in place of the Linux `uinput` layer, and embedded MT76
-firmware. Upstream xow is in maintenance mode and has not changed since that commit;
-its suggested successor, [xone](https://github.com/medusalix/xone), is a Linux *kernel*
-module and therefore cannot be used from an Android app, so this fork stays on the
-userspace libusb design. The exact baseline and every local modification are recorded
-in [`app/src/main/jni/xow_driver/UPSTREAM.md`](app/src/main/jni/xow_driver/UPSTREAM.md).
-
-### In-stream game menu
-
-Streaming sessions now have a menu, so things that previously required disconnecting,
-changing a setting and reconnecting can be done in place.
-
-Open it with the **back button** or by **holding Start** on a controller. It offers:
-
-* **Toggle the on-screen keyboard.**
-* **Send special keys** the client would otherwise swallow — ESC, F11, Alt+Enter, Alt+F4,
-  Ctrl+V, Ctrl+Shift+Esc (Task Manager), Win, Win+D, Win+G (Game Bar), Win+Shift+Left, and
-  Shift+Tab (Steam overlay).
-* **Controllers**, holding controller mouse emulation, Xbox wireless pairing and controller
-  headphone audio. The row is absent when none of those applies — a menu opened with the
-  back button on a box with no pad attached has none of them.
-* **Toggle the performance overlay mid-stream.** Previously the overlay was fixed at
-  connection time by a settings checkbox, which meant that diagnosing a stuttering session
-  destroyed the very conditions you were trying to observe.
-* **Disconnect.**
-
-The controller options sit one level down because this menu is shown *during* a stream,
-where every row is something to scroll past on the way to what you opened it for. Submenus
-return to the level above rather than to the stream, on both the Back row and the hardware
-back button.
-
-Two deliberate behaviour changes come with this: **the back button no longer ends the
-stream directly** — Disconnect is now a menu entry — and **holding Start opens the menu**
-instead of toggling mouse emulation, which is now reached from inside it.
-
-The existing "performance overlay" setting is kept and still works; it now sets the
-overlay's *initial* state rather than locking it for the session.
-
-The on-screen keyboard needed two fixes before that menu entry was of any use:
-
-* **It now opens at all.** The IME only shows for a view that is the current IME focus, and
-  `StreamView` only became one when the "Soft keyboard text input" setting was on — which
-  defaults to off, so on a fresh install the menu item silently did nothing. Commit-text is
-  now unconditional and that preference is gone; it never gated the key-event path anyway,
-  so the client always emitted UTF-8 text events regardless of it.
-* **The d-pad drives the keyboard, not the game behind it.** `onKeyPreIme()` intercepted
-  every key and forwarded it to the host, so the IME never saw the navigation meant for it —
-  leaving the keyboard visible but unusable. It now stands aside while the IME is up;
-  anything the IME declines still reaches the host through normal dispatch.
-
-Based on upstream [PR #1219](https://github.com/moonlight-stream/moonlight-android/pull/1219),
-with one correctness fix: that PR's `sendKeys()` sends bare Windows virtual key codes,
-where every other keyboard path in the app sends `(0x80 << 8) | vk`. Sunshine masks the
-high byte off (`src/input.cpp`, `packet->keyCode & 0x00FF`) so the original works in
-practice, but the menu now encodes its packets identically to the physical keyboard path
-rather than relying on the host being lenient.
-
-### Settings organised into screens
-
-Settings was one scrolling list of 37 preferences in six categories, and 13 of them had
-collected in "Advanced Settings" — stream encryption, codec choice, HDR, display-mode
-forcing, the perf overlay, the client ID — because it was where anything without an obvious
-home went. On a remote that put the last row a long d-pad hold from the first.
-
-It is now six screens, each one press from the root: **Video & Display**, **Audio**,
-**Controllers**, **Mouse & Keyboard**, **Host & Connection**, and **Advanced &
-Diagnostics**. The options that had drifted into Advanced moved to where they are actually
-looked for — the codec, HDR and the display-mode toggles to Video, encryption and the client
-ID to Host, "Play audio on PC" to Audio. What remains under Advanced is the two experimental
-codec knobs and the three diagnostics, grouped out of the everyday path but deliberately not
-hidden behind an expert toggle.
-
-No preference key changed, so nothing you have set is lost.
-
-Beyond navigation, the split bounds what each screen costs to open: the decoder capability
-queries and the display mode enumeration ran on every entry to settings and now run only
-when Video & Display is opened.
-
-### One menu style everywhere
-
-The host menu and the app menu on the browse screen were framework context menus. Android
-renders those two different ways — a popup anchored to the press when the gesture carried
-coordinates, a centred dialog when it did not — so which one you got depended on the widget
-under your thumb and on whether you had used the d-pad, a mouse or a touchscreen. The two
-menus on the same screen frequently disagreed, and neither matched the in-stream menu, which
-had already been moved onto rows sized to be read from a sofa rather than held in a hand.
-
-All three now go through one presenter and one row layout. There is nothing left to choose
-between forms, so no input device can produce a different one, and the rows are the same
-size wherever they appear.
-
-Two visible consequences. The "Hide App" row was a checkbox and is now a row that says
-either **Hide App** or **Show App** — a word carries further across a room than a tick, and
-the shared row has no checkbox to draw. And which rows each menu offers is now decided in
-`BrowseMenuLayout`, away from the Android widget, which is the first time that logic has had
-tests.
-
-### Broader controller compatibility
-
-The bundled SDL controller database has been refreshed from Valve/SDL upstream, growing
-from **529 to 613 known devices** — **84 more controllers** are now correctly identified
-rather than falling back to "unknown". Newly recognised hardware includes:
-
-* Steam Deck built-in controls, and the new Valve Steam Controller
-* Nintendo Switch 2 Pro Controller
-* 8BitDo Pro 3 and Ultimate 2 Wireless
-* HORI Wireless HORIPAD for Steam
-* Xbox Elite Series 2 over Bluetooth and BLE
-
-Correct identification matters because the controller type is reported to the host, which
-uses it to pick the right button glyphs and to enable type-specific handling such as
-touchpad and paddle support.
-
-Because SDL adds controllers continuously, a scheduled CI job
-([`scripts/check-sdl-controller-db.py`](scripts/check-sdl-controller-db.py)) tracks how
-far the vendored copy has drifted and flags when a refresh is worth doing. It also
-reports controllers that SDL has *retyped*, which would otherwise silently regress to
-"unknown" during a refresh.
-
-Beyond the database, several controllers now work that previously did not:
-
-* **Switch Pro Controller motion sensors over USB.** Android's built-in `hid-nintendo`
-  driver exposes buttons and sticks but no motion, so a new USB driver claims the
-  controller directly and reports **gyro, accelerometer and rumble** to the host — which
-  is what emulators with motion aiming need. It reads the controller's factory *and* user
-  stick/IMU calibration out of SPI flash, preferring user calibration when present. This
-  is opt-in: because the kernel already claims the pad, it engages only when **both**
-  "Xbox 360/One USB gamepad driver" *and* "Override native Xbox gamepad support" are
-  enabled. With either off, the controller keeps working through the kernel path exactly
-  as before.
-* **8BitDo Xbox-compatible pads** are recognised by the USB driver (vendor `0x2dc8`).
-* **Xbox Series S/X pads** get their initialisation sequence over USB (PIDs `0x0b05`,
-  `0x0b12`, `0x0b13`, plus `0x02fe`), so they start reporting instead of sitting inert.
-* **PowerA Pro (Switch)** is mapped correctly. It reports no VID/PID at all, so it is
-  matched on device name.
-
-### Low latency audio output (experimental)
-
-Some Android TV devices — the Google TV Streamer among them — deny AudioTrack's fast path
-even when it is requested, leaving audio as much as a second behind the video. **Low
-latency audio output** in the audio settings replaces AudioTrack with a native
-[AAudio](https://developer.android.com/ndk/guides/audio/aaudio/aaudio) output stream.
-
-It is **off by default** and degrades safely: it falls back to AudioTrack when a surround
-stream is requested below Android 12L, if the stream fails to open, or if it dies
-mid-session and cannot be recovered. With the setting off, the audio path is unchanged.
-
-The renderer is written specifically for this fork rather than ported from an existing
-implementation. It uses a lock-free single-producer/single-consumer ring buffer — the
-realtime callback touches nothing but `memcpy`/`memset`, with no locks, allocation or
-logging — and passes moonlight-common-c's channel mask straight through to AAudio, whose
-mask layout is bit-identical, so 5.1 and 7.1 keep their centre, LFE and rear channels.
-Route changes are handled by an error callback that reopens the stream off the audio
-thread.
-
-Thanks to [ClassicOldSong/moonlight-android#567](https://github.com/ClassicOldSong/moonlight-android/pull/567)
-for the diagnosis; see also upstream issues
-[#1423](https://github.com/moonlight-stream/moonlight-android/issues/1423),
-[#1238](https://github.com/moonlight-stream/moonlight-android/issues/1238) and
-[#1161](https://github.com/moonlight-stream/moonlight-android/issues/1161).
-
-### Continuous audio (optional)
-
-An idle Sunshine host stops sending audio altogether rather than encoding silence. From here
-that is indistinguishable from a stream that has broken, and it makes the renderer's underrun
-count ambiguous — the ring buffer drains and fills with silence either way.
-
-**Keep the audio stream open during silence** in the audio settings asks the host not to do
-that. It is **off by default**, because it costs roughly 96 Kbps for as long as the host has
-nothing to play — free on a LAN, not free on every link — and because leaving the shipped path
-untouched is the safer default. Sunshine implements it on **Windows** hosts only; the Linux and
-macOS backends parse the request and ignore it.
-
-### Hardware-accelerated AES
-
-Stream crypto now runs on **Mbed TLS 3.6.7 LTS** instead of the OpenSSL 1.1.1 build that
-reached end-of-life in 2023. The practical wins:
-
-* **Hardware AES.** ARMv8 Cryptography Extensions on arm64 and AES-NI on x86 are compiled
-  in and selected at runtime, so AES-GCM and GHASH on the control stream run on dedicated
-  silicon rather than in software.
-* **Much smaller.** The native library shrank from **2.20 MB to 424 KB** on arm64 — an 81%
-  reduction — because only AES-CBC, AES-GCM and a CTR-DRBG are built, instead of a general
-  purpose TLS library.
-* **Maintainable.** Mbed TLS is a git submodule compiled from source, replacing **22 MB of
-  prebuilt static libraries** that were committed to the repository and could not be
-  audited or easily updated. Updating it is now a submodule bump.
-
-HTTPS to the host is untouched by this change — that runs on OkHttp and BouncyCastle on
-the Java side.
-
-The migration did cost one regression, since fixed: Mbed TLS 3.5.0 made an explicit
-`mbedtls_cipher_set_padding_mode()` call mandatory for CBC, and `moonlight-common-c` never
-made it, so every audio packet failed to decrypt — perfect video, no sound. Audio is the
-only user of AES-CBC; video, control and RTSP are AES-GCM and were unaffected, which is why
-the symptom looked like an audio bug rather than a crypto one. It was carried as a patch
-against the submodule until upstream `518b244` rewrote that file onto Mbed TLS's PSA API,
-which asks for `PSA_ALG_CBC_PKCS7` by name and needs no patch to do it.
-
-That rewrite is what the crypto now runs on. It also takes a full-payload `memcpy`/`memmove`
-off the video receive thread once per packet: the legacy path had to shuffle the GCM tag and
-ciphertext around in place, because `mbedtls_cipher_auth_decrypt_ext()` wants the tag after
-the ciphertext and GameStream puts it before, while `psa_aead_verify()` simply takes the tag
-as its own argument. The trimmed config has to enable `MBEDTLS_PSA_CRYPTO_C` and, because PSA
-keeps key slots in globals that each stream thread touches on its own, `MBEDTLS_THREADING_C`.
-
-### Stream encryption is now a setting
-
-The client used to hardcode audio encryption and then silently upgrade to encrypting video
-as well whenever the CPU reported AES acceleration. Neither was visible or configurable, and
-the host cannot override it downwards — `moonlight-common-c`'s SDP generator enables
-encryption if *either* side asks — so a host deliberately configured for no encryption on the
-LAN still got encrypted audio.
-
-**Stream encryption** in Host & Connection settings now makes that choice explicit: **None**, **Audio
-only** (the default, matching upstream's baseline) or **Audio and video**. On a device
-without hardware AES the setting warns that video encryption will run in software, but stays
-selectable. What the client asks for is still only half the negotiation: a host that requires
-encryption gets it regardless.
-
-Behaviour change worth knowing: on hardware with AES acceleration, video used to be encrypted
-automatically and now is not unless asked for.
-
-### Streaming improvements
-
-* **Faster error correction.** `moonlight-common-c` is updated to current upstream, which
-  replaces the old Reed-Solomon implementation with [nanors](https://github.com/sleepybishop/nanors)
-  and its SIMD-accelerated, runtime-dispatched FEC decoding.
-* **More precise frame pacing.** Frame timestamps are now carried end-to-end in
-  microseconds rather than milliseconds, removing the 1 ms quantisation that previously
-  applied to the presentation timestamps handed to the decoder.
-* **Fractional refresh rates actually reach the host.** Sunshine can encode at an exact
-  59.94 Hz when the client tells it the display runs there, and the client has always sent
-  that number — but it was thrown away. Sunshine discards `clientRefreshRateX100` when it
-  differs from the requested rate by more than 1%, and "cap FPS" pacing asked for one frame
-  *below* the display, so 59 against 59.94 was 1.6% out and every session fell back to
-  integer 59. On a fractional display the client now asks for the whole number and lets the
-  exact rate through, and the value it sends is rounded rather than truncated. Whole-number
-  displays are unchanged — there is no exact rate to pass, and staying a frame below 60.000
-  is what cap-FPS pacing is for.
-* **Better diagnostics.** The performance overlay now reports FEC recovery — how many
-  video and audio packets were rebuilt from parity, and how many were unrecoverable —
-  which makes packet loss visible while streaming instead of only showing its symptoms.
-  The full RTP counters are also included in the detailed stats output.
-* **Decryption failures are counted.** `moonlight-common-c` records no counter when a packet
-  fails to decrypt — the paths only log and return — so a stream that decrypts nothing looks
-  exactly like a host sending nothing. Both are now counted and surfaced: unconditionally in
-  the end-of-stream summary, and in the overlay only when non-zero, so the line's *absence*
-  is the healthy signal. That is the surface the silent-audio bug above should have had.
-* **The overlay is built off the decode thread.** Formatting it cost roughly a dozen
-  `String.format` lookups, three JNI stats calls and a `TrafficStats` sample once a second on
-  moonlight-common-c's decode thread — the frame path the overlay exists to measure. The
-  decode thread now takes a snapshot and posts it; the counters themselves stay where they
-  are, being integer accumulation on values already in hand.
-* **No more Amlogic HEVC corruption.** Amlogic decoders advertise low latency support but
-  commonly produce artifacts and decoder hangs when reference frame invalidation is used
-  after packet loss — the Onn 4K Plus and Chromecast 4K are both affected. HEVC RFI is now
-  enabled on Amlogic hardware only where it is confirmed to behave, which keeps the Fire TV
-  Cubes on the fast path without breaking everything else.
-* **Two-second freezes after packet loss are gone on those same boxes.** Turning RFI off is
-  what exposed the bug. The FEC queue *predicts* that a frame is unrecoverable before its last
-  packets have had a chance to arrive, and `moonlight-common-c` dropped the frame state on that
-  prediction. When the frame then arrived complete after all, the depacketizer saw no gap, the
-  flag that requests a keyframe was never armed, and nothing recovered the stream until 120
-  consecutive frames had been dropped — 2 seconds at 60 FPS, 4 at 30. Upstream's fix
-  (`62e0663`, closing [#147](https://github.com/moonlight-stream/moonlight-common-c/pull/147))
-  is to not speculate at all when RFI is off, which also stops throwing away a frame that was
-  about to be recovered; a frame that really is lost still requests a keyframe on the next
-  fully received one, as it always did. This fork carried its own patch for the freeze until
-  that landed.
-* **Intra refresh can be requested** (off by default, under Advanced & Diagnostics). The host encodes a
-  rolling refresh wave instead of periodic keyframes, so recovery is spread over many frames
-  rather than arriving as one bitrate spike and hitch. Sunshine has supported this since
-  December 2024 but no client asked for it; only NVENC honours it, and it can shimmer on static
-  scenes, hence the setting. Carried from upstream
-  [#97](https://github.com/moonlight-stream/moonlight-common-c/pull/97).
-* **Game Mode can no longer take the stream down.** Setting the OS Game Mode hint is purely
-  advisory, but some devices ship a partial `GameManager` — Meta Quest returns null, some
-  OEM builds throw — which crashed the app on connect. It is now best-effort.
-* **The renderer thread can no longer wedge in balanced pacing.** Its eviction path checked
-  the output buffer queue's size and then blocked on `take()`, so the Choreographer thread
-  draining both entries in between left the sole producer waiting on itself — stalling the
-  decoder and turning any concurrent codec recovery into a three-way hang. The queue is now
-  an int ring buffer whose evict-and-insert is a single call, so the window cannot be
-  reopened, and the per-frame `Integer` box goes with it.
-* **`+` types `+`.** Android's `KEYCODE_PLUS` is semantic rather than positional and arrives
-  without a Shift modifier, so it previously typed `=` on the host.
-* **No allocation per controller read.** The USB input loop allocated a packet buffer and a
-  `ByteBuffer` wrapper on every read, at roughly 120 Hz per controller. Both are hoisted out
-  of the loop.
-* **OkHttp 5.x no longer crashes on connect**, and the interrupt its exception translation
-  swallows is logged rather than reported as an offline host.
-* **Optional per-client identity.** Every Moonlight client reports the same hardcoded client ID,
-  which is what lets a session started on one device be quit from another. **Send a unique client
-  ID** in Host & Connection settings reports this install's own ID instead, so a host such as Sunshine can
-  manage each client separately — at the cost of that shared control. Off by default, and the
-  per-install ID is stored either way, so enabling it later does not look like a new client.
-* **A malformed app list no longer crashes the app.** The `applist` parser assumed every text node
-  belonged to an already-open `<App>`, so indentation whitespace before the first entry threw
-  `NoSuchElementException` — which none of the callers catch. It went unnoticed because Sunshine
-  sends the XML unindented, but the same parser reads the on-disk cache, so one bad response would
-  have kept crashing on that host until the cache was cleared.
-
-Backported from upstream: [#1219](https://github.com/moonlight-stream/moonlight-android/pull/1219),
-[#1461](https://github.com/moonlight-stream/moonlight-android/pull/1461),
-[#1478](https://github.com/moonlight-stream/moonlight-android/pull/1478),
-[#1516](https://github.com/moonlight-stream/moonlight-android/pull/1516),
-[#1565](https://github.com/moonlight-stream/moonlight-android/pull/1565),
-[#1582](https://github.com/moonlight-stream/moonlight-android/pull/1582); and from
-ClassicOldSong's Artemis fork,
-[#571](https://github.com/ClassicOldSong/moonlight-android/pull/571).
-
-### Modernised toolchain
-
-| | Upstream base | This fork |
-|---|---|---|
-| Android Gradle Plugin | 8.5.1 | **9.4.0** |
-| Gradle | 8.7 | **9.6.1** |
-| compileSdk | 34 | **37** (Android 17) |
-| minSdk / targetSdk | 21 / 34 | **30 / 34** |
-| NDK | r27 | **r29** |
-| Java bytecode | 11 | **25** |
-| Mbed TLS | — (OpenSSL 1.1.1q) | **3.6.7 LTS** |
-| libusb | 2024 snapshot | **1.0.30** |
-| BouncyCastle | 1.77 | **1.85** |
-| OkHttp | 4.12.0 | **5.4.0** |
-| jMDNS | 3.5.9 | **removed** (see below) |
-
-Raising the minimum to Android 11 also allowed a substantial cleanup: **111 obsolete OS
-version checks** were removed along with the code paths behind them, and the rooted build
-flavour — which only ever applied to Android 7.1 and earlier — is gone. Net effect across
-the branch is roughly **48,000 lines deleted** against 9,000 added, most of the deletions
-being dead compatibility code and committed binaries.
-
-### Removed features
-
-Each of these was removed rather than carried, and each is user-visible:
-
-* **mDNS host discovery.** The jMDNS and `NsdManager` discovery agents are both gone, so PCs
-  are added by address through **Add PC Manually** instead of appearing on their own.
-* **Non-English locales.** Every translation was dropped — the fork is English-only and takes
-  no translations, so lint's `MissingTranslation` check is disabled and upstream's Weblate
-  project does not apply to it.
-* **GeForce Experience-specific handling.** The 4K-capability check, the SOPS resolution
-  workarounds, the >60 FPS launch fudge and the NVIDIA-server detection are gone; the fork
-  targets Sunshine. The launch request was trimmed to match: `additionalStates`,
-  `remoteControllersBitmap`, `gcpersist` and the GFE HDR capability descriptor are all
-  parameters Sunshine has no parser for, so only `hdrMode` survives from that descriptor.
-* **Pen and touchscreen input.** The `LiSendTouchEvent`/`LiSendPenEvent` bindings had no
-  callers — the touchscreen path is mouse emulation, and neither supported device has a
-  touchscreen or accepts a stylus. Controller *touchpad* events are unaffected.
-* **The help button and in-app help viewer.** It opened upstream's wiki in a `WebView`, which
-  meant shipping JavaScript execution in a streaming client for one page of documentation
-  that a diverged fork's configuration no longer matches. It was the only `WebView` in the
-  app, so lint now enforces that with nothing suppressed.
-* **Metered-network handling.** Both the second, lower bitrate that was substituted silently
-  whenever Android called the network metered, and the warning toast that survived it. The
-  supported devices are mains-powered boxes on a fixed LAN.
-* **System equalizer support.** Opting in opened an `AudioEffect` session, and cost latency
-  twice for it: it disqualified the AAudio path outright and skipped both low-latency
-  AudioTrack configurations. Anyone who had it enabled is now eligible for those instead.
-* **The "Soft keyboard text input" setting**, as described under the game menu.
-
-Orphaned preference entries are simply never read again; nothing needs clearing by hand.
-
-## Downloads
-
-These are **upstream Moonlight's** releases, not this fork's — the fork builds with an
-`.unofficial` application ID suffix and is not published to any store. Build it from source,
-or take the signed APK artifact from a [Build workflow](.github/workflows/build.yml) run.
-
-* [Google Play Store](https://play.google.com/store/apps/details?id=com.limelight)
-* [Amazon App Store](https://www.amazon.com/gp/product/B00JK4MFN2)
-* [F-Droid](https://f-droid.org/packages/com.limelight)
-* [APK](https://github.com/moonlight-stream/moonlight-android/releases)
+# Moonlight for Android — trexx fork
+
+A fork of [Moonlight for Android](https://github.com/moonlight-stream/moonlight-android), the
+open-source client for [Sunshine](https://github.com/LizardByte/Sunshine) and NVIDIA GameStream,
+cut down for Android TV boxes and tuned for latency. It runs on any device with **Android 11
+(API 30)** or newer and an **ARM CPU** (`arm64-v8a` or `armeabi-v7a`; there is no x86 build),
+targets Sunshine hosts, and is English-only.
+
+It is not published to any store. Build it from source (below) or take the signed APK from a
+[Build workflow](.github/workflows/build.yml) run. Upstream's own releases are on
+[moonlight-stream.org](https://moonlight-stream.org), with a [Discord](https://moonlight-stream.org/discord).
+
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/browse.webp" alt="Browse screen: navigation rail, host band and app grid" width="100%"></td>
+    <td><img src="docs/screenshots/settings.webp" alt="Settings root: six screens and the build label" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Browse — rail, hosts, apps</sub></td>
+    <td align="center"><sub>Settings — six screens, build in the corner</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/game-menu.webp" alt="In-stream game menu over a running stream" width="100%"></td>
+    <td><img src="docs/screenshots/perf-overlay.webp" alt="Performance overlay with FPS and network latency plots" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>In-stream menu (Back, or hold Start)</sub></td>
+    <td align="center"><sub>Performance overlay, toggled mid-stream</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/special-keys.webp" alt="Send special keys submenu" width="100%"></td>
+    <td><img src="docs/screenshots/controllers.webp" alt="Controllers submenu with Xbox wireless pairing and headphone audio" width="100%"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Special keys the client would otherwise swallow</sub></td>
+    <td align="center"><sub>Controllers — pairing and pad headphone audio</sub></td>
+  </tr>
+</table>
+
+Taken on an Android TV box streaming Steam from Sunshine.
+
+## What this fork changes
+
+### Controllers
+
+* **Xbox Wireless Adapter, natively.** The USB dongle is driven by a GIP driver derived from
+  [medusalix/xow](https://github.com/medusalix/xow) (`d335d602`, see
+  [`UPSTREAM.md`](app/src/main/jni/xow_driver/UPSTREAM.md)) — no Bluetooth, no root, several
+  pads on one adapter. Since the port:
+  * **Audio to the pad's headphone jack**, wirelessly or over a cable (isochronous USB),
+    toggled per pad from the in-stream menu
+  * Both security handshakes, v1 RSA and v2 ECDH
+  * Fragmented-message reassembly
+  * Battery reporting
+  * A guide-LED brightness setting
+* **Switch Pro Controller over USB with motion.** Gyro, accelerometer and rumble reach the
+  host, with factory and user calibration read from the pad's flash. Opt-in: both USB-driver
+  settings must be on, otherwise the kernel driver keeps it.
+* **More pads recognised.** SDL controller database refreshed (529 → 613 devices, tracked by a
+  scheduled CI job), Xbox Series init over USB, 8BitDo Xbox-mode pads, PowerA Pro (Switch)
+  matched by name, Steam controllers reported as their own type.
+
+### Streaming and latency
+
+* Picture data is written straight into the decoder's input buffer; the min-latency pacer
+  stamps frames with SurfaceFlinger's own clock, so stale frames are dropped instead of
+  queued; the output queue is an int ring buffer; ADPF performance hints report the frame's
+  work (API 31 and newer).
+* Per-controller and per-packet allocation, JNI round-trips and logging are off the hot paths,
+  and the overlay is formatted off the decode thread.
+* Frame timestamps in microseconds end-to-end; fractional refresh rates (59.94) actually reach
+  Sunshine; FEC on [nanors](https://github.com/sleepybishop/nanors).
+* HEVC reference-frame invalidation is withheld from Amlogic decoders that corrupt with it;
+  AV1 RFI backs off after a decoder crash.
+* Settings: **stream encryption** (None / Audio only / Audio and video — it used to be
+  silently decided by the CPU), **intra refresh**, and a **per-install client ID** so Sunshine
+  can tell clients apart.
+* Launches retry, pairing is cancellable, and a malformed app list or a broken `GameManager`
+  no longer crashes the app.
+
+### Audio
+
+* **Low-latency AAudio output** (opt-in) for boxes that refuse AudioTrack's fast path — a
+  lock-free ring buffer feeding the realtime callback, surround masks passed straight through,
+  AudioTrack as the fallback.
+* **Continuous audio** (opt-in) keeps a Sunshine host sending during silence, so a quiet stream
+  and a dead one no longer look the same.
+* libopus 1.6.1.
+
+### UI
+
+* **Browse screen rebuilt** on the platform framework: a rail (Add PC, Settings), a host band
+  and one fixed-size app grid, with d-pad focus rings and TV overscan in the layout.
+* **In-stream menu** on Back or a held Start: on-screen keyboard, special keys (Esc, F11,
+  Alt+Enter, Alt+F4, Ctrl+V, Ctrl+Shift+Esc, Win, Win+D, Win+G, Win+Shift+Left, Shift+Tab),
+  controller options, the performance overlay, and Disconnect. **Back no longer ends the
+  stream**, and holding Start no longer toggles mouse emulation — both are in the menu now.
+* **One menu style everywhere.** Host, app and in-stream menus share one presenter and one row
+  size; no input device gets a different form.
+* **Settings in six screens** — Video & Display, Audio, Controllers, Mouse & Keyboard, Host &
+  Connection, Advanced & Diagnostics — with the build's version and commit in the corner.
+* **The on-screen keyboard types keystrokes**, so games see them, with a preview strip that
+  echoes the line being typed and host-side text reconciled against what the IME has.
+
+### Diagnostics
+
+* The overlay reports FEC recovery, decrypt failures (only when non-zero), the worst frame of
+  the window and host processing latency, and plots FPS in/out and network latency against
+  time. It can be toggled mid-stream, and is formatted off the decode thread.
+* Debug builds also keep per-frame latency **percentiles** and emit Perfetto trace spans on the
+  video path; both are compiled out of release.
+* Every stream ends with a summary in the log, not just the ones that crash.
+
+### Under the hood
+
+* **Mbed TLS 3.6.7** on its PSA API replaces OpenSSL 1.1.1 for stream crypto, built from a
+  submodule with only AES-CBC, AES-GCM and CTR-DRBG. Hardware AES is compiled in for both
+  ABIs, including the ARMv8 extensions in the 32-bit build. Native library: 2.2 MB →
+  ~0.4 MB, and 22 MB of prebuilt static libraries left the repository.
+* Toolchain, kept current by Renovate:
+  * AGP 9.4.0, Gradle 9.6.1, Java 26, NDK r29
+  * compileSdk 37, minSdk 30, targetSdk 34
+  * OkHttp 5.5.0, BouncyCastle 1.86, libusb 1.0.30
+* Raising minSdk to 30 removed 111 OS-version checks and the rooted build flavour; the branch is
+  roughly 48,000 lines lighter than upstream.
+* A JVM unit test suite (`./gradlew testDebugUnitTest`) with coverage, run by CI alongside the
+  build; CI also reports APK size and DEX method count against master.
+
+### Removed
+
+Each of these was deleted rather than carried:
+
+* mDNS host discovery — PCs are added by address
+* Translations — the fork is English-only
+* GeForce Experience-specific handling
+* Pen and touchscreen input — controller touchpads still work
+* The in-app help `WebView`
+* The metered-network bitrate
+* The system equalizer
+* Wake-on-LAN and STUN
+* The on-screen virtual controller
+* Picture-in-picture, DeX and multi-window
+* Phone-vibrator rumble and phone-sensor motion
+* The network connection test
+* The "small box art" and "Soft keyboard text input" settings
 
 ## Building
-* Install Android Studio, a JDK 17 or later to run Gradle, and Python 3
-* Run ‘git submodule update --init --recursive’ from within moonlight-android/
-* Build the APK using Android Studio or ‘./gradlew assembleRelease’
 
-The NDK (pinned by ‘ndkVersion’ in app/build.gradle) and the JDK 26 toolchain used to
-compile Java are both downloaded automatically. Python 3 is needed at build time for the
-patch step below, which runs from `preBuild`.
+* Install Android Studio, a JDK 17 or later to run Gradle, and Python 3.
+* `git submodule update --init --recursive`
+* `git fetch --depth=1 origin '+refs/tags/v*:refs/tags/v*'` — `versionName` comes from the
+  highest `v*` tag, and a clone without one fails to configure.
+* `./gradlew assembleRelease` (or Android Studio). The JDK 26 toolchain that compiles Java and
+  the pinned NDK are downloaded automatically.
 
-### Carried patches
+**Carried patches.** Upstream fixes this fork needs but that have not merged are kept as diffs
+under [`patches/`](patches) and applied to the submodule's working tree before `ndk-build` by
+[`scripts/apply-native-patches.py`](scripts/apply-native-patches.py), which runs from
+`preBuild` (hence Python). The submodule pointer never moves, so the parent repo still shows
+exactly which upstream commit is built against. Currently carried against `moonlight-common-c`
+(pinned at `62e0663`):
 
-Upstream fixes this fork depends on that have not merged yet are kept as diffs under
-[`patches/`](patches) and applied to the native submodules' working trees before ndk-build
-runs, rather than by forking a submodule or committing into one. The submodule pointer never
-moves, so the parent repo still shows exactly which upstream commit is built against.
-
-[`scripts/apply-native-patches.py`](scripts/apply-native-patches.py) does this on every
-build. It is idempotent, so an already-patched tree is left alone, and a patch that no longer
-applies is a hard error rather than a warning. The cost is that a patched submodule reports
-as dirty for as long as the patch is carried; `git submodule update --force` resets it and
-the next build re-applies.
-
-Currently carried, all against `moonlight-common-c`: the decrypt-failure counters, atomics
-for `ConnectionInterrupted` and the blocking queue's size, and the opt-in intra refresh
-capability.
-
-A fourth, requesting an IDR frame when the FEC queue reported a loss on a client running
-without reference frame invalidation, was dropped when upstream closed the same bug
-differently in `62e0663` — see *Streaming improvements* above. It is the precedent for how a
-carried patch retires: the submodule pointer moves past the upstream fix, the diff is deleted,
-and nothing of it is kept alongside.
+* Decrypt-failure counters ([`0002`](patches/moonlight-common-c/0002-count-decrypt-failures.patch))
+* Atomics for `ConnectionInterrupted` and the blocking queue's size
+  ([`0004`](patches/moonlight-common-c/0004-atomic-connection-interrupted.patch))
+* The intra-refresh capability ([`0005`](patches/moonlight-common-c/0005-intra-refresh-capability.patch))
 
 ## Testing
 
-The input, audio and decoder changes in this fork need real hardware and a real host to
-verify. [`HARDWARE_TESTING.md`](HARDWARE_TESTING.md) is the checklist — what has been
-verified and on what, what is still outstanding, and a table of the hardware that the
-remaining items need (a Switch Pro pad, an Amlogic box, a device with the AudioTrack
-fast-path bug, and a few others).
+`./gradlew testDebugUnitTest` runs the JVM tests on any machine, without a device or the NDK.
+Everything that touches input, audio or the decoder needs real hardware and a real host;
+[`HARDWARE_TESTING.md`](HARDWARE_TESTING.md) is the checklist of what has been verified, on
+what, and what is still outstanding. [`CLAUDE.md`](CLAUDE.md) holds the engineering rules —
+which paths are hot, what may not be allocated on them, and how to instrument a change.
 
-## Authors
+## Credits
 
-* [Cameron Gutman](https://github.com/cgutman)  
-* [Diego Waxemberg](https://github.com/dwaxemberg)  
-* [Aaron Neyer](https://github.com/Aaronneyer)  
-* [Andrew Hennessy](https://github.com/yetanothername)
+Moonlight is the work of [Cameron Gutman](https://github.com/cgutman),
+[Diego Waxemberg](https://github.com/dwaxemberg), [Aaron Neyer](https://github.com/Aaronneyer)
+and [Andrew Hennessy](https://github.com/yetanothername), students at
+[Case Western](http://case.edu), and was started as a project at [MHacks](http://mhacks.org).
+Moonlight also has a [PC client](https://github.com/moonlight-stream/moonlight-qt) and an
+[iOS/tvOS client](https://github.com/moonlight-stream/moonlight-ios).
 
-Moonlight is the work of students at [Case Western](http://case.edu) and was
-started as a project at [MHacks](http://mhacks.org).
+The Xbox Wireless Adapter driver is derived from [xow](https://github.com/medusalix/xow) by
+medusalix, ported to Android by [Hakusai Zhang](https://github.com/xm1994), and first brought
+to Moonlight by [summershrimp](https://github.com/summershrimp) in
+[moonlight-android#1415](https://github.com/moonlight-stream/moonlight-android/pull/1415)
+([branch](https://github.com/summershrimp/moonlight-android/tree/xow-support)). The GIP
+protocol work draws on [xone](https://github.com/medusalix/xone) and Microsoft's published
+[GIP USB spec](docs/ms-gipusb-spec.pdf).
 
-The Xbox Wireless Adapter driver is derived from [xow](https://github.com/medusalix/xow)
-by medusalix, ported by [Hakusai Zhang](https://github.com/xm1994).
+Backported from upstream Moonlight:
+
+* [moonlight-android#1219](https://github.com/moonlight-stream/moonlight-android/pull/1219) — Allow toggling performance overlay while streaming
+* [moonlight-android#1461](https://github.com/moonlight-stream/moonlight-android/pull/1461) — Add vendor 8BitDo to XboxOneController
+* [moonlight-android#1478](https://github.com/moonlight-stream/moonlight-android/pull/1478) — Add Xbox Series S/X controllers to the Xbox One driver
+* [moonlight-android#1516](https://github.com/moonlight-stream/moonlight-android/pull/1516) — Update UI helper to not fail on Meta Quest devices
+* [moonlight-android#1565](https://github.com/moonlight-stream/moonlight-android/pull/1565) — Disable HEVC RFI on unconfirmed Amlogic decoders
+* [moonlight-android#1582](https://github.com/moonlight-stream/moonlight-android/pull/1582) — Fix missing shift modifier for plus key
+* [moonlight-common-c#97](https://github.com/moonlight-stream/moonlight-common-c/pull/97) — Intra refresh support
+* [moonlight-common-c#147](https://github.com/moonlight-stream/moonlight-common-c/pull/147) — Request an IDR frame when the FEC queue reports a loss without RFI
+
+From ClassicOldSong's Artemis fork:
+
+* [ClassicOldSong#571](https://github.com/ClassicOldSong/moonlight-android/pull/571) — Add PowerA Pro controller support
+* [ClassicOldSong#567](https://github.com/ClassicOldSong/moonlight-android/pull/567) — Native AAudio low-latency renderer, which diagnosed
+  the AudioTrack fast-path problem behind upstream issues
+  [#1423](https://github.com/moonlight-stream/moonlight-android/issues/1423),
+  [#1238](https://github.com/moonlight-stream/moonlight-android/issues/1238) and
+  [#1161](https://github.com/moonlight-stream/moonlight-android/issues/1161) (audio delay on
+  Android TV). This fork's renderer is its own implementation, not a port.
