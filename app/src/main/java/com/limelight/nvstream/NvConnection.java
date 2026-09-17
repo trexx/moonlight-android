@@ -9,8 +9,10 @@ import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.RouteInfo;
 import android.os.Build;
+import android.os.Process;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -227,6 +229,19 @@ public class NvConnection {
     {
         NvHTTP h = new NvHTTP(context.serverAddress, context.httpsPort, uniqueId, context.serverCert, cryptoProvider);
 
+        // The connection-type probe resolves the host and opens a throwaway TCP connection to
+        // each address it gets, with a one-second timeout apiece, so it can cost a second or more
+        // per dead address on a host saved by name. It used to run after the serverinfo request
+        // and before launch, serially. Nothing it needs depends on serverinfo, so it now overlaps
+        // the HTTPS round trips and is joined where its answer is first used.
+        Thread connectionTypeProbe = null;
+        final int[] probedConnectionType = new int[1];
+        if (context.streamConfig.getRemote() == StreamConfiguration.STREAM_CFG_AUTO) {
+            connectionTypeProbe = new Thread(() -> probedConnectionType[0] = detectServerConnectionType(),
+                    "ConnectionTypeProbe");
+            connectionTypeProbe.start();
+        }
+
         String serverInfo = h.getServerInfo(true);
         
         context.serverAppVersion = h.getServerVersion(serverInfo);
@@ -268,8 +283,15 @@ public class NvConnection {
         }
 
         // We will perform some connection type detection if the caller asked for it
-        if (context.streamConfig.getRemote() == StreamConfiguration.STREAM_CFG_AUTO) {
-            context.negotiatedRemoteStreaming = detectServerConnectionType();
+        if (connectionTypeProbe != null) {
+            try {
+                connectionTypeProbe.join();
+            } catch (InterruptedException e) {
+                // The user cancelled; surface it the way an interrupted HTTP call would be
+                Thread.currentThread().interrupt();
+                throw new InterruptedIOException("Interrupted while probing the host's address");
+            }
+            context.negotiatedRemoteStreaming = probedConnectionType[0];
             context.negotiatedPacketSize =
                     context.negotiatedRemoteStreaming == StreamConfiguration.STREAM_CFG_REMOTE ?
                             1024 : context.streamConfig.getMaxPacketSize();
@@ -379,6 +401,22 @@ public class NvConnection {
     {
         new Thread(new Runnable() {
             public void run() {
+                // Every thread moonlight-common-c creates - VideoRecv, AudioRecv, AudioDec, the
+                // control receiver and the input sender - is started from LiStartConnection() on
+                // this thread, and a new pthread inherits its creator's nice value and scheduler
+                // group. This one call is therefore what gives the whole native receive side its
+                // priority. Left at the default, those producers ran eight nice levels below the
+                // renderer thread that consumes from them (THREAD_PRIORITY_URGENT_DISPLAY in
+                // MediaCodecDecoderRenderer), so a busy frame could preempt the thread receiving
+                // the next one. Nothing native sets a priority of its own; PltCreateThread() is a
+                // bare pthread_create().
+                //
+                // DISPLAY (-4) rather than URGENT_DISPLAY (-8): with direct submit the receive
+                // thread also decrypts, runs FEC and queues into the codec, and at -8 it could
+                // starve the codec's own threads on a four-core box. Escalate only if section 28's
+                // percentiles say so. See HARDWARE_TESTING.md section 32.
+                Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
+
                 context.connListener = connectionListener;
                 context.videoCapabilities = videoDecoderRenderer.getCapabilities();
 
