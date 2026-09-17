@@ -2836,6 +2836,124 @@ set; what it cannot check is that nothing on the remote used to rely on the hold
 
 ---
 
+## 32. Latency audit, batch 2
+
+Unlike batch 1 (section 31), every change here alters scheduling, codec configuration or the
+audio output on a device, and none of it can be judged from a JVM. Each item lists the check that
+decides it. **Nothing in this section is verified**; the branch builds and its unit tests pass,
+and that is all.
+
+### Native stream threads at `THREAD_PRIORITY_DISPLAY` — both boxes
+
+`NvConnection.start()` now raises its thread to `DISPLAY` (-4) before `LiStartConnection()`.
+Every thread moonlight-common-c creates inherits that nice value and scheduler group, so
+`VideoRecv`, `AudioRecv`, `AudioDec`, the control receiver and the input sender all move from 0
+to -4. The renderer stays at -8. The pad reader threads (`ProConController`,
+`AbstractXboxController`, both xow read loops) take the same -4.
+
+- [ ] **They actually moved.** `adb shell ps -T -p $(adb shell pidof com.limelight.unofficial)`
+      during a stream: the `NI` column for the native stream threads (their names are what
+      moonlight-common-c gives them: `VideoRecv`, `AudioRecv`, `AudioDec`, `ControlRecv`,
+      `InputSend`) reads `-4`, the renderer's reads `-8`, the main thread's `0`.
+- [ ] **Tail latency, not the mean.** Section 28's percentiles before and after, on the
+      Homatics first — four A55 cores is where a preempted receive thread shows. The claim is
+      p99/max; if only the mean moves, something else changed.
+- [ ] **The decoder did not lose out.** Section 28's decode-start delta must not regress: a
+      receive thread at -4 that also decrypts and runs FEC (direct submit) competes with the
+      codec's own threads. If it does regress, -4 is too high for that box and this reverts to 0
+      rather than trying -8.
+- [ ] **Escalation to -8** only if the above improved and the decoder held: change the
+      constant, repeat both checks.
+
+### ADPF session covers the submit thread and the whole frame — API 31+ boxes
+
+The hint session is now created on the submit thread at the first IDR, covers that thread plus
+the renderer (and the Choreographer thread in balanced pacing), and reports the time from
+`startPicData()` to `releaseOutputBuffer()` rather than the release call alone. Before, it
+covered one thread and reported a few hundred microseconds against a 16.7 ms target: every frame
+told the governor the app was idle.
+
+- [ ] `grep -a "Created ADPF hint session"` in logcat reads `for 2 threads` (3 in balanced
+      pacing), once per stream, shortly after the first `Decoder configuration try`.
+- [ ] **Whether the box honours it at all.** A non-null session is not proof. With the stream
+      running, `adb shell cat /sys/devices/system/cpu/cpufreq/policy*/scaling_cur_freq` sampled
+      a few times, before and after: a governor that listens holds the cores the session names
+      at a steadier frequency. If nothing differs, note it here; the change then costs one
+      volatile write per frame for nothing on that box and is a candidate for removal.
+- [ ] Section 28's percentiles, Homatics.
+- [ ] **Teardown.** Twenty stream stop/start cycles without a crash: the session is now closed
+      on the presenting thread after its last report, which removes a race the old UI-thread
+      close had, so this is the regression check for the fix as much as for the feature.
+
+### `KEY_OPERATING_RATE` at the stream rate — both boxes
+
+Every non-Qualcomm family now sets `operating-rate` to the stream fps alongside
+`KEY_PRIORITY = 0` on the same rung. The framework treats a rate the decoder cannot apply as a
+logged failure, not a configure error, so it should not cost a rung.
+
+- [ ] `Decoder configuration try: 0` still succeeds on both boxes, i.e. no new `try: 1`.
+- [ ] Section 28's percentiles over the first ten seconds of a stream in particular: the point
+      of the key is that the codec picks its clock up front instead of ramping into the stream.
+- [ ] Nothing in logcat from the vendor decoder about the rate. On the Shield look for ACodec's
+      `failed to set operating rate`; harmless, but worth recording which box says it.
+
+### AAudio when AudioTrack is denied the fast path — Homatics, then any box
+
+`AndroidAudioRenderer` now reports whether the platform granted `PERFORMANCE_MODE_LOW_LATENCY`,
+and `LowLatencyAudioRenderer` releases a track that did not get it and opens AAudio instead,
+keeping the deep-buffer track only if AAudio will not open. The AAudio preference still forces
+AAudio first. Section 3 measured the two paths; this makes its finding the rule.
+
+- [ ] **Homatics:** `grep -a "Audio track configuration"` shows `performance mode 0` (NONE)
+      and the granted frame count, followed by `AudioTrack was denied the fast path; trying
+      AAudio` and `Using native AAudio renderer`. Audio latency should be section 3's 22.6 ms
+      class, not its 169.6 ms.
+- [ ] **Shield:** the same line shows `performance mode 1` (LOW_LATENCY) and no AAudio line
+      follows. Behaviour unchanged.
+- [ ] Section 3's stress and sync checks on whichever box switched, plus pad audio (section 10)
+      returning from a pad to the TV, since that path reopens the local renderer through the
+      same choice.
+
+### Address probe concurrent with serverinfo — both boxes
+
+`detectServerConnectionType()` runs on its own thread from the top of `startApp()` and is joined
+where its answer is first used, instead of after the serverinfo round trip.
+
+- [ ] Tap-to-first-frame with a host saved by hostname: the gap between `stageStarting` and the
+      first `Decoder configuration try` in logcat, before and after. The saving is the probe's
+      own duration, which on a host with one live address is one DNS lookup and one TCP connect.
+- [ ] The negotiated packet size is unchanged: `1392` on the LAN, `1024` over a VPN or
+      cellular. It is derived from the probe's answer, which is the one thing that must not be
+      wrong.
+
+### HTTP connection reuse — Sunshine and GFE hosts
+
+`NvHTTP` keeps one idle connection for three seconds instead of none. serverinfo followed by
+launch, and each 1.5 s poll, now reuse a TLS connection instead of opening one.
+
+- [ ] **Launch never doubles.** Against each host type: start a stream, quit, start again, ten
+      times. No `Failed to launch`/already-running error that was not there before, and no
+      session that starts twice on the host.
+- [ ] `openssl s_client` is not needed; the proof is in timing. Section 31's tap-to-first-frame
+      measurement, before and after, with the TLS-context change already in.
+- [ ] A host that goes to sleep mid-poll and comes back does not leave the browse screen stuck
+      on a stale connection: pooled connections are checked for a closed socket before reuse and
+      a failed GET is retried on a fresh one, so the symptom would be one missed poll, not a
+      hang.
+
+### Granted `SO_RCVBUF` — both boxes, measurement only
+
+`VideoStream.c` asks for about 2.9 MB of receive buffer; Linux clamps to `rmem_max` silently,
+so the request always "succeeds" and the real depth is unknown. The readback is compiled in
+debug builds only (`LC_DEBUG`).
+
+- [ ] Debug build, both boxes: `grep -a -i "rcvbuf\|receive buffer"` in logcat at stream start
+      and record the granted size here alongside `adb shell cat /proc/sys/net/core/rmem_max`.
+      If it is around 200 KB, a 4K IDR frame (about 150 packets) overflows it, which is an
+      invisible loss source and makes the priority change above matter more.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2874,3 +2992,7 @@ set; what it cannot check is that nothing on the remote used to rely on the hold
 | §31 decoder ladder | Both boxes; the Homatics for the vendor-key latency run, the Shield for whether `omx.nvidia` advertises `FEATURE_LowLatency` |
 | §31 `-O2` | The Homatics; the Shield's arm64 build was already at `-O2` |
 | §31 key-up gate | The Shield with its bundled remote |
+| §32 priorities, ADPF, operating rate | Both boxes; the Homatics for the percentile runs, and it is the only API 31+ box for ADPF |
+| §32 audio fallback | The Homatics, which is the box denied the fast path; the Shield for the no-change check |
+| §32 connection reuse | A Sunshine host and a GFE host |
+| §32 `SO_RCVBUF` | Both boxes, debug build |
