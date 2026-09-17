@@ -194,8 +194,16 @@ public class NvHTTP {
             throw new RuntimeException(e);
         }
 
+        // Pooling used to be disabled outright (0 idle connections), so serverinfo followed by
+        // launch was two TCP connects and two mutual-TLS handshakes, each with an RSA client
+        // signature, on the path to first frame; the 1.5 s host poll paid the same. Three seconds
+        // of keep-alive covers both and stays inside the idle timeout Sunshine's HTTP server
+        // applies, so a pooled connection is not normally found dead on reuse. When it is, OkHttp
+        // detects a closed socket before sending and otherwise retries the GET on a fresh
+        // connection, which is why this is a short window rather than OkHttp's five-minute
+        // default. Verified against both host types before merge: HARDWARE_TESTING.md section 32.
         httpClientLongConnectTimeout = new OkHttpClient.Builder()
-                .connectionPool(new ConnectionPool(0, 1, TimeUnit.MILLISECONDS))
+                .connectionPool(new ConnectionPool(1, 3, TimeUnit.SECONDS))
                 .sslSocketFactory(sslContext.getSocketFactory(), trustManager)
                 .hostnameVerifier(hv)
                 .readTimeout(READ_TIMEOUT, TimeUnit.MILLISECONDS)
