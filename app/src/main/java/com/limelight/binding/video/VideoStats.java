@@ -74,6 +74,12 @@ class VideoStats {
     // the released count by the frames still in flight; the session total is the number to trust.
     int totalFramesPresented;
 
+    // Largest decode unit handed to the codec, in bytes. Read against the input buffer capacity
+    // in the end-of-stream summary, it says how much headroom a stream has before a unit fails
+    // to fit - which today ends the stream with a report, and which nothing else measures.
+    // Kept in release: one compare per unit against a length already in hand.
+    int largestDecodeUnit;
+
     long measurementStartTimestamp;
 
     /**
@@ -110,6 +116,7 @@ class VideoStats {
         this.presentationGapCount += other.presentationGapCount;
         this.worstPresentationGapNanos = Math.max(this.worstPresentationGapNanos, other.worstPresentationGapNanos);
         this.totalFramesPresented += other.totalFramesPresented;
+        this.largestDecodeUnit = Math.max(this.largestDecodeUnit, other.largestDecodeUnit);
 
         // Keeps the earlier of the two starts, so a summed window still spans from when the
         // oldest of its parts opened. Callers add in chronological order.
@@ -136,6 +143,7 @@ class VideoStats {
         this.presentationGapCount = other.presentationGapCount;
         this.worstPresentationGapNanos = other.worstPresentationGapNanos;
         this.totalFramesPresented = other.totalFramesPresented;
+        this.largestDecodeUnit = other.largestDecodeUnit;
         this.measurementStartTimestamp = other.measurementStartTimestamp;
     }
 
@@ -157,6 +165,7 @@ class VideoStats {
         this.presentationGapCount = 0;
         this.worstPresentationGapNanos = 0;
         this.totalFramesPresented = 0;
+        this.largestDecodeUnit = 0;
         this.measurementStartTimestamp = 0;
     }
 

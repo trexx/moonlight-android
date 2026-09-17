@@ -217,6 +217,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private int numPpsIn;
     private int numVpsIn;
     private int numFramesIn;
+    // Capacity of the codec's input buffers as last seen by fetchNextInputBuffer(); summary only
+    private int inputBufferCapacity;
     private int numFramesOut;
 
     // Debug-only accounting for the copy-free picture data path, reported by buildStreamSummary().
@@ -1950,6 +1952,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     // happen but if it does, let's try to get a new input buffer next time.
                     nextInputBufferIndex = -1;
                 }
+                else {
+                    // A plain store per fetch, for the summary; the codec sizes its buffers and
+                    // nothing else records the number. See VideoStats.largestDecodeUnit.
+                    inputBufferCapacity = nextInputBuffer.capacity();
+                }
             }
         } catch (IllegalStateException e) {
             handleDecoderException(e);
@@ -2688,6 +2695,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         updateFrameCounters(frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs);
 
+        // One compare against a length already in hand; see VideoStats.largestDecodeUnit
+        if (decodeUnitLength > activeWindowVideoStats.largestDecodeUnit) {
+            activeWindowVideoStats.largestDecodeUnit = decodeUnitLength;
+        }
+
         if (!prepareInputBufferForData(decodeUnitLength, frameType, enqueueTimeUs, csdSubmittedForThisFrame)) {
             return null;
         }
@@ -3363,6 +3375,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         str += "Total frames received: "+renderer.globalVideoStats.totalFramesReceived+DELIMITER;
         str += "Total frames rendered: "+renderer.globalVideoStats.totalFramesRendered+DELIMITER;
         str += "Frame losses: "+renderer.globalVideoStats.framesLost+" in "+renderer.globalVideoStats.frameLossEvents+" loss events"+DELIMITER;
+        str += "Largest decode unit: "+renderer.globalVideoStats.largestDecodeUnit+" bytes; input buffer capacity: "+renderer.inputBufferCapacity+" bytes"+DELIMITER;
         long[] videoRtp = MoonBridge.getRTPVideoStats();
         long[] audioRtp = MoonBridge.getRTPAudioStats();
         if (videoRtp != null) {

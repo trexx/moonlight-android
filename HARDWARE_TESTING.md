@@ -2771,6 +2771,43 @@ it would say whether "never drop" was ever more than an accident of the PTS base
 
 ---
 
+## 31. Input buffer capacity and the largest decode unit
+
+`prepareInputBufferForData()` ends the stream with a crash report when a decode unit does not fit
+the codec's input buffer, and nothing sets `KEY_MAX_INPUT_SIZE`. Whether that margin is
+comfortable or one large IDR away from a crash was unknown, because neither the capacity the
+codec allocates nor the largest unit a stream produces was recorded. The end-of-stream summary
+now carries both:
+
+```
+Largest decode unit: N bytes; input buffer capacity: M bytes
+```
+
+The largest unit is a `VideoStats` maximum (one compare per unit on the submit thread, against a
+length already in hand); the capacity is what `fetchNextInputBuffer()` last saw. Measurement
+only: nothing is sized from it yet.
+
+### Both boxes
+
+- [ ] 4K at the highest bitrate in use, HEVC and H.264 each, with a few scene cuts to force
+      large IDRs, for at least a minute. Record both numbers per box and codec here.
+- [ ] The same at the 1080p setting a Homatics user would pick, since the codec may size its
+      buffers from the configured resolution.
+
+### What the numbers decide
+
+- Largest unit well under capacity everywhere: nothing to do; the exception stays, because it
+  is a report of a decoder that cannot take this stream rather than a bug to hide.
+- A box within a factor of two: set `KEY_MAX_INPUT_SIZE` for that decoder family from the
+  measurement, not from resolution - a guessed value can shrink a buffer as easily as grow it.
+- A unit that still cannot fit: `BUFFER_FLAG_PARTIAL_FRAME` on decoders advertising
+  `FEATURE_PartialFrame`, which lets one access unit span several input buffers. Its own change,
+  because it touches the copy-free path in `callbacks.c`.
+- Never: turning the exception into `DR_NEED_IDR`. The next IDR would not fit either, so that
+  converts a crash with a report into a silent freeze.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2806,3 +2843,4 @@ it would say whether "never drop" was ever more than an accident of the PTS base
 | §23 Controllers screen | A device with no USB host support, or a build run with the feature absent, for the dependency-crash path |
 | §25 | The Homatics on a 1080p60 display, streaming H.264 — the Shield keeps RFI and never runs the patch |
 | §28 batches | Both batches re-run back to back, to separate HDR from a display renegotiation |
+| §31 | Both boxes, 4K at the highest bitrate in use, HEVC and H.264 |

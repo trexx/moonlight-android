@@ -36,6 +36,7 @@ class VideoStatsTest {
         stats.presentationGapCount = 4;
         stats.worstPresentationGapNanos = 51000000;
         stats.totalFramesPresented = 55;
+        stats.largestDecodeUnit = 120000;
         stats.measurementStartTimestamp = 1000;
         return stats;
     }
@@ -123,6 +124,7 @@ class VideoStatsTest {
             other.worstRecvToEnqueueUs = 9000;
             other.worstDecoderTimeUs = 100;
             other.worstPresentationGapNanos = 90000000;
+            other.largestDecodeUnit = 300000;
 
             target.add(other);
 
@@ -130,6 +132,7 @@ class VideoStatsTest {
             // The lower incoming value must not pull the running worst down
             assertEquals(7300, target.worstDecoderTimeUs);
             assertEquals(90000000, target.worstPresentationGapNanos);
+            assertEquals(300000, target.largestDecodeUnit);
         }
 
         @Test
@@ -156,6 +159,7 @@ class VideoStatsTest {
             assertEquals(4200, target.worstRecvToEnqueueUs);
             assertEquals(7300, target.worstDecoderTimeUs);
             assertEquals(51000000, target.worstPresentationGapNanos);
+            assertEquals(120000, target.largestDecodeUnit);
         }
 
         @Test
@@ -228,6 +232,7 @@ class VideoStatsTest {
             assertEquals(source.presentationGapCount, target.presentationGapCount);
             assertEquals(source.worstPresentationGapNanos, target.worstPresentationGapNanos);
             assertEquals(source.totalFramesPresented, target.totalFramesPresented);
+            assertEquals(source.largestDecodeUnit, target.largestDecodeUnit);
             // copy() takes the timestamp verbatim where add() would have kept the earlier one
             assertEquals(source.measurementStartTimestamp, target.measurementStartTimestamp);
         }
@@ -286,6 +291,7 @@ class VideoStatsTest {
             assertEquals(0, stats.presentationGapCount);
             assertEquals(0, stats.worstPresentationGapNanos);
             assertEquals(0, stats.totalFramesPresented);
+            assertEquals(0, stats.largestDecodeUnit);
             assertEquals(0, stats.measurementStartTimestamp);
         }
 
