@@ -82,9 +82,8 @@ import android.view.SurfaceHolder;
  */
 public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements Choreographer.FrameCallback {
 
-    // Debug switches for measuring decoder latency via onFrameRendered() instead of estimating it
+    // Debug switch for measuring decoder latency via onFrameRendered() instead of estimating it
     private static final boolean USE_FRAME_RENDER_TIME = false;
-    private static final boolean FRAME_RENDER_TIME_ONLY = USE_FRAME_RENDER_TIME && false;
 
     // Decoder chosen for each codec at construction time, or null if there's no usable one
     private MediaCodecInfo avcDecoder;
@@ -110,9 +109,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private Thread rendererThread;
 
     // Device quirks resolved from MediaCodecHelper; see the corresponding methods there
-    private boolean needsSpsBitstreamFixup;
     private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
-    private boolean constrainedHighProfile;
     private boolean refFrameInvalidationAvc, refFrameInvalidationHevc, refFrameInvalidationAv1;
     private byte optimalSlicesPerFrame;
     private boolean refFrameInvalidationActive;
@@ -157,9 +154,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private MediaFormat inputFormat;
     private MediaFormat outputFormat;
     private MediaFormat configuredFormat;
-
-    private boolean needsBaselineSpsHack;
-    private SeqParameterSet savedSps;
 
     // First exception seen, held back briefly in case a more informative one follows: the initial
     // failure is often a generic IllegalStateException while the real cause surfaces moments later
@@ -591,13 +585,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     /** @return the colorspace to ask the host to encode in, as a {@code MoonBridge.COLORSPACE_*} */
     public int getPreferredColorSpace() {
-        // Default to Rec 709 which is probably better supported on modern devices.
-        //
-        // We are sticking to Rec 601 on older devices unless the device has an HEVC decoder
-        // to avoid possible regressions (and they are < 5% of installed devices). If we have
-        // an HEVC decoder, we will use Rec 709 (even for H.264) since we can't choose a
-        // colorspace by codec (and it's probably safe to say a SoC with HEVC decoding is
-        // plenty modern enough to handle H.264 VUI colorspace info).
+        // Rec 709, unconditionally. Upstream keeps Rec 601 for devices without an HEVC decoder
+        // as a regression guard for old SoCs; nothing this app runs on is old enough to need it,
+        // and createBaseMediaFormat() relies on this answer never changing.
         return MoonBridge.COLORSPACE_REC_709;
     }
 
@@ -649,17 +639,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         if ((getActiveVideoFormat() & MoonBridge.VIDEO_FORMAT_MASK_10BIT) == 0) {
             // Set color format keys when not in HDR mode, since we know they won't change
             videoFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER, MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
-            switch (getPreferredColorSpace()) {
-                case MoonBridge.COLORSPACE_REC_601:
-                    videoFormat.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT601_NTSC);
-                    break;
-                case MoonBridge.COLORSPACE_REC_709:
-                    videoFormat.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709);
-                    break;
-                case MoonBridge.COLORSPACE_REC_2020:
-                    videoFormat.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT2020);
-                    break;
-            }
+            // The host encodes in what getPreferredColorSpace() asked for, which is always 709
+            videoFormat.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT709);
         }
 
         return videoFormat;
@@ -786,20 +767,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             if (initialWidth > 4096 || initialHeight > 4096) {
                 LimeLog.severe("> 4K streaming only supported on HEVC");
                 return -1;
-            }
-
-            // These fixups only apply to H264 decoders
-            needsSpsBitstreamFixup = MediaCodecHelper.decoderNeedsSpsBitstreamRestrictions(selectedDecoderInfo.getName());
-            needsBaselineSpsHack = MediaCodecHelper.decoderNeedsBaselineSpsHack(selectedDecoderInfo.getName());
-            constrainedHighProfile = MediaCodecHelper.decoderNeedsConstrainedHighProfile(selectedDecoderInfo.getName());
-            if (needsSpsBitstreamFixup) {
-                LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" needs SPS bitstream restrictions fixup");
-            }
-            if (needsBaselineSpsHack) {
-                LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" needs baseline SPS hack");
-            }
-            if (constrainedHighProfile) {
-                LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" needs constrained high profile");
             }
 
             refFrameInvalidationActive = refFrameInvalidationAvc;
@@ -1656,10 +1623,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         rendererThread.start();
     }
 
-    // Whether the performance overlay is on screen, refreshed on the stats tick below. Read from
-    // the frame paths, written from the decode thread, hence volatile.
-    private volatile boolean perfMetricsEnabled;
-
     // The overlay's time-series plots. Every other figure on the overlay is a number with no time
     // axis, so a step change, a spike and a slow drift read identically; these carry the axis.
     //
@@ -1737,7 +1700,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     // operations are a bounded walk over a fixed array, which costs less than the map lookup the
     // obvious implementation would need.
     //
-    // Gated on BuildConfig.DEBUG alone, deliberately, and not additionally on perfMetricsEnabled.
+    // Gated on BuildConfig.DEBUG alone, deliberately, and not additionally on overlay visibility.
     // These feed the end-of-stream percentiles, and CLAUDE.md says to benchmark from that summary
     // rather than from the overlay precisely so the overlay's own cost is not attributed to the
     // change being measured. Requiring the overlay to be up in order to collect them made that
@@ -2222,27 +2185,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     }
 
     /**
-     * Rewrites the SPS constraint flags to advertise Constrained High Profile where that helps.
+     * Clears the SPS constraint flags that would advertise Constrained High Profile.
      *
      * <p>Telling the decoder there will be no B-frames lets it stop buffering for reordering,
-     * which is worth a frame or two of latency — but only on decoders confirmed to handle it, so
-     * the flags are explicitly cleared everywhere else rather than left at their defaults.
+     * which is worth a frame or two of latency on a decoder confirmed to handle it. Upstream
+     * only ever confirmed Intel's, which is x86 and not built here, and some decoders reject the
+     * flags outright, so they are explicitly cleared rather than left at whatever the encoder
+     * set. Re-adding a decoder means a per-prefix quirk in MediaCodecHelper and a device to
+     * measure the frame or two on.
      */
     private void doProfileSpecificSpsPatching(SeqParameterSet sps) {
-        // Some devices benefit from setting constraint flags 4 & 5 to make this Constrained
-        // High Profile which allows the decoder to assume there will be no B-frames and
-        // reduce delay and buffering accordingly. Some devices (Marvell, Exynos 4) don't
-        // like it so we only set them on devices that are confirmed to benefit from it.
-        if (sps.profileIdc == 100 && constrainedHighProfile) {
-            LimeLog.info("Setting constraint set flags for constrained high profile");
-            sps.constraintSet4Flag = true;
-            sps.constraintSet5Flag = true;
-        }
-        else {
-            // Force the constraints unset otherwise (some may be set by default)
-            sps.constraintSet4Flag = false;
-            sps.constraintSet5Flag = false;
-        }
+        sps.constraintSet4Flag = false;
+        sps.constraintSet5Flag = false;
     }
 
     /**
@@ -2252,10 +2206,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * responsible for stats, parameter-set handling, the per-device bitstream fixups, and getting
      * the data into the codec.
      *
-     * <p>Parameter sets get special treatment. They are cached so they can be replayed after a
-     * codec restart, and on decoders with known quirks the SPS is parsed, patched and re-emitted
-     * — bitstream restrictions that some decoders need, and the baseline-profile hack for
-     * decoders that reject High profile at configuration time.
+     * <p>Only parameter sets arrive here: picture data takes the copy-free path through
+     * {@link #startPicData} and {@link #submitPicData}. They are cached so they can be replayed
+     * after a codec restart, and the H.264 SPS is parsed, patched and re-emitted — level,
+     * reference frame count and bitstream restrictions, all of which cut decoder-side buffering.
      *
      * @return {@code MoonBridge.DR_OK}, or {@code DR_NEED_IDR} to ask the host for a fresh IDR
      *         frame when the decoder has lost its state
@@ -2272,9 +2226,8 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         updateFrameTracking(frameNumber, frameType);
 
-        boolean csdSubmittedForThisFrame = false;
-
-        // IDR frames require special handling for CSD buffer submission
+        // moonlight-common-c marks any decode unit whose chain begins with a parameter set as an
+        // IDR frame, so for everything this method is handed the check holds
         if (frameType == MoonBridge.FRAME_TYPE_IDR) {
             // H264 SPS
             if (decodeUnitType == MoonBridge.BUFFER_TYPE_SPS && (videoFormat & MoonBridge.VIDEO_FORMAT_MASK_H264) != 0) {
@@ -2329,10 +2282,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     sps.numRefFrames = 1;
                 }
 
-                // Some older devices used to choke on a bitstream restrictions, so we won't provide them
-                // unless explicitly whitelisted. For newer devices, leave the bitstream restrictions present.
-                // The SPS that comes in the current H264 bytestream doesn't set bitstream_restriction_flag
-                // or max_dec_frame_buffering which increases decoding latency on Tegra.
+                // Bitstream restrictions are added or patched on every decoder. Upstream gated this
+                // on a whitelist because some long-gone devices choked on them; here the whitelist
+                // had become decorative, since the code below ran regardless. The SPS in the H264
+                // bytestream doesn't set bitstream_restriction_flag or max_dec_frame_buffering,
+                // which increases decoding latency on Tegra.
 
                 // If the encoder didn't include VUI parameters in the SPS, add them now
                 if (sps.vuiParams == null) {
@@ -2360,13 +2314,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                 // log2_max_mv_length_horizontal and log2_max_mv_length_vertical are set to more
                 // conservative values by GFE 2.5.11. We'll let those values stand.
-
-                // If we need to hack this SPS to say we're baseline, do so now
-                if (needsBaselineSpsHack) {
-                    LimeLog.info("Hacking SPS to baseline");
-                    sps.profileIdc = 66;
-                    savedSps = sps;
-                }
 
                 // Patch the SPS constraint flags
                 doProfileSpecificSpsPatching(sps);
@@ -2412,29 +2359,13 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 ppsBuffers.add(naluBuffer);
                 return MoonBridge.DR_OK;
             }
-            else {
-                int csdResult = submitCsdBeforePicData();
-                if (csdResult == CSD_FAILED) {
-                    return MoonBridge.DR_NEED_IDR;
-                }
-                csdSubmittedForThisFrame = (csdResult == CSD_SUBMITTED);
-            }
         }
 
-        updateFrameCounters(frameHostProcessingLatency, receiveTimeUs, enqueueTimeUs);
-
-        if (!prepareInputBufferForData(decodeUnitLength, frameType, enqueueTimeUs, csdSubmittedForThisFrame)) {
-            return MoonBridge.DR_NEED_IDR;
-        }
-
-        // Copy data from our buffer list into the input buffer
-        nextInputBuffer.put(decodeUnitData, 0, decodeUnitLength);
-
-        if (!queueNextInputBuffer(pendingTimestampUs, pendingCodecFlags)) {
-            return MoonBridge.DR_NEED_IDR;
-        }
-
-        return MoonBridge.DR_OK;
+        // Picture data used to fall through to here and be copied in, before the copy-free path
+        // took it over; callbacks.c now only calls this for parameter sets. Reaching this line
+        // means the two sides disagree about what was sent, so ask for a fresh IDR rather than
+        // queue a buffer whose contents are unknown.
+        return MoonBridge.DR_NEED_IDR;
     }
 
     /**
@@ -2497,13 +2428,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // microseconds apart.
         final long nowUptimeMs = SystemClock.uptimeMillis();
         if (nowUptimeMs >= activeWindow.measurementStartTimestamp + 1000) {
-            // Cache the overlay's visibility for the per-frame paths. They need it 60 times a
-            // second and this is the only place already asking, so they read a field rather than
-            // making an interface call. Visibility rather than the preference: the game menu's
+            // Asked once per window, here, and nowhere on the per-frame paths: those are gated on
+            // BuildConfig.DEBUG alone. Visibility rather than the preference: the game menu's
             // toggle flips it mid-stream without touching prefConfig.
-            perfMetricsEnabled = perfListener.isPerfOverlayVisible();
-
-            if (perfMetricsEnabled) {
+            if (perfListener.isPerfOverlayVisible()) {
                 // Snapshot here, format on the main thread. This runs on the decode thread, and
                 // building the text meant a dozen resource lookups, three JNI stats calls, a
                 // TrafficStats sample and a StringBuilder on the frame path once a second.
@@ -2564,22 +2492,20 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         activeWindow.totalFramesReceived++;
         activeWindow.totalFrames++;
 
-        if (!FRAME_RENDER_TIME_ONLY) {
-            // Count time from first packet received to enqueue time as receive time
-            // We will count DU queue time as part of decoding, because it is directly
-            // caused by a slow decoder.
-            long recvToEnqueueUs = enqueueTimeUs - receiveTimeUs;
-            activeWindow.totalTimeMs += recvToEnqueueUs / 1000;
+        // Count time from first packet received to enqueue time as receive time
+        // We will count DU queue time as part of decoding, because it is directly
+        // caused by a slow decoder.
+        long recvToEnqueueUs = enqueueTimeUs - receiveTimeUs;
+        activeWindow.totalTimeMs += recvToEnqueueUs / 1000;
 
-            // Kept in release, unlike the rest of the instrumentation here, because it is a
-            // compare against a value the line above already computed - no clock read, no
-            // allocation, one predictable not-taken branch per decode unit. The mean beside it
-            // cannot show a hitch: a single 200 ms frame moves a sixty-frame average by 3 ms and
-            // then vanishes when the window rolls. Without this the release overlay cannot answer
-            // the one question it gets opened for.
-            if (recvToEnqueueUs > activeWindow.worstRecvToEnqueueUs) {
-                activeWindow.worstRecvToEnqueueUs = recvToEnqueueUs;
-            }
+        // Kept in release, unlike the rest of the instrumentation here, because it is a
+        // compare against a value the line above already computed - no clock read, no
+        // allocation, one predictable not-taken branch per decode unit. The mean beside it
+        // cannot show a hitch: a single 200 ms frame moves a sixty-frame average by 3 ms and
+        // then vanishes when the window rolls. Without this the release overlay cannot answer
+        // the one question it gets opened for.
+        if (recvToEnqueueUs > activeWindow.worstRecvToEnqueueUs) {
+            activeWindow.worstRecvToEnqueueUs = recvToEnqueueUs;
         }
 
         if (BuildConfig.DEBUG) {
@@ -2641,16 +2567,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         // Remember that we submitted CSD globally for this MediaCodec instance
         submittedCsd = true;
-
-        if (needsBaselineSpsHack) {
-            needsBaselineSpsHack = false;
-
-            if (!replaySps()) {
-                return CSD_FAILED;
-            }
-
-            LimeLog.info("SPS replay complete");
-        }
 
         return CSD_SUBMITTED;
     }
@@ -3050,41 +2966,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         }
 
         return sb.toString();
-    }
-
-    /**
-     * Re-submits the saved SPS with High profile restored, completing the baseline SPS hack.
-     *
-     * <p>Some decoders reject a High profile SPS at configuration time but accept it once
-     * running, so configuration is done with a doctored baseline SPS and the real one is replayed
-     * here immediately afterwards.
-     *
-     * @return true if the patched SPS was queued
-     */
-    private boolean replaySps() {
-        if (!fetchNextInputBuffer()) {
-            return false;
-        }
-
-        // Write the Annex B header
-        nextInputBuffer.put(new byte[]{0x00, 0x00, 0x00, 0x01, 0x67});
-
-        // Switch the H264 profile back to high
-        savedSps.profileIdc = 100;
-
-        // Patch the SPS constraint flags
-        doProfileSpecificSpsPatching(savedSps);
-
-        // The H264Utils.writeSPS function safely handles
-        // Annex B NALUs (including NALUs with escape sequences)
-        ByteBuffer escapedNalu = H264Utils.writeSPS(savedSps, 128);
-        nextInputBuffer.put(escapedNalu);
-
-        // No need for the SPS anymore
-        savedSps = null;
-
-        // Queue the new SPS
-        return queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG);
     }
 
     /**

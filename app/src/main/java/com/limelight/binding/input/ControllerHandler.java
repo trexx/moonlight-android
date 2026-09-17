@@ -77,10 +77,6 @@ import java.util.Map;
  */
 public class ControllerHandler implements InputManager.InputDeviceListener, UsbDriverListener {
 
-    // How long after one bumper is released to still treat the other's release as simultaneous,
-    // when detecting the bumper combination
-    private static final int MAXIMUM_BUMPER_UP_DELAY_MS = 100;
-
     // Hold Start this long to toggle mouse emulation mode
     private static final int START_DOWN_TIME_MOUSE_MODE_MS = 750;
 
@@ -2537,11 +2533,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             break;
         case KeyEvent.KEYCODE_BUTTON_L1:
             context.inputMap &= ~ControllerPacket.LB_FLAG;
-            context.lastLbUpTime = event.getEventTime();
             break;
         case KeyEvent.KEYCODE_BUTTON_R1:
             context.inputMap &= ~ControllerPacket.RB_FLAG;
-            context.lastRbUpTime = event.getEventTime();
             break;
         case KeyEvent.KEYCODE_BUTTON_THUMBL:
             context.inputMap &= ~ControllerPacket.LS_CLK_FLAG;
@@ -2825,9 +2819,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         // Start+LB acts like select for controllers with one button
         if (!context.hasSelect) {
-            if (context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.LB_FLAG) ||
-                    (context.inputMap == ControllerPacket.PLAY_FLAG &&
-                            event.getEventTime() - context.lastLbUpTime <= MAXIMUM_BUMPER_UP_DELAY_MS))
+            if (context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.LB_FLAG))
             {
                 context.inputMap &= ~(ControllerPacket.PLAY_FLAG | ControllerPacket.LB_FLAG);
                 context.inputMap |= ControllerPacket.BACK_FLAG;
@@ -2837,9 +2829,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
         else if (context.needsClickpadEmulation) {
             // Select+LB acts like the clickpad when we're faking a PS4 controller for motion support
-            if (context.inputMap == (ControllerPacket.BACK_FLAG | ControllerPacket.LB_FLAG) ||
-                    (context.inputMap == ControllerPacket.BACK_FLAG &&
-                            event.getEventTime() - context.lastLbUpTime <= MAXIMUM_BUMPER_UP_DELAY_MS))
+            if (context.inputMap == (ControllerPacket.BACK_FLAG | ControllerPacket.LB_FLAG))
             {
                 context.inputMap &= ~(ControllerPacket.BACK_FLAG | ControllerPacket.LB_FLAG);
                 context.inputMap |= ControllerPacket.TOUCHPAD_FLAG;
@@ -2860,9 +2850,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 }
             }
             else {
-                if (context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.RB_FLAG) ||
-                        (context.inputMap == ControllerPacket.PLAY_FLAG &&
-                                event.getEventTime() - context.lastRbUpTime <= MAXIMUM_BUMPER_UP_DELAY_MS))
+                if (context.inputMap == (ControllerPacket.PLAY_FLAG | ControllerPacket.RB_FLAG))
                 {
                     context.inputMap &= ~(ControllerPacket.PLAY_FLAG | ControllerPacket.RB_FLAG);
                     context.inputMap |= ControllerPacket.SPECIAL_BUTTON_FLAG;
@@ -3170,14 +3158,6 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public boolean hasPaddles;
         public boolean hasShare;
         public boolean needsClickpadEmulation;
-
-        // Used for OUYA bumper state tracking since they force all buttons
-        // up when the OUYA button goes down. We watch the last time we get
-        // a bumper up and compare that to our maximum delay when we receive
-        // a Start button press to see if we should activate one of our
-        // emulated button combos.
-        public long lastLbUpTime = 0;
-        public long lastRbUpTime = 0;
 
         public long startDownTime = 0;
 

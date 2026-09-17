@@ -1688,30 +1688,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     (eventSource & InputDevice.SOURCE_CLASS_POSITION) != 0 || // SOURCE_TOUCHPAD
                     eventSource == InputDevice.SOURCE_MOUSE_RELATIVE ||
                     (event.getPointerCount() >= 1 &&
-                            event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) ||
-                    eventSource == 12290) // 12290 = Samsung DeX mode desktop mouse
+                            event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE))
             {
                 int buttonState = event.getButtonState();
                 int changedButtons = buttonState ^ lastButtonState;
-
-                // The DeX touchpad on the Fold 4 sends proper right click events using BUTTON_SECONDARY,
-                // but doesn't send BUTTON_PRIMARY for a regular click. Instead it sends ACTION_DOWN/UP,
-                // so we need to fix that up to look like a sane input event to process it correctly.
-                if (eventSource == 12290) {
-                    if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                        buttonState |= MotionEvent.BUTTON_PRIMARY;
-                    }
-                    else if (event.getAction() == MotionEvent.ACTION_UP) {
-                        buttonState &= ~MotionEvent.BUTTON_PRIMARY;
-                    }
-                    else {
-                        // We may be faking the primary button down from a previous event,
-                        // so be sure to add that bit back into the button state.
-                        buttonState |= (lastButtonState & MotionEvent.BUTTON_PRIMARY);
-                    }
-
-                    changedButtons = buttonState ^ lastButtonState;
-                }
 
                 // Ignore mouse input if we're not capturing from our input source
                 if (!inputCaptureProvider.isCapturingActive()) {

@@ -562,14 +562,9 @@ hasFastAes() {
             return !!(android_getCpuFeatures() & ANDROID_CPU_ARM_FEATURE_AES);
         case ANDROID_CPU_FAMILY_ARM64:
             return !!(android_getCpuFeatures() & ANDROID_CPU_ARM64_FEATURE_AES);
-        case ANDROID_CPU_FAMILY_X86:
-        case ANDROID_CPU_FAMILY_X86_64:
-            return !!(android_getCpuFeatures() & ANDROID_CPU_X86_FEATURE_AES_NI);
-        case ANDROID_CPU_FAMILY_MIPS:
-        case ANDROID_CPU_FAMILY_MIPS64:
-            return false;
         default:
-            // Assume new architectures will all have crypto acceleration (RISC-V will)
+            // Only the two ARM ABIs are built, so this is unreachable; kept so the switch stays
+            // total if that ever changes. Assume any new architecture has crypto acceleration.
             return true;
     }
 }

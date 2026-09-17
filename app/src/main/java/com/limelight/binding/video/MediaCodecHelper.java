@@ -36,14 +36,9 @@ import com.limelight.LimeLog;
  */
 public class MediaCodecHelper {
 
-    private static final List<String> preferredDecoders;
-
     private static final List<String> blacklistedDecoderPrefixes;
-    private static final List<String> spsFixupBitstreamFixupDecoderPrefixes;
     private static final List<String> blacklistedAdaptivePlaybackPrefixes;
-    private static final List<String> baselineProfileHackPrefixes;
     private static final List<String> directSubmitPrefixes;
-    private static final List<String> constrainedHighProfilePrefixes;
     private static final List<String> whitelistedHevcDecoders;
     private static final List<String> refFrameInvalidationAvcPrefixes;
     private static final List<String> refFrameInvalidationHevcPrefixes;
@@ -54,9 +49,6 @@ public class MediaCodecHelper {
     private static final List<String> amlogicDecoderPrefixes;
     private static final List<String> amlogicCodec2DecoderPrefixes;
     private static final List<String> knownVendorLowLatencyOptions;
-
-    public static final boolean SHOULD_BYPASS_SOFTWARE_BLOCK =
-            Build.HARDWARE.equals("ranchu") || Build.HARDWARE.equals("cheets") || Build.BRAND.equals("Android-x86");
 
     private static boolean isAmlogicRfiSafe = false;
     // Whether this Amlogic platform's HEVC decoder can be trusted at all. Fire OS is confirmed
@@ -72,10 +64,7 @@ public class MediaCodecHelper {
         directSubmitPrefixes.add("omx.qcom");
         directSubmitPrefixes.add("omx.sec");
         directSubmitPrefixes.add("omx.exynos");
-        directSubmitPrefixes.add("omx.intel");
         directSubmitPrefixes.add("omx.brcm");
-        directSubmitPrefixes.add("omx.TI");
-        directSubmitPrefixes.add("omx.arc");
         directSubmitPrefixes.add("omx.nvidia");
 
         // All Codec2 decoders
@@ -93,19 +82,12 @@ public class MediaCodecHelper {
     }
 
     static {
-        preferredDecoders = new LinkedList<>();
-    }
-    
-    static {
         blacklistedDecoderPrefixes = new LinkedList<>();
 
-        // Blacklist software decoders that don't support H264 high profile except on systems
-        // that are expected to only have software decoders (like emulators).
-        if (!SHOULD_BYPASS_SOFTWARE_BLOCK) {
-            blacklistedDecoderPrefixes.add("omx.google");
-            blacklistedDecoderPrefixes.add("AVCDecoder");
-
-        }
+        // Blacklist software decoders that don't support H264 high profile. Upstream lets them
+        // through on emulators, which this app never runs on.
+        blacklistedDecoderPrefixes.add("omx.google");
+        blacklistedDecoderPrefixes.add("AVCDecoder");
 
         // Force these decoders disabled because:
         // 1) They are software decoders, so the performance is terrible
@@ -115,35 +97,14 @@ public class MediaCodecHelper {
     }
     
     static {
-        // If a decoder qualifies for reference frame invalidation,
-        // these entries will be ignored for those decoders.
-        spsFixupBitstreamFixupDecoderPrefixes = new LinkedList<>();
-        spsFixupBitstreamFixupDecoderPrefixes.add("omx.nvidia");
-        spsFixupBitstreamFixupDecoderPrefixes.add("omx.qcom");
-        spsFixupBitstreamFixupDecoderPrefixes.add("omx.brcm");
-
-        baselineProfileHackPrefixes = new LinkedList<>();
-        baselineProfileHackPrefixes.add("omx.intel");
-
         blacklistedAdaptivePlaybackPrefixes = new LinkedList<>();
-        // The Intel decoder on Lollipop on Nexus Player would increase latency badly
-        // if adaptive playback was enabled so let's avoid it to be safe.
-        blacklistedAdaptivePlaybackPrefixes.add("omx.intel");
         // The MediaTek decoder crashes at 1080p when adaptive playback is enabled
         // on some Android TV devices with HEVC only.
         blacklistedAdaptivePlaybackPrefixes.add("omx.mtk");
-
-        constrainedHighProfilePrefixes = new LinkedList<>();
-        constrainedHighProfilePrefixes.add("omx.intel");
     }
 
     static {
         whitelistedHevcDecoders = new LinkedList<>();
-
-        // Allow software HEVC decoding in the official AOSP emulator
-        if (Build.HARDWARE.equals("ranchu")) {
-            whitelistedHevcDecoders.add("omx.google");
-        }
 
         // Exynos seems to be the only HEVC decoder that works reliably
         whitelistedHevcDecoders.add("omx.exynos");
@@ -151,22 +112,9 @@ public class MediaCodecHelper {
         // On Darcy (Shield 2017), HEVC runs fine with no fixups required. For some reason,
         // other X1 implementations require bitstream fixups. However, since numReferenceFrames
         // has been supported in GFE since late 2017, we'll go ahead and enable HEVC for all
-        // device models.
-        //
-        // NVIDIA does partial HEVC acceleration on the Shield Tablet. I don't know
-        // whether the performance is good enough to use for streaming, but they're
-        // using the same omx.nvidia.h265.decode name as the Shield TV which has a
-        // fully accelerated HEVC pipeline. AFAIK, the only K1 devices with this
-        // partially accelerated HEVC decoder are the Shield Tablet and Xiaomi MiPad,
-        // so I'll check for those here.
-        //
-        // In case there are some that I missed, I will also exclude pre-Oreo OSes since
-        // only Shield ATV got an Oreo update and any newer Tegra devices will not ship
-        // with an old OS like Nougat.
-        if (!Build.DEVICE.equalsIgnoreCase("shieldtablet") &&
-                !Build.DEVICE.equalsIgnoreCase("mocha")) {
-            whitelistedHevcDecoders.add("omx.nvidia");
-        }
+        // device models. Upstream excludes the Shield Tablet and Xiaomi MiPad, whose Tegra K1
+        // only partially accelerates HEVC under the same decoder name; both are tablets.
+        whitelistedHevcDecoders.add("omx.nvidia");
 
         // Plot twist: On newer Sony devices (BRAVIA_ATV2, BRAVIA_ATV3_4K, BRAVIA_UR1_4K) the H.264 decoder crashes
         // on several configurations (> 60 FPS and 1440p) that work with HEVC, so we'll whitelist those devices for HEVC.
@@ -332,13 +280,9 @@ public class MediaCodecHelper {
             if (configInfo.reqGlEsVersion >= 0x30000) {
                 LimeLog.info("Added omx.nvidia/c2.nvidia to reference frame invalidation support list");
                 refFrameInvalidationAvcPrefixes.add("omx.nvidia");
-
-                // Exclude HEVC RFI on Pixel C and Tegra devices prior to Android 11. Misbehaving RFI
-                // on these devices can cause hundreds of milliseconds of latency, so it's not worth
-                // using it unless we're absolutely sure that it will not cause increased latency.
-                if (!Build.DEVICE.equalsIgnoreCase("dragon")) {
-                    refFrameInvalidationHevcPrefixes.add("omx.nvidia");
-                }
+                // Upstream excludes HEVC RFI on the Pixel C ("dragon"), where it misbehaves to the
+                // tune of hundreds of milliseconds; that is a tablet.
+                refFrameInvalidationHevcPrefixes.add("omx.nvidia");
 
                 refFrameInvalidationAvcPrefixes.add("c2.nvidia"); // Unconfirmed
                 refFrameInvalidationHevcPrefixes.add("c2.nvidia"); // Unconfirmed
@@ -542,37 +486,12 @@ public class MediaCodecHelper {
     }
 
     /**
-     * @return true if the SPS should advertise Constrained High Profile, which tells the decoder
-     *         not to buffer for B-frames that this stream never contains
-     */
-    public static boolean decoderNeedsConstrainedHighProfile(String decoderName) {
-        return isDecoderInList(constrainedHighProfilePrefixes, decoderName);
-    }
-
-    /**
      * @return true if decode units can be submitted straight from the network receive thread,
      *         skipping a thread hop. Only safe on decoders whose input buffer latency is low
      *         enough that blocking the receive thread doesn't cost packet loss.
      */
     public static boolean decoderCanDirectSubmit(String decoderName) {
         return isDecoderInList(directSubmitPrefixes, decoderName);
-    }
-
-    /**
-     * @return true if the SPS must be rewritten with explicit bitstream restrictions. Without
-     *         them these decoders buffer frames for reordering that will never come, adding
-     *         latency the stream doesn't need.
-     */
-    public static boolean decoderNeedsSpsBitstreamRestrictions(String decoderName) {
-        return isDecoderInList(spsFixupBitstreamFixupDecoderPrefixes, decoderName);
-    }
-
-    /**
-     * @return true if the decoder rejects a High profile SPS at configuration time and must be
-     *         configured with a baseline SPS, then given the real one once running
-     */
-    public static boolean decoderNeedsBaselineSpsHack(String decoderName) {
-        return isDecoderInList(baselineProfileHackPrefixes, decoderName);
     }
 
     /**
@@ -602,14 +521,8 @@ public class MediaCodecHelper {
     public static boolean decoderSupportsRefFrameInvalidationAvc(String decoderName, int videoHeight) {
         // A low-end-Snapdragon exclusion at 1080p stood here. It went with the GPU identification
         // in initialize(), which is the only thing that could ever have set the flag, and which
-        // could not identify a GPU either supported device actually has.
-
-        // This device seems to crash constantly at 720p, so try disabling
-        // RFI to see if we can get that under control.
-        if (Build.DEVICE.equals("b3") || Build.DEVICE.equals("b5")) {
-            return false;
-        }
-
+        // could not identify a GPU either supported device actually has. Upstream also excludes
+        // the Xperia Z5 family ("b3", "b5"), which crashed at 720p; those are phones.
         return isDecoderInList(refFrameInvalidationAvcPrefixes, decoderName);
     }
 
@@ -764,36 +677,8 @@ public class MediaCodecHelper {
         return str;
     }
     
-    private static MediaCodecInfo findPreferredDecoder() {
-        // This is a different algorithm than the other findXXXDecoder functions,
-        // because we want to evaluate the decoders in our list's order
-        // rather than MediaCodecList's order
-
-        if (!initialized) {
-            throw new IllegalStateException("MediaCodecHelper must be initialized before use");
-        }
-        
-        for (String preferredDecoder : preferredDecoders) {
-            for (MediaCodecInfo codecInfo : getMediaCodecList()) {
-                // Skip encoders
-                if (codecInfo.isEncoder()) {
-                    continue;
-                }
-                
-                // Check for preferred decoders
-                if (preferredDecoder.equalsIgnoreCase(codecInfo.getName())) {
-                    LimeLog.info("Preferred decoder choice is "+codecInfo.getName());
-                    return codecInfo;
-                }
-            }
-        }
-        
-        return null;
-    }
-
     private static boolean isCodecBlacklisted(MediaCodecInfo codecInfo) {
-        // Use the new isSoftwareOnly() function on Android Q
-        if (!SHOULD_BYPASS_SOFTWARE_BLOCK && codecInfo.isSoftwareOnly()) {
+        if (codecInfo.isSoftwareOnly()) {
             LimeLog.info("Skipping software-only decoder: "+codecInfo.getName());
             return true;
         }
@@ -850,11 +735,6 @@ public class MediaCodecHelper {
      * @return the chosen decoder, or null if there is none
      */
     public static MediaCodecInfo findProbableSafeDecoder(String mimeType, int requiredProfile) {
-        // First look for a preferred decoder by name
-        MediaCodecInfo info = findPreferredDecoder();
-        if (info != null) {
-            return info;
-        }
         
         // Now look for decoders we know are safe
         try {

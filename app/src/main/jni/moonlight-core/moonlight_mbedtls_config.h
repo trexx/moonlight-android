@@ -125,9 +125,9 @@
  * seeds the DRBG from the OS.
  */
 
-/* Hardware AES. Both are runtime-detected, so they are safe to compile in. */
+/* Hardware AES, runtime-detected. Only the ARM extensions: the x86 AES-NI module compiled to an
+ * empty object on every ABI this app builds. */
 #define MBEDTLS_HAVE_ASM
-#define MBEDTLS_AESNI_C     /* x86/x86_64 */
 #define MBEDTLS_AESCE_C     /* armv8-a crypto extensions */
 
 #endif /* MOONLIGHT_MBEDTLS_CONFIG_H */
