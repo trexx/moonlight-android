@@ -2771,6 +2771,71 @@ it would say whether "never drop" was ever more than an accident of the PTS base
 
 ---
 
+## 31. Latency audit, batch 1
+
+The 2026-09-17 audit's first batch shipped without a device: every change is either
+JVM-tested, a build flag verified from the compiler's own output, or a deletion of code no
+Android TV device can reach. What the JVM cannot answer is listed here. None of it blocks the
+merge; each line is a fact worth having on record for the next change in that area.
+
+### Decoder low-latency options — both boxes
+
+`setDecoderLowLatencyOptions()` used to stop at `KEY_LOW_LATENCY` whenever the decoder advertised
+`FEATURE_LowLatency`, so a decoder that did — the Amlogic Codec2 ones do — never received its
+vendor key or `KEY_PRIORITY`. Try 0 now carries all three and try 1 is the old try 0. The ladder
+itself is pinned by `LowLatencyOptionsTest`; which rung each box actually lands on is not.
+
+- [ ] `adb shell setprop persist.log.tag '""'` on the Homatics first.
+- [ ] **Which try succeeds.** `logcat | grep -a "Decoder configuration try"` — a healthy result is
+      `try: 0` with no `try: 1` after it. A `try: 1` on the Homatics means the vendor key or
+      priority was rejected and the box is back exactly where it was; record which.
+- [ ] **Whether the Shield takes the feature ladder at all.** `grep -a "Low latency decoding mode
+      supported"` — present means `omx.nvidia` advertises `FEATURE_LowLatency` at API 30 and the
+      Shield also gained `KEY_PRIORITY = 0` from this change; absent means its ladder is untouched.
+- [ ] **Latency, Homatics, H.264.** Section 28's percentiles before and after; the vendor key is
+      the one MediaCodecHelper's own comment credits for Amlogic H.264 latency, so this is the
+      run that says whether the audit's claim was worth anything.
+
+### 32-bit native code at `-O2`, hidden symbols — Homatics
+
+The NDK compiled every armeabi-v7a module in Thumb mode at `-Oz`; `APP_CFLAGS := -O2` now wins,
+confirmed from a dry run of AGP's exact ndk-build command (`-mthumb -Oz -O2`). `aesce.o` still
+carries the `aese`/`pmull` encodings section 20 depends on. Stripped `libmoonlight-core.so`:
+323,940 bytes on armeabi-v7a, 405,224 on arm64-v8a, with `-fvisibility=hidden` leaving exactly
+the 33 JNI entry points exported on both.
+
+- [ ] Stream starts, decodes and survives a loss episode (FEC recovery is the hottest loop the
+      flag touches) on the Homatics.
+- [ ] Receive-thread CPU via section 15.6's `schedstat` method, against the 160–170 ms/s it
+      recorded at `-Oz`.
+
+### Key-up hold gate — Shield with its bundled remote
+
+`handleButtonUp()` no longer sleeps for keys the switch does not map, so a remote's volume or
+media key no longer stalls the UI thread for up to 25 ms. `ControllerButtonKeysTest` pins the
+set; what it cannot check is that nothing on the remote used to rely on the hold.
+
+- [ ] Volume, Home and Back on the remote behave as before during a stream.
+- [ ] A short tap on a controller face button still registers in a game that polls once per
+      frame — the hold is unchanged for mapped keys, so this is a regression check only.
+
+### TLS context reuse and shared client identity — both boxes
+
+- [ ] Pairing from scratch (section 18.2) still completes; the key manager is now built once per
+      `NvHTTP` rather than per request.
+- [ ] Tap-to-first-frame is no worse. If measuring, take the gap between `stageStarting` and the
+      first `Decoder configuration try` line in logcat, since that spans serverinfo and launch.
+
+### Bookkeeping
+
+- [ ] `Input dequeues over 20 ms:` in the end-of-stream summary reads `0` on a healthy stream. It
+      replaces a per-decode-unit log line; a non-zero count on a smooth stream would mean the
+      decoder is accepting input late without it showing on screen, which is new information.
+- [ ] `simpleperf record -p $(adb shell pidof com.limelight.unofficial)` attaches to the release
+      build now that the manifest declares `profileable`. Section 15.6 was blocked on this.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2806,3 +2871,6 @@ it would say whether "never drop" was ever more than an accident of the PTS base
 | §23 Controllers screen | A device with no USB host support, or a build run with the feature absent, for the dependency-crash path |
 | §25 | The Homatics on a 1080p60 display, streaming H.264 — the Shield keeps RFI and never runs the patch |
 | §28 batches | Both batches re-run back to back, to separate HDR from a display renegotiation |
+| §31 decoder ladder | Both boxes; the Homatics for the vendor-key latency run, the Shield for whether `omx.nvidia` advertises `FEATURE_LowLatency` |
+| §31 `-O2` | The Homatics; the Shield's arm64 build was already at `-O2` |
+| §31 key-up gate | The Shield with its bundled remote |
