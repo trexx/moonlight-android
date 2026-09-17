@@ -220,13 +220,21 @@ before concluding the box is down; `ping` settles whether it is actually up.
 
 ## Target hardware
 
-Supported: **NVIDIA Shield TV** (`arm64-v8a`, Android 11 / API 30) and **Homatics Box R 4K**
-(`armeabi-v7a`, Android 14 — 32-bit userspace despite a 64-bit Amlogic S905X4). Both ABIs are
-required; neither can be dropped. There is no x86 consumer.
+Target: **Android TV devices** running Android 11 (API 30) or newer on ARM. Verified on two:
+**NVIDIA Shield TV** (`arm64-v8a`, Android 11 / API 30) and **Homatics Box R 4K**
+(`armeabi-v7a`, Android 14 — 32-bit userspace despite a 64-bit Amlogic S905X4). Other boxes
+(Amlogic, MediaTek, Realtek, Broadcom, HiSilicon, Qualcomm, Amazon's Fire TV builds, Sony
+Bravia, Chromecast with Google TV) are in scope even though none is on hand. Both ABIs are
+required; neither can be dropped. There is no x86 consumer, and every Android 11+ TV box is
+ARMv8 silicon even when its userspace is 32-bit.
+
+Out of scope, and the only things "delete rather than preserve" below applies to: phones,
+tablets, handhelds, emulators, ChromeOS and x86.
 
 The Shield TV sitting at API 30 is why `minSdk` is 30, and it means **an API-gated feature often
-reaches only one of the two devices**. State which when you add one: `PerformanceHintManager`
-(API 31) is the existing example — it helps the Homatics and does nothing on the Shield.
+reaches only some devices**. State which when you add one, and make sure it degrades cleanly on
+API 30: `PerformanceHintManager` (API 31) is the existing example — it helps the Homatics and
+does nothing on the Shield.
 
 - `minSdk 30`, `compileSdk 37`, `targetSdk 34`.
 - `targetSdk` is **deliberately** behind `compileSdk`: API 35 force-enables edge-to-edge and
@@ -234,12 +242,15 @@ reaches only one of the two devices**. State which when you add one: `Performanc
   fullscreen streaming client. Do not "fix" this.
 
 Because `minSdk` is 30, **delete rather than preserve**: `Build.VERSION.SDK_INT` checks below
-API 30, support-library fallbacks, and device workarounds for hardware outside the supported set.
+API 30, support-library fallbacks, and workarounds for the out-of-scope form factors above.
 Upstream Moonlight supports a far wider range; code inherited from it is routinely dead here.
 
-Keep device quirk entries in `MediaCodecHelper` unless you can show the device is out of scope —
-each one traces back to hardware that misbehaved, and removing one without a device to test on is
-how regressions get reintroduced.
+Keep device quirk entries in `MediaCodecHelper` and the controller-model quirks in
+`ControllerHandler` unless you can show the hardware is out of scope by the definition above —
+a Bravia or Fire TV decoder entry is live even though neither verified box has one, and a
+DualShock 4 scancode map is live because that pad can pair with any box. Each one traces back to
+hardware that misbehaved, and removing one without a device to test on is how regressions get
+reintroduced.
 
 ---
 
