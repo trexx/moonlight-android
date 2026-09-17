@@ -2954,6 +2954,81 @@ debug builds only (`LC_DEBUG`).
 
 ---
 
+## 33. Latency audit, batch 3
+
+The items the audit ranked as needing hardware from the "still needed" table. Implemented so
+they can be tried when the hardware is there; **none is verified**. Two of the batch's planned
+items were deliberately not done and are recorded at the end.
+
+### Xbox pad reader: one buffer for the life of the thread — any cabled Xbox pad
+
+`AbstractXboxController` allocated a 64-byte array and a `ByteBuffer` per report, at up to
+250 Hz. It now re-windows one buffer with `clear()` plus `limit(res)`. `XboxOneController` and
+`Xbox360Controller` read relatively from position 0, so a report shorter than the last leaves
+stale bytes past the limit that relative reads cannot reach - but that is the argument, and
+section 2's stuck-input failure mode for the ProCon is the thing to look for.
+
+- [ ] Every button, trigger and stick reaches the host; release and re-press twenty times fast.
+- [ ] Unplug and replug mid-stream; the pad comes back with nothing stuck.
+- [ ] An Xbox One pad and a 360 pad, since their report layouts differ.
+
+### Unchanged USB reports are not sent — a driven pad plus an Android-enumerated pad (§12)
+
+`reportControllerState()` now returns early when the post-deadzone state equals what this
+context last sent. The first report always goes through.
+
+- [ ] With a Pro Controller in 0x30 mode and the IMU on, idle: `Video RTP` traffic unchanged
+      but the input packet rate on the host (Sunshine's log at debug level, or `tcpdump` on the
+      control port) drops from ~120/s to ~0.
+- [ ] Section 12's two-pad check: a change on the Android pad sharing the controller number is
+      still reported while the USB pad sits idle, and vice versa. This is the merge case the
+      early-out reasons about.
+- [ ] A stick held inside its deadzone sends nothing; the first movement out of it sends.
+
+### Pad sensors on the background thread — a pad with a gyro (§13)
+
+Both `SensorManager.registerListener` calls now pass `backgroundThreadHandler`.
+
+- [ ] Motion reaches the host game exactly as before; `adb shell dumpsys sensorservice` lists
+      the listener at the requested rate.
+- [ ] Main-thread stalls in `dumpsys gfxinfo` during motion are no worse; they should be better.
+
+### Wireless GIP: destination MAC compared in place — Xbox Wireless Adapter
+
+`Dongle::handleWlanPacket` no longer builds two `Bytes` per frame; the destination is compared
+with `std::equal` and the source is only built for management frames.
+
+- [ ] Pairing, connect, disconnect and input all work: those are the management frames, which
+      are the only path whose code moved.
+
+### Codec list and vendor probe cached — both boxes
+
+`getMediaCodecList()` is built once per process; the vendor low-latency probe, which
+instantiates a real `MediaCodec`, remembers its answer per decoder name.
+
+- [ ] Tap-to-first-frame on the second stream of a session is lower than the first by roughly
+      the probe's cost; logcat shows `supports known low latency option` once per decoder per
+      process, not per stream.
+
+### Not done, and why
+
+- **HDR from the start (V3).** The restart section 28 attributes to `setHdrMode()` exists
+  because the mastering metadata arrives on the control stream after the first frames, and
+  `KEY_HDR_STATIC_INFO` can only be applied at `configure()`. Avoiding the restart therefore
+  means either holding the codec unconfigured until the metadata arrives - trading a 4-5 frame
+  restart for a bounded wait plus an IDR request - or finding out that the box's decoder
+  passes the HEVC mastering-display SEI through on its own and the key is not needed at all.
+  Both are device experiments, not code changes; the second is the one to run first: stream
+  HDR with the `KEY_HDR_STATIC_INFO` line commented out and see whether the TV still enters
+  HDR mode on each box.
+- **`KEY_MAX_INPUT_SIZE` (V4).** Without knowing each vendor's default input buffer size, a
+  value picked here can shrink the buffer as easily as grow it, and turning the oversized-unit
+  exception into `DR_NEED_IDR` would only convert a crash with a report into a silent freeze,
+  since the next IDR would not fit either. Record `Decode unit length ... too large` if it is
+  ever seen; the fix then is a measured size for that decoder.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2996,3 +3071,7 @@ debug builds only (`LC_DEBUG`).
 | §32 audio fallback | The Homatics, which is the box denied the fast path; the Shield for the no-change check |
 | §32 connection reuse | A Sunshine host and a GFE host |
 | §32 `SO_RCVBUF` | Both boxes, debug build |
+| §33 Xbox reader | A cabled Xbox One pad and a 360 pad |
+| §33 report dedup | A Pro Controller plus an Android-enumerated pad, as §12 |
+| §33 sensors | A pad with a gyro, as §13 |
+| §33 GIP MAC | An Xbox Wireless Adapter with a pad |
