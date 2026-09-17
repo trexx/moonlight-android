@@ -19,6 +19,7 @@
 
 #include <memory>
 #include <cassert>
+#include <algorithm>
 #include <sys/resource.h>
 #include <unistd.h>
 
@@ -318,17 +319,10 @@ void Dongle::handleWlanPacket(const Bytes &packet)
     const RxWi *rxWi = packet.toStruct<RxWi>();
     const WlanFrame *wlanFrame = packet.toStruct<WlanFrame>(sizeof(RxWi));
 
-    const Bytes source(
-        wlanFrame->source,
-        wlanFrame->source + macAddress.size()
-    );
-    const Bytes destination(
-        wlanFrame->destination,
-        wlanFrame->destination + macAddress.size()
-    );
-
-    // Packet has wrong destination address
-    if (destination != macAddress)
+    // Packet has wrong destination address. Compared in place: this runs for every input report
+    // from every pad on the adapter, and building a Bytes for the address was a heap allocation
+    // per report for a six-byte compare.
+    if (!std::equal(macAddress.begin(), macAddress.begin() + macAddress.size(), wlanFrame->destination))
     {
         return;
     }
@@ -338,6 +332,13 @@ void Dongle::handleWlanPacket(const Bytes &packet)
 
     if (type == MT_WLAN_MANAGEMENT)
     {
+        // Only the management frames want the source address as a Bytes, so it is only built
+        // for them and not for the data frames that carry the input reports.
+        const Bytes source(
+            wlanFrame->source,
+            wlanFrame->source + macAddress.size()
+        );
+
         Log::debug("handle MGMT frame");
         switch (subtype)
         {
