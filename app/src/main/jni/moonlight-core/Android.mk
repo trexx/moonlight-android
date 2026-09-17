@@ -37,7 +37,10 @@ LOCAL_EXPORT_CFLAGS := -DMBEDTLS_CONFIG_FILE=\"moonlight_mbedtls_config.h\"
 # Safe to dispatch: aesce.c checks getauxval(AT_HWCAP2) & HWCAP2_AES at runtime and uses the
 # table path when the CPU lacks the extension. What is *not* runtime-guarded is that clang may
 # now emit ARMv8-A baseline instructions anywhere in mbedtls, so this library would fault on a
-# genuine ARMv7 CPU. There is no such device in scope; revisit this line if one is ever added.
+# genuine ARMv7 CPU. None is in scope: every Android 11+ TV box is ARMv8 silicon, 32-bit
+# userspace or not. If one ever appears, move aesce.c into its own static module carrying this
+# flag - it dispatches on HWCAP2_AES at runtime, so the rest of mbedtls can drop back to the
+# ABI default without losing the acceleration where it exists.
 #
 # +crypto is not needed on the command line - aesce.c pushes target("aes") on its own
 # functions. Requires clang >= 11 for 32-bit per mbedtls_config.h; the pinned NDK has 21.
@@ -93,7 +96,13 @@ LOCAL_C_INCLUDES := $(LOCAL_PATH)/moonlight-common-c/enet/include \
                     $(LOCAL_PATH)/moonlight-common-c/nanors/deps/obl \
                     $(LOCAL_PATH)/moonlight-common-c/src \
 
-LOCAL_CFLAGS := -DHAS_SOCKLEN_T=1 -DLC_ANDROID -DHAVE_CLOCK_GETTIME=1 -DUSE_MBEDTLS
+# -fvisibility=hidden: without it every internal function in moonlight-common-c, ENet and nanors
+# is exported from the .so, so each cross-file call in the stream core (receive -> RTP queue ->
+# depacketizer -> submit, several times per packet) goes through the PLT and cannot be inlined or
+# optimised across the boundary. The JNI entry points in simplejni.c, callbacks.c and
+# aaudio_renderer.c are all declared JNIEXPORT, which is visibility("default"), so name-based
+# JNI resolution still finds them; verify with `nm -D` on both ABIs after touching this.
+LOCAL_CFLAGS := -DHAS_SOCKLEN_T=1 -DLC_ANDROID -DHAVE_CLOCK_GETTIME=1 -DUSE_MBEDTLS -fvisibility=hidden
 
 LOCAL_LDLIBS := -llog -laaudio
 
