@@ -5,6 +5,7 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
+import android.os.Process;
 import android.os.SystemClock;
 
 import com.limelight.LimeLog;
@@ -69,6 +70,10 @@ public abstract class AbstractXboxController extends AbstractController {
     private Thread createInputThread() {
         return new Thread() {
             public void run() {
+                // See ProConController.createInputThread(): the reader thread is the input path
+                // for a driven pad, and it ran at the default priority.
+                Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
+
                 try {
                     // Delay for a moment before reporting the new gamepad and
                     // accepting new input. This allows time for the old InputDevice

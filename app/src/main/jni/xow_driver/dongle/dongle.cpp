@@ -19,6 +19,8 @@
 
 #include <memory>
 #include <cassert>
+#include <sys/resource.h>
+#include <unistd.h>
 
 #include "dongle.h"
 #include "../utils/log.h"
@@ -422,6 +424,11 @@ void Dongle::handleBulkData(const Bytes &data)
 void Dongle::readBulkPackets(uint8_t endpoint)
 {
     FixedBytes<USB_MAX_BULK_TRANSFER_SIZE> buffer;
+
+    // Every input report from the adapter is delivered to Java from this thread, which otherwise
+    // inherits the default nice value. -4 is Android's THREAD_PRIORITY_DISPLAY, the same level
+    // the Java-side pad drivers and the native receive threads now run at.
+    setpriority(PRIO_PROCESS, gettid(), -4);
 
     // Attach once for the life of the thread rather than around each callback. Every JNI call the
     // driver makes happens below this point - input reports at up to ~125 Hz per pad, four pads on

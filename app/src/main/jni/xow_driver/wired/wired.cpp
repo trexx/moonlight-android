@@ -14,6 +14,8 @@
 #include <functional>
 #include <utility>
 #include <algorithm>
+#include <sys/resource.h>
+#include <unistd.h>
 
 // GIP audio data messages, which is what the capture endpoint carries
 #define GIP_AUDIO_SAMPLES 0x60
@@ -120,6 +122,10 @@ bool WiredController::sendPacket(const Bytes &data)
 void WiredController::readPackets()
 {
     uint8_t buffer[UsbWiredDevice::MAX_TRANSFER_SIZE];
+
+    // See Dongle::readBulkPackets(): this is the pad's whole input path, at the default nice
+    // value until now. -4 is THREAD_PRIORITY_DISPLAY.
+    setpriority(PRIO_PROCESS, gettid(), -4);
 
     /*
      * Attached once for the life of the thread, not around each callback. Every JNI call this

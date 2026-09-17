@@ -5,6 +5,7 @@ import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbEndpoint;
 import android.hardware.usb.UsbInterface;
+import android.os.Process;
 import android.os.SystemClock;
 
 import com.limelight.LimeLog;
@@ -96,6 +97,12 @@ public class ProConController extends AbstractController {
      */
     private Thread createInputThread() {
         return new Thread(() -> {
+            // This thread carries every report from the pad to the host, and nothing else on the
+            // input path sets a priority, so it competed at nice 0 with the UI thread. DISPLAY
+            // matches what the connection thread gives the native receive side; going above the
+            // decoder's URGENT_DISPLAY could starve it.
+            Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY);
+
             // The controller isn't ready to answer commands the instant it enumerates.
             try {
                 Thread.sleep(1000);
