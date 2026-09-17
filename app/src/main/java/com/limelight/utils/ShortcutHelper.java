@@ -11,6 +11,7 @@ import com.limelight.nvstream.http.ComputerDetails;
 import com.limelight.nvstream.http.NvApp;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -141,9 +142,28 @@ public class ShortcutHelper {
         }
     }
 
-    /** Creates a host's app list shortcut once that host has actually been reachable. */
+    // Host name last written to each host's shortcut this session, by UUID. The poll listener
+    // calls createAppViewShortcutForOnlineHost() on every result - every 1.5 s per paired host -
+    // and each call was a getDynamicShortcuts() plus getPinnedShortcuts() plus updateShortcuts()
+    // round trip into system_server, for a shortcut whose only variable content is the name.
+    private final HashMap<String, String> shortcutNamesWritten = new HashMap<>();
+
+    /**
+     * Creates a host's app list shortcut once that host has actually been reachable.
+     *
+     * <p>Once per host per session unless its name changes, since nothing else on the shortcut
+     * can. The first call still does the full create-or-update, so a shortcut removed by the
+     * launcher between sessions comes back.
+     */
     public void createAppViewShortcutForOnlineHost(ComputerDetails details) {
-        createAppViewShortcut(details, false, false);
+        // Synchronised because the service polls each host on its own thread
+        synchronized (shortcutNamesWritten) {
+            if (details.name != null && details.name.equals(shortcutNamesWritten.get(details.uuid))) {
+                return;
+            }
+            createAppViewShortcut(details, false, false);
+            shortcutNamesWritten.put(details.uuid, details.name);
+        }
     }
 
     private String getShortcutIdForGame(ComputerDetails computer, NvApp app) {
