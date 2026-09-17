@@ -48,6 +48,10 @@
 
       Every activity below declares configChanges for rotation and resize so Android does not
       recreate it - for Game that would mean tearing down and rebuilding the stream.
+
+      profileable lets simpleperf and Perfetto attach to the release build from adb, which is the
+      only build whose timing is worth measuring: the debug variant runs the native code at -O0
+      with CheckJNI on. It grants nothing to other apps and changes nothing at runtime.
     -->
     <application
         android:label="@string/app_label"
@@ -64,6 +68,8 @@
         android:enableOnBackInvokedCallback="false"
         android:supportsRtl="false"
         android:theme="@style/AppTheme">
+
+        <profileable android:shell="true" />
 
         <!-- Exported so the Android TV launcher process can read cached box art for the channel.
              It serves nothing else; see PosterContentProvider. -->
