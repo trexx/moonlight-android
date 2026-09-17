@@ -88,9 +88,16 @@ public abstract class AbstractXboxController extends AbstractController {
                 // Report that we're added _before_ reporting input
                 notifyDeviceAdded();
 
-                while (!isInterrupted() && !stopped) {
-                    byte[] buffer = new byte[64];
+                // One report buffer and one ByteBuffer over it for the life of the thread,
+                // re-windowed per read, rather than a new array and wrapper per report at up to
+                // 250 Hz. Same fix ProConController already carries. handleRead() reads
+                // relatively from position 0, so clear() plus limit(res) is the whole re-window;
+                // a report shorter than the previous one leaves stale bytes past the limit,
+                // which relative reads cannot reach.
+                byte[] buffer = new byte[64];
+                ByteBuffer report = ByteBuffer.wrap(buffer).order(ByteOrder.LITTLE_ENDIAN);
 
+                while (!isInterrupted() && !stopped) {
                     int res;
 
                     //
@@ -121,7 +128,9 @@ public abstract class AbstractXboxController extends AbstractController {
                         break;
                     }
 
-                    if (handleRead(ByteBuffer.wrap(buffer, 0, res).order(ByteOrder.LITTLE_ENDIAN))) {
+                    report.clear();
+                    report.limit(res);
+                    if (handleRead(report)) {
                         // Report input if handleRead() returns true
                         reportInput();
                     }
