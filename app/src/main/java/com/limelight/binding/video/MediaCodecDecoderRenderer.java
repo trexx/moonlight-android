@@ -110,7 +110,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private Thread rendererThread;
 
     // Device quirks resolved from MediaCodecHelper; see the corresponding methods there
-    private boolean needsSpsBitstreamFixup, isExynos4;
+    private boolean needsSpsBitstreamFixup;
     private boolean adaptivePlayback, directSubmit, fusedIdrFrame;
     private boolean constrainedHighProfile;
     private boolean refFrameInvalidationAvc, refFrameInvalidationHevc, refFrameInvalidationAv1;
@@ -792,7 +792,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             needsSpsBitstreamFixup = MediaCodecHelper.decoderNeedsSpsBitstreamRestrictions(selectedDecoderInfo.getName());
             needsBaselineSpsHack = MediaCodecHelper.decoderNeedsBaselineSpsHack(selectedDecoderInfo.getName());
             constrainedHighProfile = MediaCodecHelper.decoderNeedsConstrainedHighProfile(selectedDecoderInfo.getName());
-            isExynos4 = MediaCodecHelper.isExynos4Device();
             if (needsSpsBitstreamFixup) {
                 LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" needs SPS bitstream restrictions fixup");
             }
@@ -801,9 +800,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             }
             if (constrainedHighProfile) {
                 LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" needs constrained high profile");
-            }
-            if (isExynos4) {
-                LimeLog.info("Decoder "+selectedDecoderInfo.getName()+" is on Exynos 4");
             }
 
             refFrameInvalidationActive = refFrameInvalidationAvc;
@@ -1979,8 +1975,11 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         int deltaMs = (int)(SystemClock.uptimeMillis() - startTime);
 
+        // Counted, not logged: during a backlog this fires for every decode unit, and a log line
+        // is a string build on the receive thread while it is already behind. The count reaches
+        // the end-of-stream summary; the hang threshold below covers the pathological case.
         if (deltaMs >= 20) {
-            LimeLog.warning("Dequeue input buffer ran long: " + deltaMs + " ms");
+            activeWindowVideoStats.longInputDequeues++;
         }
 
         if (nextInputBuffer == null) {
@@ -3363,6 +3362,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         str += "Total frames received: "+renderer.globalVideoStats.totalFramesReceived+DELIMITER;
         str += "Total frames rendered: "+renderer.globalVideoStats.totalFramesRendered+DELIMITER;
         str += "Frame losses: "+renderer.globalVideoStats.framesLost+" in "+renderer.globalVideoStats.frameLossEvents+" loss events"+DELIMITER;
+        str += "Input dequeues over 20 ms: "+renderer.globalVideoStats.longInputDequeues+DELIMITER;
         long[] videoRtp = MoonBridge.getRTPVideoStats();
         long[] audioRtp = MoonBridge.getRTPAudioStats();
         if (videoRtp != null) {

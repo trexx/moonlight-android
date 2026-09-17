@@ -1,12 +1,8 @@
 package com.limelight.binding.video;
 
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Locale;
 
 import android.annotation.SuppressLint;
 import android.app.ActivityManager;
@@ -429,21 +425,25 @@ public class MediaCodecHelper {
         return false;
     }
 
-    private static boolean decoderSupportsMaxOperatingRate(String decoderName) {
-        // Operate at maximum rate to lower latency as much as possible on
-        // some Qualcomm platforms. We could also set KEY_PRIORITY to 0 (realtime)
-        // but that will actually result in the decoder crashing if it can't satisfy
-        // our (ludicrous) operating rate requirement. This seems to cause reliable
-        // crashes on the Xiaomi Mi 10 lite 5G and Redmi K30i 5G on Android 10, so
-        // we'll disable it on Snapdragon 765G and all non-Qualcomm devices to be safe.
-        //
-        // NB: Even on Android 10, this optimization still provides significant
-        // performance gains on Pixel 2.
-        //
-        // The Adreno 620 exclusion that used to qualify this went with the GPU identification in
-        // initialize(): the flag could only ever be false on this fork's hardware, and neither
-        // supported device has a Qualcomm decoder for the list check to match anyway.
-        return isDecoderInList(qualcommDecoderPrefixes, decoderName);
+    /**
+     * @return which vendor's low-latency keys apply to this decoder, for
+     *         {@link LowLatencyOptions}. The Adreno 620 exclusion that used to qualify the
+     *         Qualcomm answer went with the GPU identification in {@link #initialize}.
+     */
+    private static LowLatencyOptions.Family lowLatencyFamily(String decoderName) {
+        if (isDecoderInList(qualcommDecoderPrefixes, decoderName)) {
+            return LowLatencyOptions.Family.QUALCOMM;
+        }
+        else if (isDecoderInList(kirinDecoderPrefixes, decoderName)) {
+            return LowLatencyOptions.Family.KIRIN;
+        }
+        else if (isDecoderInList(exynosDecoderPrefixes, decoderName)) {
+            return LowLatencyOptions.Family.EXYNOS;
+        }
+        else if (isDecoderInList(amlogicDecoderPrefixes, decoderName)) {
+            return LowLatencyOptions.Family.AMLOGIC;
+        }
+        return LowLatencyOptions.Family.OTHER;
     }
 
     /**
@@ -476,110 +476,22 @@ public class MediaCodecHelper {
      *
      * <p>There is no way to ask whether a vendor option is accepted other than to configure the
      * codec and see, so the caller loops: call this with an increasing {@code tryNumber}, attempt
-     * to configure, and try again if it fails. Options are ordered most to least aggressive, so
-     * the first configuration that succeeds is the lowest latency one the decoder will take.
+     * to configure, and try again if it fails. The ladder itself lives in
+     * {@link LowLatencyOptions}, where it is tested; this only resolves the decoder's family and
+     * feature support and writes the keys.
      *
      * @param tryNumber attempt counter, starting at 0
-     * @return true if this attempt set options the previous one didn't. False means the options
-     *         are exhausted and a configuration failure now is a real failure.
+     * @return true if this attempt set any options. False means the options are exhausted and a
+     *         configuration failure now is a real failure.
      */
     public static boolean setDecoderLowLatencyOptions(MediaFormat videoFormat, MediaCodecInfo decoderInfo, int tryNumber) {
-        // Options here should be tried in the order of most to least risky. The decoder will use
-        // the first MediaFormat that doesn't fail in configure().
-
-        boolean setNewOption = false;
-
-        if (tryNumber < 1) {
-            // Official Android 11+ low latency option (KEY_LOW_LATENCY).
-            videoFormat.setInteger("low-latency", 1);
-            setNewOption = true;
-
-            // If this decoder officially supports FEATURE_LowLatency, we will just use that alone
-            // for try 0. Otherwise, we'll include it as best effort with other options.
-            if (decoderSupportsAndroidRLowLatency(decoderInfo, videoFormat.getString(MediaFormat.KEY_MIME))) {
-                return true;
-            }
+        List<LowLatencyOptions.Option> options = LowLatencyOptions.forTry(tryNumber,
+                lowLatencyFamily(decoderInfo.getName()),
+                decoderSupportsAndroidRLowLatency(decoderInfo, videoFormat.getString(MediaFormat.KEY_MIME)));
+        for (LowLatencyOptions.Option option : options) {
+            videoFormat.setInteger(option.key(), option.value());
         }
-
-        if (tryNumber < 2) {
-            // MediaTek decoders don't use vendor-defined keys for low latency mode. Instead, they have a modified
-            // version of AOSP's ACodec.cpp which supports the "vdec-lowlatency" option. This option is passed down
-            // to the decoder as OMX.MTK.index.param.video.LowLatencyDecode.
-            //
-            // This option is also plumbed for Amazon Amlogic-based devices like the Fire TV 3. Not only does it
-            // reduce latency on Amlogic, it fixes the HEVC bug that causes the decoder to not output any frames.
-            // Unfortunately, it does the exact opposite for the Xiaomi MITV4-ANSM0, breaking it in the way that
-            // Fire TV was broken prior to vdec-lowlatency :(
-            //
-            // On Fire TV 3, vdec-lowlatency is translated to OMX.amazon.fireos.index.video.lowLatencyDecode.
-            //
-            // https://github.com/yuan1617/Framwork/blob/master/frameworks/av/media/libstagefright/ACodec.cpp
-            // https://github.com/iykex/vendor_mediatek_proprietary_hardware/blob/master/libomx/video/MtkOmxVdecEx/MtkOmxVdecEx.h
-            videoFormat.setInteger("vdec-lowlatency", 1);
-            setNewOption = true;
-        }
-
-        if (tryNumber < 3) {
-            if (MediaCodecHelper.decoderSupportsMaxOperatingRate(decoderInfo.getName())) {
-                videoFormat.setInteger(MediaFormat.KEY_OPERATING_RATE, Short.MAX_VALUE);
-                setNewOption = true;
-            }
-            else {
-                videoFormat.setInteger(MediaFormat.KEY_PRIORITY, 0);
-                setNewOption = true;
-            }
-        }
-
-        // MediaCodec supports vendor-defined format keys using the "vendor.<extension name>.<parameter name>" syntax.
-        // These allow access to functionality that is not exposed through documented MediaFormat.KEY_* values.
-        // https://cs.android.com/android/platform/superproject/+/master:hardware/qcom/sdm845/media/mm-video-v4l2/vidc/common/inc/vidc_vendor_extensions.h;l=67
-        //
-        // MediaCodec vendor extension support was introduced in Android 8.0:
-        // https://cs.android.com/android/_/android/platform/frameworks/av/+/01c10f8cdcd58d1e7025f426a72e6e75ba5d7fc2
-        // Try vendor-specific low latency options
-        //
-        // NOTE: Update knownVendorLowLatencyOptions if you modify this code!
-        if (isDecoderInList(qualcommDecoderPrefixes, decoderInfo.getName())) {
-            // Examples of Qualcomm's vendor extensions for Snapdragon 845:
-            // https://cs.android.com/android/platform/superproject/+/master:hardware/qcom/sdm845/media/mm-video-v4l2/vidc/vdec/src/omx_vdec_extensions.hpp
-            // https://cs.android.com/android/_/android/platform/hardware/qcom/sm8150/media/+/0621ceb1c1b19564999db8293574a0e12952ff6c
-            //
-            // We will first try both, then try vendor.qti-ext-dec-low-latency.enable alone if that fails
-            if (tryNumber < 4) {
-                videoFormat.setInteger("vendor.qti-ext-dec-picture-order.enable", 1);
-                setNewOption = true;
-            }
-            if (tryNumber < 5) {
-                videoFormat.setInteger("vendor.qti-ext-dec-low-latency.enable", 1);
-                setNewOption = true;
-            }
-        }
-        else if (isDecoderInList(kirinDecoderPrefixes, decoderInfo.getName())) {
-            if (tryNumber < 4) {
-                // Kirin low latency options
-                // https://developer.huawei.com/consumer/cn/forum/topic/0202325564295980115
-                videoFormat.setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-req", 1);
-                videoFormat.setInteger("vendor.hisi-ext-low-latency-video-dec.video-scene-for-low-latency-rdy", -1);
-                setNewOption = true;
-            }
-        }
-        else if (isDecoderInList(exynosDecoderPrefixes, decoderInfo.getName())) {
-            if (tryNumber < 4) {
-                // Exynos low latency option for H.264 decoder
-                videoFormat.setInteger("vendor.rtc-ext-dec-low-latency.enable", 1);
-                setNewOption = true;
-            }
-        }
-        else if (isDecoderInList(amlogicDecoderPrefixes, decoderInfo.getName())) {
-            if (tryNumber < 4) {
-                // Amlogic low latency vendor extension
-                // https://github.com/codewalkerster/android_vendor_amlogic_common_prebuilt_libstagefrighthw/commit/41fefc4e035c476d58491324a5fe7666bfc2989e
-                videoFormat.setInteger("vendor.low-latency.enable", 1);
-                setNewOption = true;
-            }
-        }
-
-        return setNewOption;
+        return !options.isEmpty();
     }
 
     /**
@@ -643,7 +555,7 @@ public class MediaCodecHelper {
      *         enough that blocking the receive thread doesn't cost packet loss.
      */
     public static boolean decoderCanDirectSubmit(String decoderName) {
-        return isDecoderInList(directSubmitPrefixes, decoderName) && !isExynos4Device();
+        return isDecoderInList(directSubmitPrefixes, decoderName);
     }
 
     /**
@@ -1016,71 +928,5 @@ public class MediaCodecHelper {
         }
         
         return null;
-    }
-    
-    /**
-     * @return the contents of {@code /proc/cpuinfo}
-     * @throws Exception if it can't be read, which is increasingly common as the file gets locked
-     *                   down on newer Android versions
-     */
-    public static String readCpuinfo() throws Exception {
-        StringBuilder cpuInfo = new StringBuilder();
-        try (final BufferedReader br = new BufferedReader(new FileReader(new File("/proc/cpuinfo")))) {
-            for (;;) {
-                int ch = br.read();
-                if (ch == -1)
-                    break;
-                cpuInfo.append((char)ch);
-            }
-
-            return cpuInfo.toString();
-        }
-    }
-    
-    private static boolean stringContainsIgnoreCase(String string, String substring) {
-        return string.toLowerCase(Locale.ENGLISH).contains(substring.toLowerCase(Locale.ENGLISH));
-    }
-    
-    /**
-     * @return true if this is an Exynos 4 SoC, identified from {@code /proc/cpuinfo}. Its decoder
-     *         mishandles both direct submit and the constrained high profile flags, so it is
-     *         excluded from each.
-     */
-    public static boolean isExynos4Device() {
-        try {
-            // Try reading CPU info too look for 
-            String cpuInfo = readCpuinfo();
-            
-            // SMDK4xxx is Exynos 4 
-            if (stringContainsIgnoreCase(cpuInfo, "SMDK4")) {
-                LimeLog.info("Found SMDK4 in /proc/cpuinfo");
-                return true;
-            }
-            
-            // If we see "Exynos 4" also we'll count it
-            if (stringContainsIgnoreCase(cpuInfo, "Exynos 4")) {
-                LimeLog.info("Found Exynos 4 in /proc/cpuinfo");
-                return true;
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        
-        try {
-            File systemDir = new File("/sys/devices/system");
-            File[] files = systemDir.listFiles();
-            if (files != null) {
-                for (File f : files) {
-                    if (stringContainsIgnoreCase(f.getName(), "exynos4")) {
-                        LimeLog.info("Found exynos4 in /sys/devices/system");
-                        return true;
-                    }
-                }
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        
-        return false;
     }
 }

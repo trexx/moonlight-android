@@ -36,6 +36,7 @@ class VideoStatsTest {
         stats.presentationGapCount = 4;
         stats.worstPresentationGapNanos = 51000000;
         stats.totalFramesPresented = 55;
+        stats.longInputDequeues = 5;
         stats.measurementStartTimestamp = 1000;
         return stats;
     }
@@ -56,6 +57,7 @@ class VideoStatsTest {
             assertEquals(116, target.totalFramesReceived);
             assertEquals(114, target.totalFramesRendered);
             assertEquals(110, target.totalFramesPresented);
+            assertEquals(10, target.longInputDequeues);
             assertEquals(4, target.frameLossEvents);
             assertEquals(6, target.framesLost);
             assertEquals(3000, target.totalHostProcessingLatency);
@@ -228,6 +230,7 @@ class VideoStatsTest {
             assertEquals(source.presentationGapCount, target.presentationGapCount);
             assertEquals(source.worstPresentationGapNanos, target.worstPresentationGapNanos);
             assertEquals(source.totalFramesPresented, target.totalFramesPresented);
+            assertEquals(source.longInputDequeues, target.longInputDequeues);
             // copy() takes the timestamp verbatim where add() would have kept the earlier one
             assertEquals(source.measurementStartTimestamp, target.measurementStartTimestamp);
         }
@@ -286,6 +289,7 @@ class VideoStatsTest {
             assertEquals(0, stats.presentationGapCount);
             assertEquals(0, stats.worstPresentationGapNanos);
             assertEquals(0, stats.totalFramesPresented);
+            assertEquals(0, stats.longInputDequeues);
             assertEquals(0, stats.measurementStartTimestamp);
         }
 

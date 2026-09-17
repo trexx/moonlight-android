@@ -74,6 +74,12 @@ class VideoStats {
     // the released count by the frames still in flight; the session total is the number to trust.
     int totalFramesPresented;
 
+    // Input buffer dequeues that took 20 ms or more - the decoder refusing to accept the next
+    // frame promptly, which is what a backlog looks like from the submit thread. Counted rather
+    // than logged: this used to be a LimeLog line per slow dequeue, i.e. a string build on the
+    // receive thread up to sixty times a second at exactly the moment it was already behind.
+    int longInputDequeues;
+
     long measurementStartTimestamp;
 
     /**
@@ -110,6 +116,7 @@ class VideoStats {
         this.presentationGapCount += other.presentationGapCount;
         this.worstPresentationGapNanos = Math.max(this.worstPresentationGapNanos, other.worstPresentationGapNanos);
         this.totalFramesPresented += other.totalFramesPresented;
+        this.longInputDequeues += other.longInputDequeues;
 
         // Keeps the earlier of the two starts, so a summed window still spans from when the
         // oldest of its parts opened. Callers add in chronological order.
@@ -136,6 +143,7 @@ class VideoStats {
         this.presentationGapCount = other.presentationGapCount;
         this.worstPresentationGapNanos = other.worstPresentationGapNanos;
         this.totalFramesPresented = other.totalFramesPresented;
+        this.longInputDequeues = other.longInputDequeues;
         this.measurementStartTimestamp = other.measurementStartTimestamp;
     }
 
@@ -157,6 +165,7 @@ class VideoStats {
         this.presentationGapCount = 0;
         this.worstPresentationGapNanos = 0;
         this.totalFramesPresented = 0;
+        this.longInputDequeues = 0;
         this.measurementStartTimestamp = 0;
     }
 
