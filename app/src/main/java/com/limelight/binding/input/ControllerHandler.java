@@ -1016,11 +1016,17 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             // Unknown devices use the default context
             return defaultContext;
         }
-        else if (event.getDevice() == null) {
-            // During device removal, sometimes we can get events after the
-            // input device has been destroyed. In this case we'll see a
-            // != 0 device ID but no device attached.
-            return null;
+
+        // Return the existing context if it exists. This is the fast path for every motion and
+        // key event after the first from a device, and it deliberately runs before the
+        // getDevice() probe below: getDevice() is InputManager's cache lookup under a lock,
+        // which Game.handleMotionEvent() was already reworked to avoid on the per-event path.
+        // An event that arrives after its device is removed can still find the context here;
+        // that is harmless, since the packet it produces is absolute and onInputDeviceRemoved()
+        // drops the context.
+        InputDeviceContext context = inputDeviceContexts.get(event.getDeviceId());
+        if (context != null) {
+            return context;
         }
 
         // HACK for https://issuetracker.google.com/issues/163120692
@@ -1030,10 +1036,11 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             }
         }
 
-        // Return the existing context if it exists
-        InputDeviceContext context = inputDeviceContexts.get(event.getDeviceId());
-        if (context != null) {
-            return context;
+        if (event.getDevice() == null) {
+            // During device removal, sometimes we can get events after the
+            // input device has been destroyed. In this case we'll see a
+            // != 0 device ID but no device attached.
+            return null;
         }
 
         // Otherwise create a new context
@@ -2414,8 +2421,18 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         // Blocking merely time-shifts both presses; deferring drops the second one. A correct
         // fix needs the pending release to be cancelled when the same button goes down again.
         // Until that is written and tested on real hardware, blocking is the safer behaviour.
+        //
+        // Only worth it for a key the switch below actually maps. isGameControllerDevice() is
+        // true for every TV remote, so without the gate a remote's volume key blocked the UI
+        // thread for the full hold and then returned false to the keyboard path anyway.
+        //
+        // Measured from the event's own timestamps rather than the clock now, deliberately: the
+        // hold that matters is between the down packet and the up packet, and with the same
+        // dispatch latency on both events that is exactly eventTime - downTime. Reading
+        // uptimeMillis() here would subtract the down's latency from the hold instead.
         int buttonDownTime = (int)(event.getEventTime() - event.getDownTime());
-        if (buttonDownTime < ControllerHandler.MINIMUM_BUTTON_DOWN_TIME_MS)
+        if (buttonDownTime < ControllerHandler.MINIMUM_BUTTON_DOWN_TIME_MS &&
+                ControllerButtonKeys.isMappedOnRelease(keyCode, event.getScanCode(), context.hasPaddles))
         {
             try {
                 Thread.sleep(ControllerHandler.MINIMUM_BUTTON_DOWN_TIME_MS - buttonDownTime);
