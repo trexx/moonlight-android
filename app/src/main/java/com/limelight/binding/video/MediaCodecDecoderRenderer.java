@@ -189,8 +189,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private long minPresentIntervalNanos;
     private volatile Display vsyncDisplay;
     private volatile int rendererTid;
-    private PerformanceHintManager.Session perfHintSession;
+    // Created on the submit thread at the first IDR, closed on the presenting thread when its
+    // loop ends, read on both: volatile, and every reader copies it to a local first.
+    private volatile PerformanceHintManager.Session perfHintSession;
+    // Submit thread only. Set once the session has been created or refused, so the attempt is not
+    // repeated per IDR.
+    private boolean perfHintSessionAttempted;
     private long targetFrameTimeNanos;
+    // System.nanoTime() at the most recent startPicData(), written on the submit thread and read
+    // on the presenting thread, so the duration reported to ADPF spans the frame's whole journey
+    // through this process - submit, codec and release - rather than the release call alone.
+    // Only written while a session exists, so API 30 pays a null check and nothing else.
+    private volatile long lastSubmitNanos;
     private PreferenceConfiguration prefs;
 
     // Decoded frames waiting for a vsync to present on, in balanced pacing mode only. Bounded at
@@ -1214,9 +1224,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
     private void doFrameInternal(long frameTimeNanos) {
 
-        // Only read the clock when there's a hint session to report to, so devices without
-        // ADPF (the Shield, on Android 11) pay nothing for this.
-        long workStartNanos = (perfHintSession != null) ? System.nanoTime() : 0;
+        // Start of the window reported to ADPF, if a frame is presented below: when the most
+        // recent frame was handed to the submit thread. A volatile read, no clock.
+        long submitNanos = lastSubmitNanos;
+        boolean presented = false;
 
         // Queried per frame on purpose: see startChoreographerThread(). getDisplay() can
         // return null where the old getDefaultDisplay() could not, so tolerate that.
@@ -1259,6 +1270,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
                     lastRenderedFrameTimeNanos = frameTimeNanos;
                     activeWindowVideoStats.totalFramesRendered++;
+                    presented = true;
                 } catch (IllegalStateException ignored) {
                     try {
                         // Try to avoid leaking the output buffer by releasing it without rendering
@@ -1276,17 +1288,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         // be required even if the codec died before giving any output.
         doCodecRecoveryIfRequired(CR_FLAG_CHOREOGRAPHER);
 
-        // Tell the scheduler how long this frame actually took, so it can size clocks to our
-        // deadline. Reported before requesting the next callback so it reflects render work
-        // only. A non-positive duration is rejected by the API, so floor it at 1 ns.
+        // Tell the scheduler how long this frame took from submit to release, so it can size
+        // clocks to our deadline. Only when a frame was actually presented: a vsync that found
+        // the ring empty would otherwise report an ever-growing duration and ask for clocks the
+        // stream does not need. A non-positive duration is rejected by the API, so floor it at 1.
         //
         // The SDK_INT check is redundant at runtime - createPerformanceHintSession() returns early
         // below API 31, so a non-null session already implies the API level - but it is NOT dead
         // code and must stay. Lint's NewApi rule cannot infer the API level from the null check
         // and fails the release build without it, which is what CI gates on.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
-            long workDurationNanos = System.nanoTime() - workStartNanos;
-            perfHintSession.reportActualWorkDuration(Math.max(1, workDurationNanos));
+        PerformanceHintManager.Session session = perfHintSession;
+        if (presented && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && session != null) {
+            session.reportActualWorkDuration(Math.max(1, System.nanoTime() - submitNanos));
         }
 
         // Request another callback for next frame
@@ -1298,13 +1311,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      * path, telling the scheduler our per-frame deadline so it holds clocks there instead of
      * ramping reactively.
      *
-     * Called from whichever thread does the presenting: the Choreographer thread in BALANCED
-     * pacing, the renderer thread in every other mode. Process.myTid() therefore identifies
-     * the caller, and the renderer TID is folded in when they differ.
+     * Called once from the submit thread - moonlight-common-c's receive thread, which with
+     * direct submit also depacketizes, decrypts and queues into the codec - at the first IDR,
+     * by which point the renderer thread has published its TID. It used to be created from the
+     * presenting thread and cover that thread alone, with the reported window spanning only the
+     * release call: a few hundred microseconds against a 16.7 ms target, so every frame told the
+     * governor the app was idle and the heavy thread was not in the session at all. Now the
+     * session holds the submit thread, the renderer thread and, in BALANCED pacing, the
+     * Choreographer thread, and the window runs from submit to release (see lastSubmitNanos).
      *
-     * PerformanceHintManager is API 31, so this benefits the Homatics Box R 4K (Android 14)
-     * and does nothing on the Shield TV (Android 11). Failure is non-fatal: the session
-     * simply stays null and both report sites skip the clock read entirely.
+     * PerformanceHintManager is API 31, so this does nothing on an Android 11 box such as the
+     * Shield TV. Failure is non-fatal: the session simply stays null and both report sites skip
+     * the clock read entirely.
      */
     private void createPerformanceHintSession() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
@@ -1316,29 +1334,52 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return;
         }
 
-        // Include the renderer thread if it has published its TID and isn't us. When called
-        // from the renderer thread itself these are the same TID, and passing a duplicate
-        // would be rejected.
-        int selfTid = Process.myTid();
+        // Duplicates are rejected by the API, hence the distinct-TID checks
+        int submitTid = Process.myTid();
         int rTid = rendererTid;
-        int[] tids = (rTid != 0 && rTid != selfTid)
-                ? new int[] { selfTid, rTid }
-                : new int[] { selfTid };
+        int cTid = (choreographerHandlerThread != null) ? choreographerHandlerThread.getThreadId() : 0;
+        int[] tids;
+        if (cTid != 0 && cTid != rTid && cTid != submitTid) {
+            tids = new int[] { submitTid, rTid, cTid };
+        }
+        else if (rTid != 0 && rTid != submitTid) {
+            tids = new int[] { submitTid, rTid };
+        }
+        else {
+            tids = new int[] { submitTid };
+        }
 
         // Target one stream frame interval. refreshRate here is the *stream* frame rate
         // passed to setup(), not the display's.
         targetFrameTimeNanos = 1000000000L / refreshRate;
 
         try {
-            perfHintSession = hintManager.createHintSession(tids, targetFrameTimeNanos);
-            if (perfHintSession != null) {
+            PerformanceHintManager.Session session = hintManager.createHintSession(tids, targetFrameTimeNanos);
+            if (session != null) {
                 LimeLog.info("Created ADPF hint session with target " +
                         (targetFrameTimeNanos / 1000000.0) + " ms for " + tids.length + " threads");
             }
+            perfHintSession = session;
         } catch (Exception e) {
             // Device may not implement the hint API even on a supported API level
             LimeLog.warning("Unable to create ADPF hint session: " + e.getMessage());
             perfHintSession = null;
+        }
+    }
+
+    /**
+     * Closes the hint session, on the thread that reports to it, once that thread has stopped
+     * reporting. Closing it from the UI thread in {@link #prepareForStop} raced the report sites:
+     * a frame thread past its null check could call into a session whose native handle had just
+     * been freed.
+     */
+    private void closePerfHintSession() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            PerformanceHintManager.Session session = perfHintSession;
+            perfHintSession = null;
+            if (session != null) {
+                session.close();
+            }
         }
     }
 
@@ -1380,7 +1421,6 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         choreographerHandler.post(new Runnable() {
             @Override
             public void run() {
-                createPerformanceHintSession();
                 choreographer = Choreographer.getInstance();
                 choreographer.postFrameCallback(MediaCodecDecoderRenderer.this);
             }
@@ -1421,25 +1461,17 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_MAX_SMOOTHNESS ||
                         prefs.framePacing == PreferenceConfiguration.FRAME_PACING_CAP_FPS;
 
-                // In every pacing mode except BALANCED this thread does the presenting, so
-                // the hint session has to be created here. It used to be created only from
-                // startChoreographerThread(), which returns early unless pacing is BALANCED -
-                // meaning ADPF was dead code under the default 'latency' pacing.
-                if (!balancedPacing) {
-                    createPerformanceHintSession();
-                }
-
                 BufferInfo info = new BufferInfo();
                 while (!stopping) {
                     try {
                         // Try to output a frame
                         int outIndex = videoDecoder.dequeueOutputBuffer(info, 50000);
                         if (outIndex >= 0) {
-                            // Time the drain-and-present cycle for ADPF. Only read the clock
-                            // when there is a session to report to, so devices without ADPF
-                            // pay nothing. The dequeue above is excluded deliberately: it
-                            // blocks waiting for the decoder and is not our work.
-                            long workStartNanos = (perfHintSession != null) ? System.nanoTime() : 0;
+                            // Start of the window reported to ADPF: when the most recent frame
+                            // was handed to us. With one frame in flight that is this frame; with
+                            // two it is the newer one and the report runs short, which errs on the
+                            // side of not asking for clocks. A volatile read, no clock.
+                            long submitNanos = lastSubmitNanos;
 
                             long presentationTimeUs = info.presentationTimeUs;
                             int lastIndex = outIndex;
@@ -1501,10 +1533,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                 activeWindowVideoStats.totalFramesRendered++;
 
                                 // Redundant at runtime but required by lint's NewApi rule - see
-                                // the matching report in doFrame().
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
-                                    perfHintSession.reportActualWorkDuration(
-                                            Math.max(1, System.nanoTime() - workStartNanos));
+                                // the matching report in doFrame(). Copied to a local because the
+                                // field is cleared by closePerfHintSession() below.
+                                PerformanceHintManager.Session session = perfHintSession;
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && session != null) {
+                                    session.reportActualWorkDuration(
+                                            Math.max(1, System.nanoTime() - submitNanos));
                                 }
                             }
                             else {
@@ -1615,6 +1649,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                     } finally {
                         doCodecRecoveryIfRequired(CR_FLAG_RENDER_THREAD);
                     }
+                }
+
+                // This thread is the one reporting to the session in every mode but BALANCED,
+                // where the Choreographer thread closes it instead; see prepareForStop().
+                if (!balancedPacing) {
+                    closePerfHintSession();
                 }
             }
         };
@@ -1998,21 +2038,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             codecRecoveryMonitor.notifyAll();
         }
 
-        // Close the ADPF hint session before the threads it references go away. This happens
-        // here rather than on the Choreographer looper because that looper only exists in
-        // BALANCED pacing; in every other mode the session belongs to the renderer thread.
-        // Both report sites null-check and 'stopping' is already set above, so they will not
-        // touch the session after this point.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && perfHintSession != null) {
-            perfHintSession.close();
-            perfHintSession = null;
-        }
-
         // Post a quit message to the Choreographer looper (if we have one)
         if (choreographerHandler != null) {
             choreographerHandler.post(new Runnable() {
                 @Override
                 public void run() {
+                    // In BALANCED pacing this thread is the one reporting to the ADPF session,
+                    // so it closes it, after its last doFrame() and before its own exit. The
+                    // renderer thread does the same in every other mode.
+                    closePerfHintSession();
+
                     // Don't allow any further messages to be queued
                     choreographerHandlerThread.quit();
 
@@ -2536,6 +2571,14 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
      *         they were not required, or {@link #CSD_FAILED} if the caller must request an IDR
      */
     private int submitCsdBeforePicData() {
+        // Per IDR rather than per frame, and only until it has been tried once. The first frame
+        // of a stream is an IDR, and by then the renderer thread has long since published its
+        // TID; if it somehow has not, the next IDR retries.
+        if (!perfHintSessionAttempted && rendererTid != 0) {
+            perfHintSessionAttempted = true;
+            createPerformanceHintSession();
+        }
+
         if ((videoFormat & (MoonBridge.VIDEO_FORMAT_MASK_H264 | MoonBridge.VIDEO_FORMAT_MASK_H265)) == 0) {
             return CSD_NOT_NEEDED;
         }
@@ -2588,6 +2631,12 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                    char frameHostProcessingLatency, long receiveTimeUs, long enqueueTimeUs) {
         if (stopping) {
             return null;
+        }
+
+        // Opens the window ADPF is told about; see lastSubmitNanos. Null on API 30, so the clock
+        // is never read there.
+        if (perfHintSession != null) {
+            lastSubmitNanos = System.nanoTime();
         }
 
         updateFrameTracking(frameNumber, frameType);
