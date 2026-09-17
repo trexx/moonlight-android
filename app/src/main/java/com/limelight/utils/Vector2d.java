@@ -18,11 +18,17 @@ public class Vector2d {
         initialize(0, 0);
     }
     
-    /** Resets this vector's components, so one instance can be reused across events. */
+    /**
+     * Resets this vector's components, so one instance can be reused across events.
+     *
+     * <p>The squares are plain multiplies rather than {@code Math.pow(x, 2)}: this runs two to
+     * four times per stick event, and {@code pow} is a libm call that goes through the general
+     * exponent path even for an exponent of 2.
+     */
     public void initialize(float x, float y) {
         this.x = x;
         this.y = y;
-        this.magnitude = Math.sqrt(Math.pow(x, 2) + Math.pow(y, 2));
+        this.magnitude = Math.sqrt((double) x * x + (double) y * y);
     }
     
     /** @return the vector's length, which is what deadzone tests compare against */
