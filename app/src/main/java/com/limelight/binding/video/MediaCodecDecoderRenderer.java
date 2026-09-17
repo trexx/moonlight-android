@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -97,7 +96,10 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     private final ArrayList<byte[]> spsBuffers = new ArrayList<>();
     private final ArrayList<byte[]> ppsBuffers = new ArrayList<>();
     private boolean submittedCsd;
+    // What configureAndStartDecoder() sets KEY_HDR_STATIC_INFO from; null means no key. Owned by
+    // the policy below, which decides whether the decoder needs it at all.
     private byte[] currentHdrMetadata;
+    private final HdrMetadataPolicy hdrPolicy = new HdrMetadataPolicy();
 
     // Input buffer currently being filled by submitDecodeUnit(), held across calls because one
     // frame can arrive as several decode units
@@ -1642,6 +1644,18 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                                     LimeLog.info("Output format changed");
                                     outputFormat = videoDecoder.getOutputFormat();
                                     LimeLog.info("New output format: " + outputFormat);
+
+                                    // Whether the decoder parsed the bitstream's HDR metadata
+                                    // itself, which settles an announcement that arrived before
+                                    // this. Once or twice a stream; see HdrMetadataPolicy. A
+                                    // format that echoes the key this app configured is not
+                                    // evidence, hence the second argument.
+                                    if (hdrPolicy.onOutputFormat(
+                                            outputFormat.containsKey(MediaFormat.KEY_HDR_STATIC_INFO),
+                                            configuredFormat != null && configuredFormat.containsKey(MediaFormat.KEY_HDR_STATIC_INFO))
+                                            == HdrMetadataPolicy.Action.RESTART) {
+                                        requestHdrRestart();
+                                    }
                                     break;
                                 default:
                                     break;
@@ -2122,30 +2136,30 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
     /**
      * {@inheritDoc}
      *
-     * <p>The mastering metadata is part of the codec configuration, so a change means restarting
-     * the codec. The early returns matter: HDR mode is re-announced routinely, and restarting on
-     * every announcement would drop frames for no reason.
+     * <p>Whether a change needs the codec restarted is {@link HdrMetadataPolicy}'s call: only
+     * a decoder that does not publish static info from the bitstream needs
+     * {@code KEY_HDR_STATIC_INFO}, and that key can only be applied at {@code configure()}.
+     * Routine re-announcements never restart, and an announcement that arrives before the first
+     * output format is decided when that format does.
      *
      * @param hdrMetadata CTA-861.3 mastering display metadata, or null when HDR is off
      */
     @Override
     public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
-        // HDR metadata is only supported in Android 7.0 and later, so don't bother
-        // restarting the codec on anything earlier than that.
-        if (currentHdrMetadata != null && (!enabled || hdrMetadata == null)) {
-            currentHdrMetadata = null;
+        switch (hdrPolicy.onHdrMode(enabled, hdrMetadata)) {
+            case NONE -> { }
+            case DEFER -> LimeLog.info("HDR metadata announced before the first output format; deciding then");
+            case RESTART -> requestHdrRestart();
         }
-        else if (enabled && hdrMetadata != null && !Arrays.equals(currentHdrMetadata, hdrMetadata)) {
-            currentHdrMetadata = hdrMetadata;
-        }
-        else {
-            // Nothing to do
-            return;
-        }
+    }
 
-        // If we reach this point, we need to restart the MediaCodec instance to
-        // pick up the HDR metadata change. This will happen on the next input
-        // or output buffer.
+    /**
+     * Restarts the codec with {@link HdrMetadataPolicy#metadataToApply()} as its static info.
+     * The restart happens on the next input or output buffer, through the codec recovery path.
+     */
+    private void requestHdrRestart() {
+        currentHdrMetadata = hdrPolicy.metadataToApply();
+        LimeLog.info("Restarting decoder to " + (currentHdrMetadata != null ? "apply" : "clear") + " HDR static info");
 
         // HACK: Reset codec recovery attempt counter, since this is an expected "recovery"
         codecRecoveryAttempts = 0;
@@ -3363,6 +3377,7 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
         str += "Total frames received: "+renderer.globalVideoStats.totalFramesReceived+DELIMITER;
         str += "Total frames rendered: "+renderer.globalVideoStats.totalFramesRendered+DELIMITER;
         str += "Frame losses: "+renderer.globalVideoStats.framesLost+" in "+renderer.globalVideoStats.frameLossEvents+" loss events"+DELIMITER;
+        str += "HDR static info: "+renderer.hdrPolicy.describe()+DELIMITER;
         long[] videoRtp = MoonBridge.getRTPVideoStats();
         long[] audioRtp = MoonBridge.getRTPAudioStats();
         if (videoRtp != null) {

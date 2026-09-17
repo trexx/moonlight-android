@@ -1621,7 +1621,9 @@ There is a free detector for it: `doCodecRecoveryIfRequired()` sets `nextInputBu
 The repeatable provocation is `setHdrMode()`, which promotes to a full codec restart on every HDR
 metadata change and resets the attempt counter, so it never exhausts its retries. Toggle HDR on the
 Windows host with **Win+Alt+B** (or Settings → System → Display → Use HDR) ~20 times during a
-stream.
+stream. Since section 31 this only provokes on a box whose decoder does not publish HDR static
+info from the bitstream: read the summary's `HDR static info` line first, and on an `in-band` box
+use a different provocation.
 
 Preconditions, all of which silently produce zero recoveries if missed — check the log line, not
 the intent: HDR must be enabled in Moonlight's stream settings, the host display must be
@@ -2490,9 +2492,9 @@ consequences:
 
 - Do not read the loss counter as a network health signal on this box without checking the
   timestamp first. A loss at t+0 is this; a loss later is not.
-- The restart is avoidable in principle — the host announces HDR in the stream configuration, so
-  the codec could be configured with the metadata from the start rather than restarted 57 ms in.
-  Not attempted; it touches codec configuration, which is where the copy-free path lives.
+- The restart is avoidable on a decoder that parses the bitstream's own HDR metadata, and
+  section 31 makes that the rule: on such a decoder the key is never applied and this loss
+  event does not happen. On any other decoder it stays a fixed cost of starting an HDR stream.
 
 ### The decoder tail is the disconnect, not the stream
 
@@ -2771,6 +2773,48 @@ it would say whether "never drop" was ever more than an accident of the PTS base
 
 ---
 
+## 31. HDR static info from the bitstream
+
+Section 28 attributes a fixed 4-5 frame loss at t+57 ms of every HDR stream to `setHdrMode()`
+restarting the codec to apply `KEY_HDR_STATIC_INFO`, a configure-time key, after the host's
+mastering metadata arrives on the control stream. HEVC and AV1 carry the same metadata in-band;
+a decoder that parses it publishes `hdr-static-info` in its output format and attaches it to its
+buffers, which is what SurfaceFlinger drives the HDMI InfoFrame from, so on such a decoder the
+key and the restart are both redundant.
+
+`HdrMetadataPolicy` now decides from what the decoder publishes. An announcement that arrives
+before the first output format is deferred to it; a format carrying static info the codec was
+not configured with means the decoder parses the bitstream, and from then on no HDR change
+restarts it. Anything else gets exactly the old behaviour. The end-of-stream summary reports
+which branch the stream took as `HDR static info: in-band | via key | never announced`. The
+policy itself is pinned by `HdrMetadataPolicyTest`; what only a box can answer is below.
+
+**Not merged until an `in-band` box has been seen to enter HDR mode.** The risk is not latency:
+if a decoder publishes static info but the display pipeline still needed the key, the picture
+is SDR-mapped, and nothing on a JVM can tell.
+
+### Both boxes, HDR stream from the first frame
+
+- [ ] `adb shell setprop persist.log.tag '""'` on the Homatics first.
+- [ ] **Which branch.** The summary's `HDR static info` line; record it per box here. Logcat
+      shows either `HDR metadata announced before the first output format; deciding then` with
+      no `Restarting decoder to apply HDR static info` after it (in-band), or that line followed
+      by the restart (via key).
+- [ ] **In-band box: the TV is in HDR.** The TV's own indicator, and
+      `adb shell dumpsys SurfaceFlinger | grep -i -A2 'com.limelight'` showing an HDR dataspace
+      (BT2020 / ST2084) on the stream layer. Colours and brightness match the via-key picture
+      from before the change. If the TV stays in SDR, the rule is wrong for this decoder family:
+      record it here and the fix is a per-family exclusion, not a revert.
+- [ ] **In-band box: the loss event is gone.** No `Frame loss at t+0.0xx` and no
+      `Codec recovery attempt` in logcat; the summary's loss count for a clean session reads 0.
+- [ ] **Via-key box: nothing changed.** The t+57 ms restart and its 4-5 frame loss as in section
+      28, the TV in HDR as before.
+- [ ] **Toggle run**, section 16's provocation, twenty times: on an in-band box no restarts and a
+      correct picture after every toggle, SDR and HDR; on a via-key box one restart per toggle
+      as before.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2806,3 +2850,4 @@ it would say whether "never drop" was ever more than an accident of the PTS base
 | §23 Controllers screen | A device with no USB host support, or a build run with the feature absent, for the dependency-crash path |
 | §25 | The Homatics on a 1080p60 display, streaming H.264 — the Shield keeps RFI and never runs the patch |
 | §28 batches | Both batches re-run back to back, to separate HDR from a display renegotiation |
+| §31 | Both boxes on an HDR10 display, streaming HDR from the first frame; the Windows host for the toggle run |
