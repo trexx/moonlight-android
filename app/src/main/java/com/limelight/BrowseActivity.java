@@ -9,7 +9,6 @@ import java.util.HashSet;
 import java.util.List;
 
 import com.limelight.binding.PlatformBinding;
-import com.limelight.binding.crypto.AndroidCryptoProvider;
 import com.limelight.computers.ComputerManagerListener;
 import com.limelight.computers.ComputerManagerService;
 import com.limelight.grid.AppGridAdapter;
@@ -153,8 +152,9 @@ public class BrowseActivity extends Activity {
                     // Start updates
                     startComputerUpdates();
 
-                    // Force a keypair to be generated early to avoid discovery delays
-                    new AndroidCryptoProvider(BrowseActivity.this).getClientCertificate();
+                    // Force a keypair to be generated early to avoid discovery delays. Through
+                    // PlatformBinding so the parsed identity is the one every NvHTTP then shares.
+                    PlatformBinding.getCryptoProvider(BrowseActivity.this).getClientCertificate();
                 }
             }.start();
         }

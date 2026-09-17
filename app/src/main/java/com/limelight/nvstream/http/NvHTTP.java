@@ -93,8 +93,6 @@ public class NvHTTP {
     private OkHttpClient httpClientShortConnectTimeout;
 
     private X509TrustManager defaultTrustManager;
-    private X509TrustManager trustManager;
-    private X509KeyManager keyManager;
     private X509Certificate serverCert;
 
     void setServerCert(X509Certificate serverCert) {
@@ -121,7 +119,7 @@ public class NvHTTP {
     }
 
     private void initializeHttpState(final LimelightCryptoProvider cryptoProvider) {
-        keyManager = new X509KeyManager() {
+        X509KeyManager keyManager = new X509KeyManager() {
             public String chooseClientAlias(String[] keyTypes,
                     Principal[] issuers, Socket socket) { return "Limelight-RSA"; }
             public String chooseServerAlias(String keyType, Principal[] issuers,
@@ -137,7 +135,7 @@ public class NvHTTP {
         };
 
         defaultTrustManager = getDefaultTrustManager();
-        trustManager = new X509TrustManager() {
+        X509TrustManager trustManager = new X509TrustManager() {
             public X509Certificate[] getAcceptedIssuers() {
                 return new X509Certificate[0];
             }
@@ -183,8 +181,22 @@ public class NvHTTP {
             }
         };
 
+        // One SSL context for the life of this object. It used to be rebuilt, with a fresh
+        // SecureRandom, on every request - a workaround for an Android 4.x SSLv3 fallback that
+        // cannot occur at API 30. Besides the setup cost per call, a new context per request
+        // meant a new session cache per request, so TLS session resumption never happened and
+        // every call to the host paid a full handshake including the RSA client signature.
+        SSLContext sslContext;
+        try {
+            sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(new KeyManager[] { keyManager }, new TrustManager[] { trustManager }, new SecureRandom());
+        } catch (NoSuchAlgorithmException | KeyManagementException e) {
+            throw new RuntimeException(e);
+        }
+
         httpClientLongConnectTimeout = new OkHttpClient.Builder()
                 .connectionPool(new ConnectionPool(0, 1, TimeUnit.MILLISECONDS))
+                .sslSocketFactory(sslContext.getSocketFactory(), trustManager)
                 .hostnameVerifier(hv)
                 .readTimeout(READ_TIMEOUT, TimeUnit.MILLISECONDS)
                 .connectTimeout(LONG_CONNECTION_TIMEOUT, TimeUnit.MILLISECONDS)
@@ -427,22 +439,6 @@ public class NvHTTP {
 
     // This hack is Android-specific but we do it on all platforms
     // because it doesn't really matter
-    /**
-     * Installs a trust manager that accepts the host's pinned self-signed certificate, which
-     * Android's default one will not.
-     */
-    private OkHttpClient performAndroidTlsHack(OkHttpClient client) {
-        // Doing this each time we create a socket is required
-        // to avoid the SSLv3 fallback that causes connection failures
-        try {
-            SSLContext sc = SSLContext.getInstance("TLS");
-            sc.init(new KeyManager[] { keyManager }, new TrustManager[] { trustManager }, new SecureRandom());
-            return client.newBuilder().sslSocketFactory(sc.getSocketFactory(), trustManager).build();
-        } catch (NoSuchAlgorithmException | KeyManagementException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
     private HttpUrl getCompleteUrl(HttpUrl baseUrl, String path, String query) {
         return baseUrl.newBuilder()
                 .addPathSegment(path)
@@ -466,7 +462,7 @@ public class NvHTTP {
 
         Response response;
         try {
-            response = performAndroidTlsHack(client).newCall(request).execute();
+            response = client.newCall(request).execute();
         } catch (Exception e) {
             // OkHttp lets a bare InterruptedException escape its throws IOException contract, which
             // no caller here is able to catch. See HttpInterrupts for the mechanism. Catching
