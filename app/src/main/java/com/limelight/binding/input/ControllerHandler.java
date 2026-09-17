@@ -2311,7 +2311,13 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                         Sensor accelSensor = sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
                         if (reportRateHz != 0 && accelSensor != null) {
                             deviceContext.accelListener = createSensorListener(controllerNumber, motionType);
-                            sm.registerListener(deviceContext.accelListener, accelSensor, 1000000 / reportRateHz);
+                            // Delivered on the background thread, not the main looper: at the
+                            // 200 Hz cap, gyro plus accelerometer is up to 400 callbacks a second,
+                            // each a JNI send, and they were queued behind every controller, key
+                            // and touch event on the UI thread. The listener's state is its own,
+                            // and the native send takes its own lock.
+                            sm.registerListener(deviceContext.accelListener, accelSensor, 1000000 / reportRateHz,
+                                    backgroundThreadHandler);
                         }
                         break;
                     case MoonBridge.LI_MOTION_TYPE_GYRO:
@@ -2324,7 +2330,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                         Sensor gyroSensor = sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
                         if (reportRateHz != 0 && gyroSensor != null) {
                             deviceContext.gyroListener = createSensorListener(controllerNumber, motionType);
-                            sm.registerListener(deviceContext.gyroListener, gyroSensor, 1000000 / reportRateHz);
+                            // Background thread for the same reason as the accelerometer above
+                            sm.registerListener(deviceContext.gyroListener, gyroSensor, 1000000 / reportRateHz,
+                                    backgroundThreadHandler);
                         }
                         break;
                 }
@@ -2882,15 +2890,15 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         handleDeadZone(leftStickVector, context.leftStickDeadzoneRadius);
 
-        context.leftStickX = (short) (leftStickVector.getX() * 0x7FFE);
-        context.leftStickY = (short) (-leftStickVector.getY() * 0x7FFE);
+        short newLeftStickX = (short) (leftStickVector.getX() * 0x7FFE);
+        short newLeftStickY = (short) (-leftStickVector.getY() * 0x7FFE);
 
         Vector2d rightStickVector = populateCachedVector(context, rightStickX, rightStickY);
 
         handleDeadZone(rightStickVector, context.rightStickDeadzoneRadius);
 
-        context.rightStickX = (short) (rightStickVector.getX() * 0x7FFE);
-        context.rightStickY = (short) (-rightStickVector.getY() * 0x7FFE);
+        short newRightStickX = (short) (rightStickVector.getX() * 0x7FFE);
+        short newRightStickY = (short) (-rightStickVector.getY() * 0x7FFE);
 
         if (leftTrigger <= context.triggerDeadzone) {
             leftTrigger = 0;
@@ -2899,9 +2907,34 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             rightTrigger = 0;
         }
 
-        context.leftTrigger = (byte)(leftTrigger * 0xFF);
-        context.rightTrigger = (byte)(rightTrigger * 0xFF);
+        byte newLeftTrigger = (byte)(leftTrigger * 0xFF);
+        byte newRightTrigger = (byte)(rightTrigger * 0xFF);
 
+        // A driven pad reports on its own schedule, changed or not - a Pro Controller in 0x30
+        // mode at ~120 Hz once its IMU is on - and each report used to become a JNI call, two
+        // native mutex acquisitions, a queue insert and a UDP packet with the pad untouched. The
+        // framework path never had this problem, because Android only delivers a motion event
+        // when an axis moves. Compare after the deadzone, so stick noise inside it is idle too.
+        //
+        // Per context, deliberately: sendControllerInputPacket() merges every context sharing
+        // this controller number, and a change on one of those is reported by that context's
+        // own next call, so nothing is hidden by skipping an unchanged report from this one.
+        // The first report always goes through, so the host sees the pad's state at arrival.
+        if (context.hasReportedState &&
+                buttonFlags == context.inputMap &&
+                newLeftStickX == context.leftStickX && newLeftStickY == context.leftStickY &&
+                newRightStickX == context.rightStickX && newRightStickY == context.rightStickY &&
+                newLeftTrigger == context.leftTrigger && newRightTrigger == context.rightTrigger) {
+            return;
+        }
+        context.hasReportedState = true;
+
+        context.leftStickX = newLeftStickX;
+        context.leftStickY = newLeftStickY;
+        context.rightStickX = newRightStickX;
+        context.rightStickY = newRightStickY;
+        context.leftTrigger = newLeftTrigger;
+        context.rightTrigger = newRightTrigger;
         context.inputMap = buttonFlags;
 
         sendControllerInputPacket(context);
@@ -3004,6 +3037,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         public boolean assignedControllerNumber;
         public boolean reservedControllerNumber;
         public short controllerNumber;
+
+        // Whether reportControllerState() has sent this context's state at least once; see the
+        // unchanged-report check there. USB-driven contexts only.
+        public boolean hasReportedState;
 
         public int inputMap = 0;
         public byte leftTrigger = 0x00;
