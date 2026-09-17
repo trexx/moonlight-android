@@ -1,6 +1,7 @@
 package com.limelight.binding.video;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 
@@ -340,7 +341,24 @@ public class MediaCodecHelper {
         return false;
     }
 
+    // Answers per decoder name, for the life of the process. Probing means instantiating and
+    // releasing a real MediaCodec, and it was done from the decoder's constructor for HEVC and
+    // again for AV1 at every stream start, on the path to first frame. A decoder's vendor
+    // parameters do not change at runtime.
+    private static final HashMap<String, Boolean> vendorLowLatencyProbeResults = new HashMap<>();
+
     private static boolean decoderSupportsKnownVendorLowLatencyOption(String decoderName) {
+        Boolean cached = vendorLowLatencyProbeResults.get(decoderName);
+        if (cached != null) {
+            return cached;
+        }
+
+        boolean supported = probeKnownVendorLowLatencyOption(decoderName);
+        vendorLowLatencyProbeResults.put(decoderName, supported);
+        return supported;
+    }
+
+    private static boolean probeKnownVendorLowLatencyOption(String decoderName) {
         // It's only possible to probe vendor parameters on Android 12 and above.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaCodec testCodec = null;
@@ -641,13 +659,23 @@ public class MediaCodecHelper {
         return false;
     }
 
+    // Built once per process. Constructing a MediaCodecList enumerates every codec through the
+    // media server, and this was called twice per lookup for each of AVC, HEVC and AV1 at every
+    // stream start. The set of codecs on a device does not change at runtime.
+    private static LinkedList<MediaCodecInfo> cachedCodecList;
+
     @SuppressWarnings("deprecation")
     @SuppressLint("NewApi")
     private static LinkedList<MediaCodecInfo> getMediaCodecList() {
-        LinkedList<MediaCodecInfo> infoList = new LinkedList<>();
+        LinkedList<MediaCodecInfo> infoList = cachedCodecList;
+        if (infoList == null) {
+            infoList = new LinkedList<>();
 
-        MediaCodecList mcl = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
-        Collections.addAll(infoList, mcl.getCodecInfos());
+            MediaCodecList mcl = new MediaCodecList(MediaCodecList.REGULAR_CODECS);
+            Collections.addAll(infoList, mcl.getCodecInfos());
+
+            cachedCodecList = infoList;
+        }
 
         return infoList;
     }

@@ -2593,15 +2593,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
             return CSD_FAILED;
         }
 
-        // Submit all CSD when we receive the first non-CSD blob in an IDR frame
-        for (byte[] vpsBuffer : vpsBuffers) {
-            nextInputBuffer.put(vpsBuffer);
+        // Submit all CSD when we receive the first non-CSD blob in an IDR frame. Indexed rather
+        // than enhanced-for: this runs per IDR, and each enhanced loop allocated an iterator.
+        for (int i = 0; i < vpsBuffers.size(); i++) {
+            nextInputBuffer.put(vpsBuffers.get(i));
         }
-        for (byte[] spsBuffer : spsBuffers) {
-            nextInputBuffer.put(spsBuffer);
+        for (int i = 0; i < spsBuffers.size(); i++) {
+            nextInputBuffer.put(spsBuffers.get(i));
         }
-        for (byte[] ppsBuffer : ppsBuffers) {
-            nextInputBuffer.put(ppsBuffer);
+        for (int i = 0; i < ppsBuffers.size(); i++) {
+            nextInputBuffer.put(ppsBuffers.get(i));
         }
 
         if (!queueNextInputBuffer(0, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)) {
@@ -2835,14 +2836,16 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
                 // a later reader outside DEBUG would get a plausible wrong number.
                 int positionBeforeCsd = BuildConfig.DEBUG ? nextInputBuffer.position() : 0;
 
-                for (byte[] vpsBuffer : vpsBuffers) {
-                    nextInputBuffer.put(vpsBuffer);
+                // Indexed rather than enhanced-for, as in submitCsdBeforePicData(): per IDR,
+                // and each enhanced loop allocated an iterator
+                for (int i = 0; i < vpsBuffers.size(); i++) {
+                    nextInputBuffer.put(vpsBuffers.get(i));
                 }
-                for (byte[] spsBuffer : spsBuffers) {
-                    nextInputBuffer.put(spsBuffer);
+                for (int i = 0; i < spsBuffers.size(); i++) {
+                    nextInputBuffer.put(spsBuffers.get(i));
                 }
-                for (byte[] ppsBuffer : ppsBuffers) {
-                    nextInputBuffer.put(ppsBuffer);
+                for (int i = 0; i < ppsBuffers.size(); i++) {
+                    nextInputBuffer.put(ppsBuffers.get(i));
                 }
 
                 if (BuildConfig.DEBUG) {
