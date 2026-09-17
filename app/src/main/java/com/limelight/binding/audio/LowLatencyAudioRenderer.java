@@ -10,9 +10,15 @@ import com.limelight.nvstream.jni.MoonBridge;
 /**
  * Chooses between the native AAudio output path and the long-standing AudioTrack one.
  *
- * AudioTrack remains the default and is used unchanged unless the user has explicitly opted into
- * AAudio, every precondition holds, and the stream actually opens. If any of that fails we fall
- * straight back, so enabling the option can degrade to today's behaviour but never below it.
+ * AudioTrack is tried first unless the user has explicitly opted into AAudio. But a track is only
+ * kept if the platform actually granted it the fast mixer path: some TV boxes decline the request
+ * silently and put the track on the deep-buffer output, which section 3 of HARDWARE_TESTING.md
+ * measured at 169.6 ms on the Homatics against 22.6 ms for AAudio on the same box. A track that
+ * reports anything but {@code PERFORMANCE_MODE_LOW_LATENCY} is therefore released and AAudio
+ * tried in its place, falling back to the deep-buffer track only if AAudio will not open. On a box
+ * that does grant the fast path - the Shield, where AAudio measured slightly worse - nothing
+ * changes. The rule is about what the platform granted, not which box this is, so it holds on
+ * hardware nobody has measured yet.
  *
  * <p>That choice is remade only when the local output is rebuilt: at setup, and each time the
  * audio comes back from a pad to the TV. Route changes — HDMI replug or mode change, switching to
@@ -50,8 +56,8 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
     private boolean padsHadAudio;
 
     /**
-     * @param enableAAudio user opt-in. AAudio is never used without it, since the AudioTrack
-     *                     path is the better-tested one on most devices.
+     * @param enableAAudio user opt-in, which puts AAudio first. Without it AAudio is still used
+     *                     when AudioTrack is denied the fast path; see the class comment.
      * @param padAudioSink pads currently taking the audio instead of the TV. Starts empty and is
      *                     populated from the in-game menu, so with no pad enabled the local output
      *                     below behaves exactly as it did before this existed.
@@ -61,12 +67,8 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
         this.padAudioSink = padAudioSink;
     }
 
-    /** @return true if every precondition for the AAudio path holds for this stream */
-    private boolean shouldTryAAudio(MoonBridge.AudioConfiguration audioConfiguration) {
-        if (!enableAAudio) {
-            return false;
-        }
-
+    /** @return true if the AAudio path can carry this stream's format on this platform */
+    private boolean aaudioUsable(MoonBridge.AudioConfiguration audioConfiguration) {
         // AAudioStreamBuilder_setChannelMask() only exists from API 32. Without it a surround
         // stream has no defined speaker layout, which silences everything but front left/right.
         // Stereo is unambiguous from the channel count alone, so it's still fine below 32.
@@ -108,26 +110,44 @@ public class LowLatencyAudioRenderer implements AudioRenderer {
      * @return 0 on success, matching {@link #setup}'s contract
      */
     private int openLocalRenderer() {
-        if (shouldTryAAudio(audioConfiguration)) {
-            NativeAAudioRenderer candidate = new NativeAAudioRenderer();
-            if (candidate.setup(audioConfiguration, sampleRate, samplesPerFrame) == 0) {
-                LimeLog.info("Using native AAudio renderer");
-                renderer = candidate;
+        boolean aaudioUsable = aaudioUsable(audioConfiguration);
+
+        if (enableAAudio && aaudioUsable && openAAudio()) {
+            return 0;
+        }
+
+        AndroidAudioRenderer track = new AndroidAudioRenderer();
+        int result = track.setup(audioConfiguration, sampleRate, samplesPerFrame);
+        if (result != 0) {
+            return result;
+        }
+
+        // The track opened but on the deep-buffer output. That is the case AAudio exists for, so
+        // try it now; only if it will not open does the deep-buffer track stay.
+        if (!track.hasFastPath() && aaudioUsable && !enableAAudio) {
+            LimeLog.info("AudioTrack was denied the fast path; trying AAudio");
+            if (openAAudio()) {
+                track.cleanup();
                 return 0;
             }
-
-            LimeLog.warning("AAudio setup failed, falling back to AudioTrack");
-            candidate.cleanup();
         }
 
-        AudioRenderer fallback = new AndroidAudioRenderer();
-        int result = fallback.setup(audioConfiguration, sampleRate, samplesPerFrame);
+        renderer = track;
+        return 0;
+    }
 
-        if (result == 0) {
-            renderer = fallback;
+    /** @return true if an AAudio stream opened and is now {@link #renderer} */
+    private boolean openAAudio() {
+        NativeAAudioRenderer candidate = new NativeAAudioRenderer();
+        if (candidate.setup(audioConfiguration, sampleRate, samplesPerFrame) == 0) {
+            LimeLog.info("Using native AAudio renderer");
+            renderer = candidate;
+            return true;
         }
 
-        return result;
+        LimeLog.warning("AAudio setup failed, falling back to AudioTrack");
+        candidate.cleanup();
+        return false;
     }
 
     /**

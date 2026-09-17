@@ -26,6 +26,20 @@ public class AndroidAudioRenderer implements AudioRenderer {
 
     private AudioTrack track;
 
+    // Whether the platform actually granted PERFORMANCE_MODE_LOW_LATENCY, as opposed to it
+    // having been requested. Asking is free; some TV boxes decline silently and land the track on
+    // the deep-buffer output, which is where section 3's 169.6 ms on the Homatics came from.
+    private boolean fastPath;
+
+    /**
+     * @return true if the track runs on the fast mixer path. False after a successful
+     *         {@link #setup} means the deep-buffer output, and is the cue for
+     *         {@link LowLatencyAudioRenderer} to try AAudio instead.
+     */
+    public boolean hasFastPath() {
+        return fastPath;
+    }
+
     /**
      * @param lowLatency request {@code PERFORMANCE_MODE_LOW_LATENCY}, which the platform may
      *                   silently decline
@@ -120,8 +134,14 @@ public class AndroidAudioRenderer implements AudioRenderer {
                 track = createAudioTrack(channelConfig, sampleRate, bufferSize, lowLatency);
                 track.play();
 
-                // Successfully created working AudioTrack. We're done here.
-                LimeLog.info("Audio track configuration: "+bufferSize+" "+lowLatency);
+                // Successfully created working AudioTrack. We're done here. Log what was granted
+                // beside what was asked for: the buffer the platform actually allocated and the
+                // performance mode it settled on are the two numbers that explain audio latency
+                // on a box, and neither is visible any other way.
+                fastPath = track.getPerformanceMode() == AudioTrack.PERFORMANCE_MODE_LOW_LATENCY;
+                LimeLog.info("Audio track configuration: "+bufferSize+" "+lowLatency+
+                        ", granted "+track.getBufferSizeInFrames()+" frames, performance mode "+
+                        track.getPerformanceMode());
                 break;
             } catch (Exception e) {
                 // Try to release the AudioTrack if we got far enough
