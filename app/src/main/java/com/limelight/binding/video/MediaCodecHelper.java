@@ -425,13 +425,15 @@ public class MediaCodecHelper {
      * feature support and writes the keys.
      *
      * @param tryNumber attempt counter, starting at 0
+     * @param fps       the stream frame rate, for {@code KEY_OPERATING_RATE}
      * @return true if this attempt set any options. False means the options are exhausted and a
      *         configuration failure now is a real failure.
      */
-    public static boolean setDecoderLowLatencyOptions(MediaFormat videoFormat, MediaCodecInfo decoderInfo, int tryNumber) {
+    public static boolean setDecoderLowLatencyOptions(MediaFormat videoFormat, MediaCodecInfo decoderInfo, int tryNumber, int fps) {
         List<LowLatencyOptions.Option> options = LowLatencyOptions.forTry(tryNumber,
                 lowLatencyFamily(decoderInfo.getName()),
-                decoderSupportsAndroidRLowLatency(decoderInfo, videoFormat.getString(MediaFormat.KEY_MIME)));
+                decoderSupportsAndroidRLowLatency(decoderInfo, videoFormat.getString(MediaFormat.KEY_MIME)),
+                fps);
         for (LowLatencyOptions.Option option : options) {
             videoFormat.setInteger(option.key(), option.value());
         }

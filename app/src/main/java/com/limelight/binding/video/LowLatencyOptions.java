@@ -42,10 +42,15 @@ final class LowLatencyOptions {
     static final String KEY_VDEC_LOW_LATENCY = "vdec-lowlatency";
     // MediaFormat.KEY_PRIORITY: 0 is realtime.
     static final String KEY_PRIORITY = "priority";
-    // MediaFormat.KEY_OPERATING_RATE. Qualcomm only, at maximum: on those platforms it lowers
-    // latency measurably (still significant on a Pixel 2), but a decoder that cannot meet a
-    // ludicrous rate crashes - reliably on the Snapdragon 765G (Mi 10 Lite, Redmi K30i) - so
-    // every other family gets KEY_PRIORITY instead.
+    // MediaFormat.KEY_OPERATING_RATE. On Qualcomm it is set to the maximum, alone: on those
+    // platforms it lowers latency measurably (still significant on a Pixel 2), but a decoder
+    // that cannot meet a ludicrous rate crashes - reliably on the Snapdragon 765G (Mi 10 Lite,
+    // Redmi K30i) - so no other family gets that value. Every other family gets the actual
+    // stream rate alongside KEY_PRIORITY, which is a different request: not "run as fast as you
+    // can" but "this is the rate to size your clocks for", so the codec can pick a DVFS point up
+    // front instead of ramping into the first seconds of the stream. ACodec and Codec2 both
+    // treat a rate the decoder cannot honour as a logged failure to apply, not a configure
+    // error, so it does not cost a rung.
     static final String KEY_OPERATING_RATE = "operating-rate";
     static final int MAX_OPERATING_RATE = Short.MAX_VALUE;
 
@@ -71,10 +76,11 @@ final class LowLatencyOptions {
      * @param tryNumber         configure attempt, from 0
      * @param family            the decoder's vendor family
      * @param featureLowLatency whether the decoder advertises {@code FEATURE_LowLatency}
+     * @param fps               the stream frame rate, for {@code KEY_OPERATING_RATE}
      * @return the options to set for this attempt. Empty means the ladder is exhausted: configure
      *         with no options, and treat a failure then as a real failure.
      */
-    static List<Option> forTry(int tryNumber, Family family, boolean featureLowLatency) {
+    static List<Option> forTry(int tryNumber, Family family, boolean featureLowLatency, int fps) {
         List<Option> options = new ArrayList<>();
         int rung = tryNumber;
 
@@ -82,7 +88,7 @@ final class LowLatencyOptions {
             if (rung == 0) {
                 // The official key plus the vendor key and priority. See the class comment.
                 options.add(new Option(KEY_LOW_LATENCY, 1));
-                addPriority(options, family);
+                addPriority(options, family, fps);
                 addVendorKeys(options, family, 0);
                 return options;
             }
@@ -103,17 +109,18 @@ final class LowLatencyOptions {
             options.add(new Option(KEY_VDEC_LOW_LATENCY, 1));
         }
         if (rung < 3) {
-            addPriority(options, family);
+            addPriority(options, family, fps);
         }
         addVendorKeys(options, family, rung);
         return options;
     }
 
-    private static void addPriority(List<Option> options, Family family) {
+    private static void addPriority(List<Option> options, Family family, int fps) {
         if (family == Family.QUALCOMM) {
             options.add(new Option(KEY_OPERATING_RATE, MAX_OPERATING_RATE));
         } else {
             options.add(new Option(KEY_PRIORITY, 0));
+            options.add(new Option(KEY_OPERATING_RATE, fps));
         }
     }
 
