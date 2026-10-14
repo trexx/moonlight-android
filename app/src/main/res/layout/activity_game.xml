@@ -122,4 +122,38 @@
         android:preferKeepClear="true"
         android:visibility="gone" />
 
+    <!--
+      Every controller's battery, along the bottom edge for as long as the in-game menu is up.
+      Styled like the version label on the settings screen - small, end-aligned, secondary in
+      weight - because that is what it is: a glance's worth of status, not a control. Game fills it
+      before each menu level opens and GameMenu takes it down when its last dialog closes.
+
+      Never focused, like the echo above: the menu's dialog owns focus for as long as this is
+      visible. The two bottom overlays are never up together - the dialog window takes focus, which
+      dismisses the soft keyboard - so they can share the edge.
+
+      The dialog dims what is behind it, this included, which is why the text is the primary colour
+      rather than the secondary one the settings label uses: secondary through a 60% dim is too
+      faint from the sofa. Not single-line, so four pads wrap rather than truncate.
+
+      A child View of this window, not a new layer - see the comment above performanceOverlay for
+      why even a layer would cost nothing here.
+    -->
+    <TextView
+        android:id="@+id/controllerBatteryOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:gravity="end"
+        android:textAppearance="?android:attr/textAppearanceSmall"
+        android:textColor="?android:attr/textColorPrimary"
+        android:background="#B0000000"
+        android:focusable="false"
+        android:preferKeepClear="true"
+        android:visibility="gone" />
+
 </merge>
