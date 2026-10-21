@@ -23,10 +23,24 @@ public class GipController extends AbstractController{
     // Native controller instance owned by the driver, valid until the driver removes it
     private final long handle;
 
-    /** @param handle native controller instance supplied by the dongle's driver */
-    public GipController(int deviceId, UsbDriverListener listener, int vendorId, int productId, long handle) {
+    // The user's guide LED choice, and the last command sent for it. Seeded with what
+    // startDevice() sends so a first battery report that maps to the same thing is not sent
+    // twice. Touched only on the driver's read thread - updateBattery() is the sole writer - so
+    // it needs no synchronisation.
+    private final GuideButtonLed guideButtonLed;
+    private GuideButtonLed.State ledSent;
+
+    /**
+     * @param handle         native controller instance supplied by the dongle's driver
+     * @param guideButtonLed the guide LED choice; its starting intensity has already gone to the
+     *                       native side with the transport, this is for what follows
+     */
+    public GipController(int deviceId, UsbDriverListener listener, int vendorId, int productId,
+                         long handle, GuideButtonLed guideButtonLed) {
         super(deviceId, listener, vendorId, productId);
         this.handle = handle;
+        this.guideButtonLed = guideButtonLed;
+        this.ledSent = guideButtonLed.startState();
 
         // An Xbox pad however it is attached, so it declares what every other Xbox pad does. It
         // extends AbstractController rather than AbstractXboxController because the transport below
@@ -89,9 +103,9 @@ public class GipController extends AbstractController{
     }
 
     /**
-     * Called from the native driver when the controller's battery state changes, with the raw GIP
-     * values. The mapping lives here rather than in the driver because the constants it maps onto
-     * are Moonlight's.
+     * Called from the native driver, on its read thread, when the controller's battery state
+     * changes, with the raw GIP values. The mapping lives here rather than in the driver because
+     * the constants it maps onto are Moonlight's.
      *
      * <p>The status byte packs four fields (MS-GIPUSB Table 30). Type says what kind of battery is
      * fitted, <em>not</em> whether it is charging — that is a separate field, which xow's struct
@@ -99,11 +113,16 @@ public class GipController extends AbstractController{
      * battery at all: the pad is running off the cable. xow's enum calls that value
      * {@code BATT_TYPE_CHARGING}, which is a misnomer the spec settles.
      *
+     * <p>Also where the guide LED follows the battery, when the setting says so — see
+     * {@link #followBatteryLed}.
+     *
      * @param type   GIP battery type: 0 absent or bus powered, 1 standard, 2 rechargeable
      * @param level  GIP battery level, 0 to 3, meaningless when {@code type} is 0
      * @param charge GIP charge state: 0 not charging, 1 charging, 2 charge error
      */
     public void updateBattery(byte type, byte level, byte charge) {
+        followBatteryLed(type, level);
+
         // No battery fitted: the pad is running off the cable, and its level means nothing
         if (type == 0) {
             reportBattery(MoonBridge.LI_BATTERY_STATE_NOT_CHARGING,
@@ -133,6 +152,33 @@ public class GipController extends AbstractController{
         }
 
         reportBattery(state, percentage);
+    }
+
+    /**
+     * Steps the guide LED with the battery, when the user's choice is to follow it.
+     *
+     * <p>Deduplicated against the last command sent because the driver reports on any change in
+     * the status byte - charge state and power level included - and only the level and the
+     * battery type move the LED. A send the pad refused is not recorded, so the next report
+     * retries it.
+     *
+     * <p>Runs inside the battery callback, on the driver's read thread: the same thread
+     * {@code startDevice()} sends the first LED command from, so this adds no new cross-thread
+     * sender to the native side.
+     */
+    private void followBatteryLed(byte type, byte level) {
+        if (!guideButtonLed.followsBattery()) {
+            return;
+        }
+
+        var next = GuideButtonLed.forBattery(type, level);
+        if (next.equals(ledSent)) {
+            return;
+        }
+
+        if (setLedNative(handle, next.pattern(), next.intensity())) {
+            ledSent = next;
+        }
     }
 
     /**
@@ -239,5 +285,14 @@ public class GipController extends AbstractController{
     native void queueAudioNative(long handle, short[] samples, int count);
     native void sendRumble(long handle, short lowFreqMotor, short highFreqMotor);
     native void sendrumbleTriggers(long handle, short leftTrigger, short rightTrigger);
+    /**
+     * Sends a guide LED command, or stores it for {@code startDevice()} if the pad is not started
+     * yet.
+     *
+     * @param pattern    one of {@code GuideButtonLed.PATTERN_*}; anything else is refused
+     * @param brightness 0 to {@code GuideButtonLed.INTENSITY_MAX}; clamped natively
+     * @return whether the pad took it, or it was stored to be sent at start
+     */
+    native boolean setLedNative(long handle, int pattern, int brightness);
 
 }

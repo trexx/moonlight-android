@@ -115,4 +115,31 @@ public final class GameMenuLayout {
     private static boolean padAudioAvailable(State state) {
         return state.hasGipPads() && state.padAudioFormatSupported();
     }
+
+    /** {@link #padNumber} for a pad the host has not been told about yet. */
+    public static final int PAD_UNNUMBERED = 0;
+
+    /**
+     * The number a pad-audio row shows for a pad: the host's player number, so it is the number
+     * the game on the host uses for that pad, and the same one the battery label along the
+     * bottom of the screen uses. The rows used to count pads by their position in the driver's
+     * list, which disagreed with both whenever an Android-enumerated pad held a slot.
+     *
+     * <p>Two cases fall back. A pad is numbered on its first input report, not before, so a
+     * paired pad nobody has touched has no number yet and is reported as
+     * {@link #PAD_UNNUMBERED} for the row to say so - pressing anything on it numbers it. With
+     * multi-controller off every pad is player 0, so player numbers would make every row
+     * "Controller 1"; that mode keeps the positional count, which at least tells the rows apart.
+     *
+     * @param multiController the multi-controller setting
+     * @param playerNumber    the pad's 0-based player number, or negative if it has none yet
+     * @param position        the pad's 1-based position in the driver's list
+     * @return the 1-based number to show, or {@link #PAD_UNNUMBERED}
+     */
+    public static int padNumber(boolean multiController, int playerNumber, int position) {
+        if (!multiController) {
+            return position;
+        }
+        return playerNumber < 0 ? PAD_UNNUMBERED : playerNumber + 1;
+    }
 }

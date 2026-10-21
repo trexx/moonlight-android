@@ -145,6 +145,11 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     private final SparseArray<InputDeviceContext> inputDeviceContexts = new SparseArray<>();
     private final SparseArray<UsbDeviceContext> usbDeviceContexts = new SparseArray<>();
 
+    // What the in-game menu's battery label reads. Kept apart from the contexts above because
+    // those are touched from the USB driver thread (deviceAdded) and the label reads on the UI
+    // thread; iterating a SparseArray across that pair is a race, this store is not.
+    private final ControllerBatteries batteries = new ControllerBatteries();
+
     private final NvConnection conn;
     private final Activity activityContext;
     private final double stickDeadzone;
@@ -448,6 +453,15 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         if (context.reservedControllerNumber) {
             LimeLog.info("Controller number "+context.controllerNumber+" is now available");
             currentControllers &= ~(1 << context.controllerNumber);
+
+            // Only a reserved number is a pad's own. With multi-controller off every pad shares
+            // number 0, the last reporter's battery is the one shown, and nothing clears it until
+            // the stream ends - accepted, since that mode merges the pads for the host too.
+            batteries.clear(context.controllerNumber);
+        }
+
+        if (context instanceof UsbDeviceContext usbContext) {
+            usbContext.device.setPlayerNumber(AbstractController.NO_PLAYER_NUMBER);
         }
 
         // If this device sent data as a gamepad, zero the values before removing.
@@ -603,6 +617,35 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         // Report attributes of this new controller to the host
         context.sendControllerArrival();
+
+        if (context instanceof UsbDeviceContext usbContext) {
+            // The game menu names a pad by this number, and holds only the controller
+            usbContext.device.setPlayerNumber(context.controllerNumber);
+
+            // A GIP pad's first status packet usually lands before its first input report, which
+            // is what brought us here, so its battery was cached rather than sent - see
+            // reportControllerBattery. Now that the pad has a number, hand it on.
+            if (usbContext.hasBatteryReading) {
+                publishBattery(usbContext, usbContext.batteryState, usbContext.batteryPercentage);
+            }
+        }
+    }
+
+    /**
+     * Reports a controller's battery to the host and to the in-game menu's label together, so the
+     * two never disagree about a pad.
+     */
+    private void publishBattery(GenericControllerContext context, byte state, byte percentage) {
+        conn.sendControllerBatteryEvent((byte) context.controllerNumber, state, percentage);
+        batteries.update(context.controllerNumber, state, percentage);
+    }
+
+    /**
+     * @return every controller with a battery reading worth showing, in player order. For the
+     *         in-game menu's label; safe to call from the UI thread.
+     */
+    public List<ControllerBatteries.Reading> batterySnapshot() {
+        return batteries.snapshot();
     }
 
     /**
@@ -1157,42 +1200,25 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         if (currentBatteryStatus != context.lastReportedBatteryStatus ||
                 !areBatteryCapacitiesEqual(currentBatteryCapacity, context.lastReportedBatteryCapacity)) {
-            byte state;
-            byte percentage;
-
-            switch (currentBatteryStatus) {
-                case BatteryState.STATUS_UNKNOWN:
-                    state = MoonBridge.LI_BATTERY_STATE_UNKNOWN;
-                    break;
-
-                case BatteryState.STATUS_CHARGING:
-                    state = MoonBridge.LI_BATTERY_STATE_CHARGING;
-                    break;
-
-                case BatteryState.STATUS_DISCHARGING:
-                    state = MoonBridge.LI_BATTERY_STATE_DISCHARGING;
-                    break;
-
-                case BatteryState.STATUS_NOT_CHARGING:
-                    state = MoonBridge.LI_BATTERY_STATE_NOT_CHARGING;
-                    break;
-
-                case BatteryState.STATUS_FULL:
-                    state = MoonBridge.LI_BATTERY_STATE_FULL;
-                    break;
-
-                default:
-                    return;
+            byte state = switch (currentBatteryStatus) {
+                case BatteryState.STATUS_UNKNOWN -> MoonBridge.LI_BATTERY_STATE_UNKNOWN;
+                case BatteryState.STATUS_CHARGING -> MoonBridge.LI_BATTERY_STATE_CHARGING;
+                case BatteryState.STATUS_DISCHARGING -> MoonBridge.LI_BATTERY_STATE_DISCHARGING;
+                case BatteryState.STATUS_NOT_CHARGING -> MoonBridge.LI_BATTERY_STATE_NOT_CHARGING;
+                case BatteryState.STATUS_FULL -> MoonBridge.LI_BATTERY_STATE_FULL;
+                // Not a status Moonlight has a word for; leave the last report standing. A
+                // switch expression cannot return from the method, hence the sentinel.
+                default -> (byte) -1;
+            };
+            if (state < 0) {
+                return;
             }
 
-            if (Float.isNaN(currentBatteryCapacity)) {
-                percentage = MoonBridge.LI_BATTERY_PERCENTAGE_UNKNOWN;
-            }
-            else {
-                percentage = (byte)(currentBatteryCapacity * 100);
-            }
+            byte percentage = Float.isNaN(currentBatteryCapacity)
+                    ? MoonBridge.LI_BATTERY_PERCENTAGE_UNKNOWN
+                    : (byte)(currentBatteryCapacity * 100);
 
-            conn.sendControllerBatteryEvent((byte)context.controllerNumber, state, percentage);
+            publishBattery(context, state, percentage);
 
             context.lastReportedBatteryStatus = currentBatteryStatus;
             context.lastReportedBatteryCapacity = currentBatteryCapacity;
@@ -2929,19 +2955,33 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         conn.sendControllerMotionEvent((byte) context.controllerNumber, motionType, motionX, motionY, motionZ);
     }
 
-    /** {@inheritDoc} Battery state from a controller driven by our own USB drivers. */
+    /**
+     * {@inheritDoc} Battery state from a controller driven by our own USB drivers.
+     *
+     * <p>Held back until the pad has a player number. A USB pad is numbered on its first input
+     * report, and a GIP pad's first status packet usually arrives before that, so this used to
+     * reach the host as player 0 whatever slot the pad went on to take. The reading is cached on
+     * the context instead and sent by {@link #assignControllerNumberIfNeeded} once the number is
+     * known; anything after that goes straight through to the host and the menu's label.
+     */
     @Override
     public void reportControllerBattery(int controllerId, byte batteryState, byte batteryPercentage) {
         if (stopped) {
             return;
         }
 
-        GenericControllerContext context = usbDeviceContexts.get(controllerId);
+        UsbDeviceContext context = usbDeviceContexts.get(controllerId);
         if (context == null) {
             return;
         }
 
-        conn.sendControllerBatteryEvent((byte) context.controllerNumber, batteryState, batteryPercentage);
+        context.batteryState = batteryState;
+        context.batteryPercentage = batteryPercentage;
+        context.hasBatteryReading = true;
+
+        if (context.assignedControllerNumber) {
+            publishBattery(context, batteryState, batteryPercentage);
+        }
     }
 
     /** {@inheritDoc} Releases the context and player number for a USB controller that went away. */
@@ -3471,6 +3511,14 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
      */
     class UsbDeviceContext extends GenericControllerContext {
         public AbstractController device;
+
+        // The last battery the driver reported, in Moonlight's units, kept until the pad has a
+        // player number to report it under. Written by reportControllerBattery and read by
+        // assignControllerNumberIfNeeded, both on this device's own driver thread - the same
+        // thread reportControllerState arrives on - so no volatile, and no lock.
+        public byte batteryState;
+        public byte batteryPercentage;
+        public boolean hasBatteryReading;
 
         @Override
         public void destroy() {

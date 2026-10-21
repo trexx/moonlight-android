@@ -63,8 +63,10 @@ public class XboxWiredGipController extends GipController {
 
     private XboxWiredGipController(UsbDevice device, UsbDeviceConnection connection,
                                    UsbInterface gipInterface, int deviceId,
-                                   UsbDriverListener listener, long wiredHandle, long gipHandle) {
-        super(deviceId, listener, device.getVendorId(), device.getProductId(), gipHandle);
+                                   UsbDriverListener listener, long wiredHandle, long gipHandle,
+                                   GuideButtonLed guideButtonLed) {
+        super(deviceId, listener, device.getVendorId(), device.getProductId(), gipHandle,
+              guideButtonLed);
 
         this.wiredHandle = wiredHandle;
         this.connection = connection;
@@ -74,16 +76,17 @@ public class XboxWiredGipController extends GipController {
     /**
      * Claims the pad and brings the GIP stack up on it.
      *
-     * @param ledBrightness guide button LED intensity, as the raw protocol value. Passed at
-     *                      transport creation rather than set afterwards because the native side
-     *                      sends the LED command from {@code startDevice()}, which can run before
-     *                      this object exists — see {@link XboxWirelessDongle}.
+     * @param guideButtonLed guide button LED choice. Its starting intensity is passed at transport
+     *                       creation rather than set afterwards because the native side sends the
+     *                       LED command from {@code startDevice()}, which can run before this
+     *                       object exists — see {@link XboxWirelessDongle}. The battery moves it
+     *                       from here on, if the choice says so.
      * @return the controller, or null if the device could not be claimed — in which case nothing
      *         has been left running and the caller still owns {@code connection}
      */
     public static XboxWiredGipController create(UsbDevice device, UsbDeviceConnection connection,
                                                 int deviceId, UsbDriverListener listener,
-                                                int ledBrightness) {
+                                                GuideButtonLed guideButtonLed) {
 
         /*
          * Claimed here rather than natively, and forced. Android's own driver holds this interface
@@ -103,7 +106,7 @@ public class XboxWiredGipController extends GipController {
             return null;
         }
 
-        long wired = createWiredDriver(connection.getFileDescriptor(), ledBrightness);
+        long wired = createWiredDriver(connection.getFileDescriptor(), guideButtonLed.intensity());
         if (wired == 0) {
             LimeLog.warning("Wired GIP: could not create the native transport");
             connection.releaseInterface(gipInterface);
@@ -128,7 +131,7 @@ public class XboxWiredGipController extends GipController {
         }
 
         return new XboxWiredGipController(device, connection, gipInterface, deviceId, listener,
-                                          wired, gip);
+                                          wired, gip, guideButtonLed);
     }
 
     /**
