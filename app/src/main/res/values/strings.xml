@@ -247,6 +247,7 @@
     <string name="guide_button_led_dim">Dim</string>
     <string name="guide_button_led_normal">Normal</string>
     <string name="guide_button_led_bright">Bright</string>
+    <string name="guide_button_led_battery">Battery level</string>
     <string name="title_checkbox_wired_pad_audio">Headphone audio on cabled Xbox pads</string>
     <string name="summary_checkbox_wired_pad_audio">Use the full Xbox protocol driver for cabled controllers, so their headphone jack can play game audio. Experimental</string>
     <string name="title_checkbox_mouse_emulation">Mouse emulation via gamepad</string>

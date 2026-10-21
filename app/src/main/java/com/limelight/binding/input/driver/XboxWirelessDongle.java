@@ -33,14 +33,16 @@ public class XboxWirelessDongle {
     private long driverHandle;
 
     /*
-     * Guide button LED intensity handed to every pad this adapter brings up.
+     * Guide button LED choice handed to every pad this adapter brings up.
      *
-     * Held here, and passed at driver creation rather than set on each pad afterwards, because the
-     * native side sends the LED command from startDevice() as soon as a pad's metadata arrives -
-     * which can be before the Java GipController for that pad exists. A setter called after
-     * construction would race that first packet and lose on a fast pairing.
+     * The starting intensity is passed at driver creation rather than set on each pad afterwards,
+     * because the native side sends the LED command from startDevice() as soon as a pad's metadata
+     * arrives - which can be before the Java GipController for that pad exists, so a setter called
+     * after construction would race that first packet and lose on a fast pairing. Whether the
+     * battery moves it after that is the pad's own business: each GipController gets the whole
+     * choice and drives its LED from its battery reports.
      */
-    private final int ledBrightness;
+    private final GuideButtonLed guideButtonLed;
 
     // Live controllers by the native driver's slot index
     private Map<Integer, AbstractController> controllers = new HashMap<>();
@@ -57,17 +59,17 @@ public class XboxWirelessDongle {
     }
 
     /**
-     * @param connection    an already-open connection, whose file descriptor is handed to the native driver
-     * @param ledBrightness guide button LED intensity for this adapter's pads, as the raw protocol
-     *                      value — see {@code PreferenceConfiguration.getGuideButtonLedValue}
+     * @param connection     an already-open connection, whose file descriptor is handed to the native driver
+     * @param guideButtonLed guide button LED choice for this adapter's pads — see
+     *                       {@code PreferenceConfiguration.getGuideButtonLedValue}
      */
     public XboxWirelessDongle(UsbDevice device, UsbDeviceConnection connection,
-                              UsbDriverListener listener, int ledBrightness) {
+                              UsbDriverListener listener, GuideButtonLed guideButtonLed) {
         this.device = device;
         this.connection = connection;
         this.listener = listener;
         this.driverHandle = -1;
-        this.ledBrightness = ledBrightness;
+        this.guideButtonLed = guideButtonLed;
     }
 
     /**
@@ -84,7 +86,7 @@ public class XboxWirelessDongle {
         if(this.driverHandle != -1) {
             return false; //we already started;
         }
-        this.driverHandle = createDriver(connection.getFileDescriptor(), ledBrightness);
+        this.driverHandle = createDriver(connection.getFileDescriptor(), guideButtonLed.intensity());
         boolean ok = startDriver(this.driverHandle, "");
         if(!ok) {
             LimeLog.info("xbox wireless dongle driver failed to start");
@@ -168,7 +170,7 @@ public class XboxWirelessDongle {
     public void addNewController(int id, long handle, short vid, short pid, long address){
         // Namespaced by vendor ID so pad numbers can't collide with other drivers' device IDs
         var controller = new GipController(numberFor(address) + 0x045e0000,
-                                           listener, vid, pid, handle);
+                                           listener, vid, pid, handle, guideButtonLed);
         controllers.put(id, controller);
         this.listener.deviceAdded(controller);
     }
