@@ -57,7 +57,9 @@ public final class MenuDialog {
      *                   one that opened it, so without it Back dropped straight to the stream.
      * @param onDismiss  run however the menu goes away, selection included. The browse screen
      *                   restarts host polling here; doing it in {@code onCancel} would leave
-     *                   polling stopped whenever a row was actually chosen.
+     *                   polling stopped whenever a row was actually chosen. The in-stream menu
+     *                   hides its battery label here, guarded by a {@link DialogChain} token
+     *                   because a parent's dismissal arrives after its submenu has opened.
      */
     public static void show(Activity activity, String title, int iconRes, List<Option> options,
                             Runnable onCancel, Runnable onDismiss) {

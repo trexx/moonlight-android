@@ -10,6 +10,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import com.limelight.binding.input.driver.GuideButtonLed;
 import com.limelight.nvstream.StreamConfiguration;
 
 /**
@@ -75,50 +76,75 @@ class PreferenceConfigurationTest {
 
     @Nested
     @DisplayName("guide button LED brightness")
-    class GuideButtonLed {
+    class GuideButtonLedSetting {
 
         /**
          * The values are the protocol's, not ours: MS-GIPUSB 3.1.5.5.7 Table 41 defines the LED
          * command's intensity byte as 0 to 47. Pinning them here is the point of the test — a
-         * preset that silently changed value would otherwise only be visible on hardware.
+         * preset that silently changed value would otherwise only be visible on hardware. The
+         * battery setting starts at normal, since the pad has not said what it has yet; the
+         * ladder that moves it from there is {@code GuideButtonLedTest}'s to pin.
          */
-        @ParameterizedTest(name = "\"{0}\" maps to {1}")
+        @ParameterizedTest(name = "\"{0}\" starts at {1}")
         @CsvSource({
-                "off,    0x00",
-                "dim,    0x0A",
-                "normal, 0x14",
-                "bright, 0x2F",
+                "off,     0x00",
+                "dim,     0x0A",
+                "normal,  0x14",
+                "bright,  0x2F",
+                "battery, 0x14",
         })
-        @DisplayName("each preset maps to its protocol intensity")
+        @DisplayName("each preset maps to its starting protocol intensity")
         void presetsMapToIntensity(String stored, int expected) {
-            assertEquals(expected, PreferenceConfiguration.getGuideButtonLedValue(stored));
+            assertEquals(expected,
+                    PreferenceConfiguration.getGuideButtonLedValue(stored).intensity());
+        }
+
+        /**
+         * Only the battery setting lets battery reports move the LED. A fixed preset that
+         * followed the battery would drift away from what the user chose; a battery setting that
+         * did not would be the normal preset under another name.
+         */
+        @ParameterizedTest(name = "\"{0}\" follows the battery: {1}")
+        @CsvSource({
+                "off,     false",
+                "dim,     false",
+                "normal,  false",
+                "bright,  false",
+                "battery, true",
+        })
+        @DisplayName("only the battery setting follows the battery")
+        void onlyBatteryFollowsTheBattery(String stored, boolean expected) {
+            assertEquals(expected,
+                    PreferenceConfiguration.getGuideButtonLedValue(stored).followsBattery());
         }
 
         /**
          * A preference the user has never touched reads back as null, and a value written by a
          * future build might be anything. Both have to land on the intensity the driver used
-         * before this was configurable, rather than leaving the LED off or at full brightness.
+         * before this was configurable, rather than leaving the LED off or at full brightness —
+         * and must not follow the battery, which nobody asked for.
          */
         @Test
-        @DisplayName("null falls back to the normal intensity")
+        @DisplayName("null falls back to the normal preset")
         void nullFallsBackToNormal() {
-            assertEquals(0x14, PreferenceConfiguration.getGuideButtonLedValue(null));
+            assertEquals(GuideButtonLed.NORMAL, PreferenceConfiguration.getGuideButtonLedValue(null));
         }
 
         @Test
-        @DisplayName("an unrecognised value falls back to the normal intensity")
+        @DisplayName("an unrecognised value falls back to the normal preset")
         void unrecognisedFallsBackToNormal() {
-            assertEquals(0x14, PreferenceConfiguration.getGuideButtonLedValue("chartreuse"));
+            assertEquals(GuideButtonLed.NORMAL,
+                    PreferenceConfiguration.getGuideButtonLedValue("chartreuse"));
         }
 
         /** Nothing may exceed what the protocol's intensity field can carry. */
         @ParameterizedTest
-        @CsvSource({"off", "dim", "normal", "bright"})
+        @CsvSource({"off", "dim", "normal", "bright", "battery"})
         @DisplayName("no preset exceeds the protocol maximum of 0x2F")
         void presetsStayWithinProtocolRange(String stored) {
-            int intensity = PreferenceConfiguration.getGuideButtonLedValue(stored);
+            int intensity = PreferenceConfiguration.getGuideButtonLedValue(stored).intensity();
 
-            assertTrue(intensity >= 0x00 && intensity <= 0x2F,
+            assertTrue(intensity >= 0x00 && intensity <= GuideButtonLed.INTENSITY_MAX,
                     "intensity " + intensity + " is outside the protocol's 0x00-0x2F range");
         }
     }

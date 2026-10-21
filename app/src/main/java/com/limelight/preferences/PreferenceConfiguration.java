@@ -6,6 +6,7 @@ import android.preference.PreferenceManager;
 
 import java.util.Locale;
 
+import com.limelight.binding.input.driver.GuideButtonLed;
 import com.limelight.nvstream.StreamConfiguration;
 import com.limelight.nvstream.jni.MoonBridge;
 
@@ -162,10 +163,13 @@ public class PreferenceConfiguration {
     /** Whether to drive cabled Xbox pads ourselves so their headphone jack can take audio. */
     public boolean wiredPadAudio;
     /**
-     * Guide button LED intensity for Xbox pads this app drives, as the raw protocol value the
-     * pad expects. Only reaches a pad the GIP driver owns — see {@code UsbDriverService}.
+     * Guide button LED choice for Xbox pads this app drives: the intensity to start at, in the
+     * pad's own units, and whether the battery moves it after that. Only reaches a pad the GIP
+     * driver owns — see {@code UsbDriverService}. The type lives in the driver package because its
+     * numbers are the GIP protocol's; this package importing it is the only dependency between
+     * the two, and the record has no static initialiser, so nothing loads that should not.
      */
-    public int guideButtonLed;
+    public GuideButtonLed guideButtonLed;
     public boolean mouseEmulation;
     public AnalogStickForScrolling analogStickForScrolling;
     public boolean mouseNavButtons;
@@ -366,34 +370,37 @@ public class PreferenceConfiguration {
     }
 
     /**
-     * Maps the stored preference value to the guide button LED intensity the pad expects.
+     * Maps the stored preference value to the guide button LED choice the driver applies.
      *
-     * <p>The returned number is the protocol's own field, not a percentage of anything we chose:
+     * <p>The intensity is the protocol's own field, not a percentage of anything we chose:
      * MS-GIPUSB 3.1.5.5.7 Table 41 defines the LED command's third payload byte as an intensity
      * of 0 to 47 ({@code 0x2F}). Mapping presets to that value here, rather than in the driver,
      * keeps the whole translation on the testable side of the JNI boundary — the native side
-     * only applies what it is handed.
+     * only applies what it is handed, pattern included, and {@link GuideButtonLed} holds the
+     * numbers.
+     *
+     * <p>"battery" starts at Normal, because the pad has not said what it has yet, and lets each
+     * battery report move it from there.
      *
      * <p>Split out and static so it can be unit tested, following
      * {@link #getEncryptionFlagsValue(String)}.
      *
      * @param value the stored string, or null if the preference has never been written
-     * @return the intensity to send, defaulting to the value the driver used before this setting
+     * @return the choice to apply, defaulting to the value the driver used before this setting
      *         existed
      */
-    static int getGuideButtonLedValue(String value) {
+    static GuideButtonLed getGuideButtonLedValue(String value) {
         if (value == null) {
             value = DEFAULT_GUIDE_BUTTON_LED;
         }
 
         return switch (value) {
-            case "off" -> 0x00;
-            case "dim" -> 0x0A;
-            // The spec's ceiling. xow believed the maximum was 0x20, so whether a pad honours
-            // anything above that is an open hardware question - see HARDWARE_TESTING.md 22.
-            case "bright" -> 0x2F;
+            case "off" -> new GuideButtonLed(GuideButtonLed.INTENSITY_OFF, false);
+            case "dim" -> new GuideButtonLed(GuideButtonLed.INTENSITY_DIM, false);
+            case "bright" -> new GuideButtonLed(GuideButtonLed.INTENSITY_BRIGHT, false);
+            case "battery" -> new GuideButtonLed(GuideButtonLed.INTENSITY_NORMAL, true);
             // "normal", plus anything unrecognised
-            default -> 0x14;
+            default -> GuideButtonLed.NORMAL;
         };
     }
 

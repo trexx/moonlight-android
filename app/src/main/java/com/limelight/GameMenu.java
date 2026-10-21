@@ -9,15 +9,19 @@ import com.limelight.binding.input.KeyboardTranslator;
 import com.limelight.binding.input.driver.GipController;
 import com.limelight.nvstream.NvConnection;
 import com.limelight.nvstream.input.KeyboardPacket;
+import com.limelight.utils.DialogChain;
 import com.limelight.utils.MenuDialog;
 
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
  * Provide options for ongoing Game Stream.
  * <p>
- * Shown on back action in game activity.
+ * Shown on back action in game activity. While any level of it is up, {@link Game} also shows the
+ * controllers' battery levels along the bottom of the screen; the menu is what decides when that
+ * label appears and goes away.
  */
 public class GameMenu {
 
@@ -40,6 +44,9 @@ public class GameMenu {
     private final Game game;
     private final NvConnection conn;
     private final GameInputDevice device;
+
+    // One menu is one chain of dialogs; see showMenuDialog for what it settles.
+    private final DialogChain chain = new DialogChain();
 
     /** Building the menu shows it immediately; there is no separate show call. */
     public GameMenu(Game game, NvConnection conn, GameInputDevice device) {
@@ -129,6 +136,11 @@ public class GameMenu {
      * own dialog with no relationship to the one that opened it, so without this a submenu's Back
      * dropped straight to the stream - further out than the user asked to go. The root passes
      * null, where dismissing really does mean returning to the game.
+     *
+     * <p>The battery label is shown afresh at every level, so a reading that changed while a
+     * submenu was up is picked up on the way back, and hidden only when the whole chain ends.
+     * Every dialog's {@code onDismiss} fires, including a parent's after its child has opened, so
+     * each one takes a {@link DialogChain} token and only the latest holder hides the label.
      */
     private void showMenuDialog(String title, MenuOption[] options, Runnable onBack) {
         List<MenuDialog.Option> rows = new ArrayList<>();
@@ -142,7 +154,14 @@ public class GameMenu {
                                                      : runnable));
         }
 
-        MenuDialog.show(game, title, 0, rows, onBack, null);
+        int token = chain.opened();
+        game.showControllerBatteryLabel();
+
+        MenuDialog.show(game, title, 0, rows, onBack, () -> {
+            if (chain.closes(token)) {
+                game.hideControllerBatteryLabel();
+            }
+        });
     }
 
     /**
@@ -152,14 +171,33 @@ public class GameMenu {
      * cannot be enabled because the two-pad limit is reached says so on the row. The cap is a
      * bandwidth budget on a link shared with controller input, so it is worth showing rather
      * than letting a selection quietly do nothing.
+     *
+     * <p>Pads are named by the host's player number - see {@link GameMenuLayout#padNumber} for
+     * why, and for the two cases that cannot be - and listed in that order, with any pad that
+     * has no number yet at the end.
      */
     private void showPadAudioMenu() {
         List<GipController> controllers = game.getGipControllers();
         PadAudioSink sink = game.getPadAudioSink();
         List<MenuOption> options = new ArrayList<>();
+        boolean multiController = game.isMultiControllerEnabled();
 
-        int number = 1;
-        for (GipController controller : controllers) {
+        // Number before sorting: the position fallback is the driver's order, which is this one
+        var numbers = new int[controllers.size()];
+        for (int i = 0; i < controllers.size(); i++) {
+            numbers[i] = GameMenuLayout.padNumber(multiController,
+                    controllers.get(i).getPlayerNumber(), i + 1);
+        }
+        var order = new ArrayList<Integer>();
+        for (int i = 0; i < controllers.size(); i++) {
+            order.add(i);
+        }
+        order.sort(Comparator.comparingInt(i ->
+                numbers[i] == GameMenuLayout.PAD_UNNUMBERED ? Integer.MAX_VALUE : numbers[i]));
+
+        for (int i : order) {
+            GipController controller = controllers.get(i);
+            int number = numbers[i];
             boolean enabled = sink.isEnabled(controller);
 
             /*
@@ -197,8 +235,9 @@ public class GameMenu {
                 state = getString(R.string.game_menu_pad_audio_unavailable);
             }
 
-            String label = game.getResources().getString(
-                    R.string.game_menu_pad_audio_entry, number++, state);
+            String label = number == GameMenuLayout.PAD_UNNUMBERED
+                    ? game.getResources().getString(R.string.game_menu_pad_audio_entry_unnumbered, state)
+                    : game.getResources().getString(R.string.game_menu_pad_audio_entry, number, state);
 
             options.add(new MenuOption(label, () -> game.togglePadAudio(controller)));
         }

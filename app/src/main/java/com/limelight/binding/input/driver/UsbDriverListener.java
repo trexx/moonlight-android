@@ -33,7 +33,9 @@ public interface UsbDriverListener {
 
     /**
      * Reports a change in the controller's battery. Sent only when the level actually moves, not
-     * on a timer, so implementations should not expect a steady cadence.
+     * on a timer, so implementations should not expect a steady cadence. It may also arrive before
+     * the controller's first input report, so an implementation that needs a player number for it
+     * has to hold on to it.
      *
      * @param batteryState      one of {@code MoonBridge.LI_BATTERY_STATE_*}
      * @param batteryPercentage 0 to 100, or {@code MoonBridge.LI_BATTERY_PERCENTAGE_UNKNOWN}
