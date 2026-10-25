@@ -2771,6 +2771,34 @@ it would say whether "never drop" was ever more than an accident of the PTS base
 
 ---
 
+## 32. moonlight-common-c `41cedb8`
+
+Fifteen upstream commits past `62e0663`, plus nanors `a9b1636`. Builds for both ABIs with patches
+0002, 0004 and 0005 applied unchanged; not yet run on either box. Nothing here touches the video
+receive, FEC or depacketizer paths — the nanors change is bounds checks in setup and x86-only CPU
+detection, and its NEON decode loop is unchanged — so the checks are about input and session
+setup. Numbered 32 because §31 is taken on the open input-buffer branch.
+
+- [ ] **A stream starts against every host in use.** The RTSP parser was rewritten for spec
+      compliance (`aeba988`); a host whose replies leaned on the old leniency would fail at
+      session setup, before any video, with an RTSP error in logcat.
+- [ ] **A second session in the same process takes stick input at once.** `970b072` fixes a
+      queued controller packet that was freed while still referenced — when a stream ended with
+      one queued, or when the input queue hit its limit. The symptom was the next session's first
+      controller event going into freed memory and stick motion lost until a button changed.
+      End a stream while moving a stick, start another without leaving the app, and move the
+      stick straight away. Check the dropbox for a native crash either way.
+- [ ] **Mixed IME commits arrive in order.** UTF-8 text now travels on the keyboard channel
+      (`4a95eb3`), so a commit like `café ok` — keystrokes and a text event interleaved by
+      `TextKeyPlanner` — can no longer be reordered on the host. Sunshine also takes up to 32
+      bytes per text packet now (`0405384`), so a long dictated commit should land faster.
+      `TextKeyPlanner`'s 512-byte chunks and 15 ms spacing are unchanged and still hold.
+- [ ] **Quitting still ends the session cleanly** with the host's termination reason in logcat.
+      `41cedb8` narrows which ENet disconnects the control stream intercepts to ones addressed
+      to our peer; a normal quit must still be recognised as one.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
