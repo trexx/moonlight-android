@@ -766,10 +766,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         // gamepads.
         //
         // InputDevice.getSensorManager() is the API 31 entry point for pad motion sensors, so the
-        // Shield never reaches it. Upstream additionally narrowed this to Sony and Nintendo pads on
-        // Android 12, where touching InputDeviceSensorManager could NPE on a background thread;
-        // neither supported device is API 31 or 32, so that narrowing is gone.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && prefConfig.gamepadMotionSensors) {
+        // Shield never reaches it. Android 12 (API 31 and 32) has a bug where
+        // InputDeviceSensorManager NPEs on a background thread through bad error checking in its
+        // InputListener callbacks, and the manager is created by the first getSensorManager() call
+        // - so on those versions only pads that plausibly have motion sensors may touch it.
+        // Neither box in hand runs Android 12, but other Android TV boxes do, which is why this
+        // narrowing is kept rather than deleted.
+        // https://cs.android.com/android/_/android/platform/frameworks/base/+/8970010a5e9f3dc5c069f56b4147552accfcbbeb
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && prefConfig.gamepadMotionSensors &&
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ||
+                        context.vendorId == 0x054c || context.vendorId == 0x057e)) { // Sony or Nintendo
             if (dev.getSensorManager().getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null || dev.getSensorManager().getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null) {
                 context.sensorManager = dev.getSensorManager();
             }
@@ -782,6 +788,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     context.hasRgbLed = true;
                     break;
                 }
+            }
+
+            // Light.hasRgbControl() only answers honestly from API 34. Before that it returned true
+            // for every light, because LIGHT_CAPABILITY_RGB was defined as 0, so on API 31-33 the
+            // answer is replaced with a guess: PlayStation pads have an RGB LED, nothing else does.
+            // Neither box in hand is on API 31-33, but an Android 12 or 13 TV box would otherwise
+            // tell the host that every pad has one. Done here rather than at arrival so the LED
+            // path in handleSetControllerLED() obeys the same answer.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE && context.vendorId != 0x054c) {
+                context.hasRgbLed = false;
             }
         }
 
@@ -3332,11 +3348,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 }
 
                 // hasRgbLed is only ever set behind an API 31 gate, so it stays false on the
-                // Shield. On the Homatics, API 34 is where Light.hasRgbControl() first answers
-                // honestly — before that it returned true unconditionally, because
-                // LIGHT_CAPABILITY_RGB was defined as 0. Both target devices therefore sit on one
-                // side or the other of that fix, and the PlayStation-pad guess it used to need is
-                // no longer reachable.
+                // Shield, and on API 31-33 it has already been narrowed to PlayStation pads where
+                // it is detected (Light.hasRgbControl() lies there).
                 if (hasRgbLed) {
                     capabilities |= MoonBridge.LI_CCAP_RGB_LED;
                 }
