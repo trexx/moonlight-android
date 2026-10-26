@@ -204,7 +204,7 @@ tasks.withType(Test).configureEach {
 // what the JDK 26 toolchain above emits; 0.8.14 only read it experimentally, and older versions
 // fail instrumentation outright.
 jacoco {
-    toolVersion = '0.8.15'
+    toolVersion = '0.8.16'
 }
 
 // Reports coverage of the debug unit tests. Deliberately not wired into `check`, and with no
