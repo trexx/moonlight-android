@@ -26,17 +26,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup Java JDK
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
-        with:
-          java-version: 26
-          distribution: 'corretto'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
-        with:
-            packages: ''
-
       # Submodules are the vendored C libraries, which no unit test touches - testDebugUnitTest
       # does not run ndk-build. They are checked out anyway so Gradle configuration cannot
       # depend on their absence; dropping them here would roughly halve this job if it proves
@@ -49,6 +38,24 @@ jobs:
       # The version is the highest v* tag (app/build.gradle); a one-commit checkout has none.
       - name: Fetch version tags
         run: git fetch --depth=1 origin '+refs/tags/v*:refs/tags/v*'
+
+      # gradle/gradle-daemon-jvm.properties is the one place the JDK version is set: Gradle runs on
+      # it and app/build.gradle compiles with it. Reading it here keeps CI on the same JDK, so
+      # Gradle finds a match instead of downloading a second one. Needs the checkout above.
+      - name: Read JDK version
+        id: jdk
+        run: echo "version=$(sed -n 's/^toolchainVersion=//p' gradle/gradle-daemon-jvm.properties)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Java JDK ${{ steps.jdk.outputs.version }}
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          java-version: ${{ steps.jdk.outputs.version }}
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+            packages: ''
 
       - name: Run unit tests
         uses: burrunan/gradle-cache-action@404534c34a2faa40430357a3183522a845b04f3b # v3
@@ -79,17 +86,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Setup Java JDK
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
-        with:
-          java-version: 26
-          distribution: 'corretto'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
-        with:
-            packages: ''
-
       - name: Checkout Repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -97,6 +93,24 @@ jobs:
 
       - name: Fetch version tags
         run: git fetch --depth=1 origin '+refs/tags/v*:refs/tags/v*'
+
+      # gradle/gradle-daemon-jvm.properties is the one place the JDK version is set: Gradle runs on
+      # it and app/build.gradle compiles with it. Reading it here keeps CI on the same JDK, so
+      # Gradle finds a match instead of downloading a second one. Needs the checkout above.
+      - name: Read JDK version
+        id: jdk
+        run: echo "version=$(sed -n 's/^toolchainVersion=//p' gradle/gradle-daemon-jvm.properties)" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Java JDK ${{ steps.jdk.outputs.version }}
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          java-version: ${{ steps.jdk.outputs.version }}
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
+        with:
+            packages: ''
 
       # NB: assembleRelease, not assembleNonRoot. The nonRoot task came from a fork lineage
       # that defined a product flavour of that name; this project has no flavours, so that
