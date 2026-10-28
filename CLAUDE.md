@@ -250,7 +250,7 @@ how regressions get reintroduced.
 
 ## Modernisation
 
-Source and target level are **Java 26**. Of the modern constructs, three are in use: `var`
+Source and target level are **Java 25**. Of the modern constructs, three are in use: `var`
 (`UsbDriverService`, `XboxWirelessDongle`), records (`GameMenu.MenuOption`,
 `ComputerDetails.AddressTuple`) and switch expressions (`BrowseState`). Pattern-matching
 `instanceof` and text blocks appear nowhere yet. Nothing is known to be broken; they simply have

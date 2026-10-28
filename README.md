@@ -120,7 +120,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
   ABIs, including the ARMv8 extensions in the 32-bit build. Native library: 2.2 MB →
   ~0.4 MB, and 22 MB of prebuilt static libraries left the repository.
 * Toolchain, kept current by Renovate:
-  * AGP 9.4.1, Gradle 9.8.2, Java 26, NDK r29
+  * AGP 9.4.1, Gradle 9.8.2, Java 25, NDK r29
   * compileSdk 37, minSdk 30, targetSdk 34
   * OkHttp 5.5.0, BouncyCastle 1.86, libusb 1.0.30
 * Raising minSdk to 30 removed 111 OS-version checks and the rooted build flavour; the branch is
