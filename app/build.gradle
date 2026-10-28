@@ -28,6 +28,19 @@ if (!tagVersion.find()) {
 def versionFromTag = tagVersion.group(1)
 def buildLabel = "${versionFromTag} (${gitOutput('describe', '--always', '--dirty', '--abbrev=7', '--exclude=*')})"
 
+// gradle/gradle-daemon-jvm.properties is the one place the JDK version is set. Gradle runs its
+// daemon on that JDK, CI's setup-java reads the same line, and the toolchain and source level
+// below take it from there too, so the JDK that runs the build, the one CI installs and the
+// bytecode target cannot drift apart. Change it with `./gradlew updateDaemonJvm --jvm-version=<N>`,
+// which also refreshes the download URLs in that file - and see the toolchain block below first.
+def javaVersion = providers.fileContents(
+        rootProject.layout.projectDirectory.file('gradle/gradle-daemon-jvm.properties'))
+        .asText.map { text ->
+            def props = new Properties()
+            props.load(new StringReader(text))
+            props.getProperty('toolchainVersion') as int
+        }.get()
+
 android {
     // Pinned so every build produces identical native binaries; the NDK is not source
     // compatible across major versions.
@@ -70,8 +83,8 @@ android {
     compileOptions {
         // Explicit so the build does not depend on the platform default encoding
         encoding = "UTF-8"
-        sourceCompatibility = JavaVersion.VERSION_26
-        targetCompatibility = JavaVersion.VERSION_26
+        sourceCompatibility = JavaVersion.toVersion(javaVersion)
+        targetCompatibility = JavaVersion.toVersion(javaVersion)
     }
 
     lint {
@@ -181,13 +194,15 @@ android {
     }
 }
 
-// Compile with JDK 26 regardless of the JDK running Gradle. 26 is the newest JDK whose class files
+// Compile with the JDK named in gradle/gradle-daemon-jvm.properties. The daemon already runs on it,
+// so this resolves to the same install and downloads nothing; it is set anyway so the compiler
+// never depends on which JVM happens to host the daemon. 26 is the newest JDK whose class files
 // (major version 70) Android Lint can read: JDK 27 output makes lint log "Unsupported class file
 // major version 71" for every class and still exit green with its bytecode checks skipped, so a
 // bump past 26 needs that re-checked, not just a green CI run.
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(26)
+        languageVersion = JavaLanguageVersion.of(javaVersion)
     }
 }
 

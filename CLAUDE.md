@@ -40,10 +40,14 @@ because the alternative has cost something here.
 ./gradlew assembleRelease lintRelease # what CI gates on; runs ndk-build for both ABIs, slow
 ```
 
-Toolchain: AGP in `build.gradle`, Gradle in `gradle/wrapper/gradle-wrapper.properties`, the Java 26
-toolchain and the NDK in `app/build.gradle`. Versions are not repeated here because Renovate moves
-them. The JDK and NDK are downloaded automatically. `git submodule update --init --recursive` is
-required before any native build.
+Toolchain: AGP in `build.gradle`, Gradle in `gradle/wrapper/gradle-wrapper.properties`, the NDK in
+`app/build.gradle`. Versions are not repeated here because Renovate moves them. The JDK is set
+once, in `gradle/gradle-daemon-jvm.properties`: Gradle runs its daemon on it, both CI jobs read it
+for `setup-java`, and `app/build.gradle` takes the toolchain and source/target level from it. Change
+it only with `./gradlew updateDaemonJvm --jvm-version=<N>`, and read the toolchain comment in
+`app/build.gradle` before going past 26. None of the Renovate managers enabled here reads that
+file, so a JDK bump is always by hand. The JDK and NDK are downloaded automatically.
+`git submodule update --init --recursive` is required before any native build.
 
 `versionName` is the highest `v<major>.<minor>*` tag in the clone, and the settings screen shows
 it with the commit. Releasing is tagging. A clone with no such tag fails to configure —
