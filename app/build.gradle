@@ -28,18 +28,22 @@ if (!tagVersion.find()) {
 def versionFromTag = tagVersion.group(1)
 def buildLabel = "${versionFromTag} (${gitOutput('describe', '--always', '--dirty', '--abbrev=7', '--exclude=*')})"
 
-// gradle/gradle-daemon-jvm.properties is the one place the JDK version is set. Gradle runs its
-// daemon on that JDK, CI's setup-java reads the same line, and the toolchain and source level
-// below take it from there too, so the JDK that runs the build, the one CI installs and the
-// bytecode target cannot drift apart. Change it with `./gradlew updateDaemonJvm --jvm-version=<N>`,
-// which also refreshes the download URLs in that file - and see the toolchain block below first.
-def javaVersion = providers.fileContents(
+// gradle/gradle-daemon-jvm.properties is the one place the JDK version and vendor are set. Gradle
+// runs its daemon on that JDK, CI's setup-java reads the same version, and the toolchain and source
+// level below take it from there too, so the JDK that runs the build, the one CI installs and the
+// bytecode target cannot drift apart. Change it with
+// `./gradlew updateDaemonJvm --jvm-version=<N> --jvm-vendor=adoptium`, which also refreshes the
+// download URLs in that file - and see the toolchain block below first.
+def daemonJvm = providers.fileContents(
         rootProject.layout.projectDirectory.file('gradle/gradle-daemon-jvm.properties'))
         .asText.map { text ->
             def props = new Properties()
             props.load(new StringReader(text))
-            props.getProperty('toolchainVersion') as int
+            props
         }.get()
+def javaVersion = daemonJvm.getProperty('toolchainVersion') as int
+// updateDaemonJvm writes the vendor as the name of a JvmVendorSpec constant (ADOPTIUM, AZUL, ...).
+def javaVendor = JvmVendorSpec."${daemonJvm.getProperty('toolchainVendor')}"
 
 android {
     // Pinned so every build produces identical native binaries; the NDK is not source
@@ -194,7 +198,7 @@ android {
     }
 }
 
-// Compile with the JDK named in gradle/gradle-daemon-jvm.properties. The daemon already runs on it,
+// Compile with the JDK version and vendor named in gradle/gradle-daemon-jvm.properties. The daemon already runs on it,
 // so this resolves to the same install and downloads nothing; it is set anyway so the compiler
 // never depends on which JVM happens to host the daemon. It is 25 because that is the current LTS:
 // 26 was a six-month release whose updates stopped when 27 shipped, and no language feature from
@@ -205,6 +209,7 @@ android {
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(javaVersion)
+        vendor = javaVendor
     }
 }
 
