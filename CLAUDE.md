@@ -40,9 +40,10 @@ because the alternative has cost something here.
 ./gradlew assembleRelease lintRelease # what CI gates on; runs ndk-build for both ABIs, slow
 ```
 
-Toolchain: AGP 9.4.0, Gradle 9.6.1, Java 26 toolchain, NDK pinned in `app/build.gradle`. The JDK
-and NDK are downloaded automatically. `git submodule update --init --recursive` is required
-before any native build.
+Toolchain: AGP in `build.gradle`, Gradle in `gradle/wrapper/gradle-wrapper.properties`, the Java 26
+toolchain and the NDK in `app/build.gradle`. Versions are not repeated here because Renovate moves
+them. The JDK and NDK are downloaded automatically. `git submodule update --init --recursive` is
+required before any native build.
 
 `versionName` is the highest `v<major>.<minor>*` tag in the clone, and the settings screen shows
 it with the commit. Releasing is tagging. A clone with no such tag fails to configure —
@@ -275,8 +276,8 @@ that is its own commit.
 
 ## Dependencies
 
-Renovate manages `gradle` and `github-actions` updates and opens its own PRs. Do not hand-bump
-routinely — let Renovate propose it so CI validates the change in isolation. Major version bumps
-of the test framework or build plugins in particular belong in their own PR.
+Renovate manages `gradle`, `gradle-wrapper` and `github-actions` updates and opens its own PRs. Do
+not hand-bump routinely — let Renovate propose it so CI validates the change in isolation. Major
+version bumps of the test framework or build plugins in particular belong in their own PR.
 
 Do bump by hand when a version is blocking work, and say why in the commit.
