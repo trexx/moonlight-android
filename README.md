@@ -154,8 +154,9 @@ Each of these was deleted rather than carried:
   highest `v*` tag, and a clone without one fails to configure.
 * `./gradlew assembleRelease` (or Android Studio). The pinned NDK is downloaded automatically,
   and so is the JDK named in `gradle/gradle-daemon-jvm.properties` if it is not installed. That
-  one JDK version runs the Gradle daemon, is what CI installs, and is the Java source and
-  bytecode level; change it with `./gradlew updateDaemonJvm --jvm-version=<N>`.
+  one JDK, Temurin at that version, runs the Gradle daemon, is what CI installs, and is the Java
+  source and bytecode level; change it with
+  `./gradlew updateDaemonJvm --jvm-version=<N> --jvm-vendor=adoptium`.
 
 **Carried patches.** Upstream fixes this fork needs but that have not merged are kept as diffs
 under [`patches/`](patches) and applied to the submodule's working tree before `ndk-build` by

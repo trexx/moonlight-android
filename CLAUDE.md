@@ -45,9 +45,9 @@ Toolchain: AGP in `build.gradle`, Gradle in `gradle/wrapper/gradle-wrapper.prope
 and vendor (Temurin) are set once, in `gradle/gradle-daemon-jvm.properties`: Gradle runs its daemon
 on that JDK, both CI jobs read the version for `setup-java`, and `app/build.gradle` takes the
 toolchain and source/target level from it. Change it only with
-`./gradlew updateDaemonJvm --jvm-version=<N> --jvm-vendor=adoptium`, and read the toolchain comment in
-`app/build.gradle` before going past 26. None of the Renovate managers enabled here reads that
-file, so a JDK bump is always by hand. The JDK and NDK are downloaded automatically.
+`./gradlew updateDaemonJvm --jvm-version=<N> --jvm-vendor=adoptium`, and read the toolchain
+comment in `app/build.gradle` before going past 26. None of the Renovate managers enabled here
+reads that file, so a JDK bump is always by hand. The JDK and NDK are downloaded automatically.
 `git submodule update --init --recursive` is required before any native build.
 
 `versionName` is the highest `v<major>.<minor>*` tag in the clone, and the settings screen shows
