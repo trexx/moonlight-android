@@ -31,7 +31,7 @@ jobs:
       # depend on their absence; dropping them here would roughly halve this job if it proves
       # safe.
       - name: Checkout Repo
-        uses: trexx/actions/.github/actions/checkout@shared-steps
+        uses: trexx/actions/.github/actions/checkout@main
         with:
           submodules: recursive
 
@@ -43,7 +43,7 @@ jobs:
       # it and app/build.gradle compiles with it. Reading it here keeps CI on the same JDK, so
       # Gradle finds a match instead of downloading a second one. Needs the checkout above.
       - name: Set up Android build
-        uses: trexx/actions/.github/actions/setup-android@shared-steps
+        uses: trexx/actions/.github/actions/setup-android@main
         with:
           packages: ''
 
@@ -61,7 +61,7 @@ jobs:
 
       - name: Upload test and coverage reports
         if: always()
-        uses: trexx/actions/.github/actions/upload-artifact@shared-steps
+        uses: trexx/actions/.github/actions/upload-artifact@main
         with:
           name: test-reports
           path: |
@@ -75,7 +75,7 @@ jobs:
 
     steps:
       - name: Checkout Repo
-        uses: trexx/actions/.github/actions/checkout@shared-steps
+        uses: trexx/actions/.github/actions/checkout@main
         with:
           submodules: recursive
 
@@ -86,7 +86,7 @@ jobs:
       # it and app/build.gradle compiles with it. Reading it here keeps CI on the same JDK, so
       # Gradle finds a match instead of downloading a second one. Needs the checkout above.
       - name: Set up Android build
-        uses: trexx/actions/.github/actions/setup-android@shared-steps
+        uses: trexx/actions/.github/actions/setup-android@main
         with:
           packages: ''
 
@@ -157,7 +157,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload APK metrics
-        uses: trexx/actions/.github/actions/upload-artifact@shared-steps
+        uses: trexx/actions/.github/actions/upload-artifact@main
         with:
           name: apk-metrics
           path: apk-metrics.json
@@ -171,7 +171,7 @@ jobs:
 
       - name: Decode Keystore
         id: keystore
-        uses: trexx/actions/.github/actions/decode-keystore@shared-steps
+        uses: trexx/actions/.github/actions/decode-keystore@main
         with:
           keystore_base64: ${{ secrets.KEYSTORE }}
           required: 'true'
@@ -191,7 +191,7 @@ jobs:
             ./app/build/outputs/apk/release/app-release-aligned.apk
 
       - name: Upload Signed APK
-        uses: trexx/actions/.github/actions/upload-artifact@shared-steps
+        uses: trexx/actions/.github/actions/upload-artifact@main
         with:
           name: moonlight-android.apk
           path: ./app/build/outputs/apk/release/app-release-debugsigned.apk
@@ -218,7 +218,7 @@ jobs:
             ./app/build/outputs/apk/debug/app-debug-aligned.apk
 
       - name: Upload Debug APK
-        uses: trexx/actions/.github/actions/upload-artifact@shared-steps
+        uses: trexx/actions/.github/actions/upload-artifact@main
         with:
           name: moonlight-android-debug.apk
           path: ./app/build/outputs/apk/debug/app-debug-signed.apk
