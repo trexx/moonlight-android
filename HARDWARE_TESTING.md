@@ -387,7 +387,7 @@ it is switched on.
 > hardware time than has gone into it.
 >
 > Source: commit `810858bf` on `feature/audio-observability`, which also carries the readback
-> instrumentation the measurement depends on. That instrumentation is **not** on master, so
+> instrumentation the measurement depends on. That instrumentation is **not** on main, so
 > reproducing these numbers here means building that branch.
 
 ---
