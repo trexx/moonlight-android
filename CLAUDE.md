@@ -181,7 +181,7 @@ audio sync, decoder behaviour — document it there with the symptom to check, a
 alone until someone can verify it.
 
 CI runs unit tests as a job independent of the build, and reports APK size and DEX method count
-against master (`scripts/apk-metrics.py`). Those two numbers are the only performance signal CI
+against main (`scripts/apk-metrics.py`). Those two numbers are the only performance signal CI
 can honestly provide; they move when the shrinker config or dependency tree changes.
 
 ---

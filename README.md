@@ -126,7 +126,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
 * Raising minSdk to 30 removed 111 OS-version checks and the rooted build flavour; the branch is
   roughly 48,000 lines lighter than upstream.
 * A JVM unit test suite (`./gradlew testDebugUnitTest`) with coverage, run by CI alongside the
-  build; CI also reports APK size and DEX method count against master.
+  build; CI also reports APK size and DEX method count against main.
 
 ### Removed
 

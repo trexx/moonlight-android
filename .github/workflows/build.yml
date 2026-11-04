@@ -4,16 +4,16 @@ name: Build
 on:
   workflow_dispatch:
   pull_request:
-  # Runs on master so each merge records the APK metrics that pull requests are
+  # Runs on main so each merge records the APK metrics that pull requests are
   # compared against. Without this there is no baseline and the size report on a PR
   # can only show absolute numbers.
   push:
     branches:
-      - master
+      - main
 
 permissions:
   contents: read
-  # Needed to list master's workflow runs and download their metrics artifact
+  # Needed to list main's workflow runs and download their metrics artifact
   actions: read
 
 jobs:
@@ -126,13 +126,13 @@ jobs:
 
       # Best effort: a first run, a deleted artifact or an expired retention window all just
       # mean there is no baseline to compare against, which is not a reason to fail the build.
-      - name: Fetch baseline metrics from master
+      - name: Fetch baseline metrics from main
         if: github.event_name == 'pull_request'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          run_id=$(gh run list --workflow build.yml --branch master --status success \
+          run_id=$(gh run list --workflow build.yml --branch main --status success \
             --limit 1 --json databaseId --jq '.[0].databaseId')
           if [ -n "$run_id" ]; then
             gh run download "$run_id" --name apk-metrics --dir baseline
@@ -147,8 +147,8 @@ jobs:
             if [ -f baseline/apk-metrics.json ]; then
               python3 scripts/apk-metrics.py compare baseline/apk-metrics.json apk-metrics.json
             else
-              echo "No master baseline available yet, so this run reports absolute numbers only."
-              echo "A baseline is recorded on the next push to master."
+              echo "No main baseline available yet, so this run reports absolute numbers only."
+              echo "A baseline is recorded on the next push to main."
               echo
               echo '```json'
               cat apk-metrics.json
