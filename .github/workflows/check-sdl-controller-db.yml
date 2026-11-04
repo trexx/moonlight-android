@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: trexx/actions/.github/actions/checkout@shared-steps
+        uses: trexx/actions/.github/actions/checkout@main
 
       - name: Compare against SDL upstream
         run: python3 scripts/check-sdl-controller-db.py ${{ github.event.inputs.threshold || '25' }}
