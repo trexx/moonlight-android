@@ -1,16 +1,14 @@
 # Moonlight for Android — trexx fork
 
-A fork of [Moonlight for Android](https://github.com/moonlight-stream/moonlight-android), the
+Sunshine client for Android TV. A fork of [Moonlight for Android](https://github.com/moonlight-stream/moonlight-android), the
 open-source client for [Sunshine](https://github.com/LizardByte/Sunshine) and NVIDIA GameStream,
 cut down for Android TV boxes and tuned for latency. It runs on any device with **Android 11
 (API 30)** or newer and an **ARM CPU** (`arm64-v8a` or `armeabi-v7a`; there is no x86 build),
 targets Sunshine hosts, and is English-only.
 
-It is not published to any store. Build it from source (below) or take the signed APK from a
-[Build workflow](.github/workflows/build.yml) run. Upstream's own releases are on
-[moonlight-stream.org](https://moonlight-stream.org), with a [Discord](https://moonlight-stream.org/discord).
+## Overview
 
-## Screenshots
+### Screenshots
 
 <table>
   <tr>
@@ -41,9 +39,9 @@ It is not published to any store. Build it from source (below) or take the signe
 
 Taken on an Android TV box streaming Steam from Sunshine.
 
-## What this fork changes
+### What this fork changes
 
-### Controllers
+#### Controllers
 
 * **Xbox Wireless Adapter, natively.** The USB dongle is driven by a GIP driver derived from
   [medusalix/xow](https://github.com/medusalix/xow) (`d335d602`, see
@@ -62,7 +60,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
   scheduled CI job), Xbox Series init over USB, 8BitDo Xbox-mode pads, PowerA Pro (Switch)
   matched by name, Steam controllers reported as their own type.
 
-### Streaming and latency
+#### Streaming and latency
 
 * Picture data is written straight into the decoder's input buffer; the min-latency pacer
   stamps frames with SurfaceFlinger's own clock, so stale frames are dropped instead of
@@ -80,7 +78,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
 * Launches retry, pairing is cancellable, and a malformed app list or a broken `GameManager`
   no longer crashes the app.
 
-### Audio
+#### Audio
 
 * **Low-latency AAudio output** (opt-in) for boxes that refuse AudioTrack's fast path — a
   lock-free ring buffer feeding the realtime callback, surround masks passed straight through,
@@ -89,7 +87,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
   and a dead one no longer look the same.
 * libopus 1.6.1.
 
-### UI
+#### UI
 
 * **Browse screen rebuilt** on the platform framework: a rail (Add PC, Settings), a host band
   and one fixed-size app grid, with d-pad focus rings and TV overscan in the layout.
@@ -104,7 +102,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
 * **The on-screen keyboard types keystrokes**, so games see them, with a preview strip that
   echoes the line being typed and host-side text reconciled against what the IME has.
 
-### Diagnostics
+#### Diagnostics
 
 * The overlay reports FEC recovery, decrypt failures (only when non-zero), the worst frame of
   the window and host processing latency, and plots FPS in/out and network latency against
@@ -113,7 +111,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
   video path; both are compiled out of release.
 * Every stream ends with a summary in the log, not just the ones that crash.
 
-### Under the hood
+#### Under the hood
 
 * **Mbed TLS 3.6.7** on its PSA API replaces OpenSSL 1.1.1 for stream crypto, built from a
   submodule with only AES-CBC, AES-GCM and CTR-DRBG. Hardware AES is compiled in for both
@@ -128,7 +126,7 @@ Taken on an Android TV box streaming Steam from Sunshine.
 * A JVM unit test suite (`./gradlew testDebugUnitTest`) with coverage, run by CI alongside the
   build; CI also reports APK size and DEX method count against main.
 
-### Removed
+#### Removed
 
 Each of these was deleted rather than carried:
 
@@ -146,7 +144,23 @@ Each of these was deleted rather than carried:
 * The network connection test
 * The "small box art" and "Soft keyboard text input" settings
 
-## Building
+## Usage
+
+### Installing
+
+It is not published to any store. Build it from source (below) or take the signed APK from a
+[Build workflow](.github/workflows/build.yml) run. Upstream's own releases are on
+[moonlight-stream.org](https://moonlight-stream.org), with a [Discord](https://moonlight-stream.org/discord).
+
+Each [Build workflow](.github/workflows/build.yml) run uploads the signed release APK as the
+`moonlight-android.apk` artifact and a signed debug APK as `moonlight-android-debug.apk`. Both are
+signed with the same key, so CI builds install over one another without an uninstall (which
+would lose host pairing). The debug build's application ID has a `.debug` suffix, so it installs
+alongside the release one.
+
+## Development
+
+### Building
 
 * Install Android Studio, a JDK 17 or later to start `./gradlew`, and Python 3.
 * `git submodule update --init --recursive`
@@ -170,7 +184,7 @@ exactly which upstream commit is built against. Currently carried against `moonl
   ([`0004`](patches/moonlight-common-c/0004-atomic-connection-interrupted.patch))
 * The intra-refresh capability ([`0005`](patches/moonlight-common-c/0005-intra-refresh-capability.patch))
 
-## Testing
+### Testing
 
 `./gradlew testDebugUnitTest` runs the JVM tests on any machine, without a device or the NDK.
 Everything that touches input, audio or the decoder needs real hardware and a real host;
@@ -178,7 +192,31 @@ Everything that touches input, audio or the decoder needs real hardware and a re
 what, and what is still outstanding. [`CLAUDE.md`](CLAUDE.md) holds the engineering rules —
 which paths are hot, what may not be allocated on them, and how to instrument a change.
 
-## Credits
+### CI
+
+* [`build.yml`](.github/workflows/build.yml) runs on pull requests, pushes to `main` and on
+  demand. One job runs the unit tests with JaCoCo coverage; the other builds the release and
+  debug APKs, runs `lintRelease` and `lintDebug`, measures APK size and DEX method count (compared
+  against the latest `main` run on pull requests), then signs and uploads both APKs.
+* [`check-sdl-controller-db.yml`](.github/workflows/check-sdl-controller-db.yml) runs every three
+  months (or on demand) and compares the vendored SDL controller database against SDL upstream.
+
+## Releases
+
+Releasing is tagging: `versionName` comes from the highest `v*` tag (see `app/build.gradle`), and
+`versionCode` is set by hand in `app/build.gradle`. There is no separate release workflow; the
+signed APKs come from Build workflow runs.
+
+### Signing
+
+The Build workflow zipaligns and signs both APKs with the keystore stored in the `KEYSTORE`
+repository secret (alias `androiddebugkey`); the build job fails if the secret is missing.
+
+## License
+
+GNU General Public License v3 — see [`LICENSE.txt`](LICENSE.txt).
+
+### Credits
 
 Moonlight is the work of [Cameron Gutman](https://github.com/cgutman),
 [Diego Waxemberg](https://github.com/dwaxemberg), [Aaron Neyer](https://github.com/Aaronneyer)
