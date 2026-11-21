@@ -3232,6 +3232,9 @@ public class MediaCodecDecoderRenderer extends VideoDecoderRenderer implements C
 
         RendererException(MediaCodecDecoderRenderer renderer, Exception e) {
             this.text = generateText(renderer, e);
+            // The text carries the codec's diagnostics but not e's stack, so without the cause
+            // a dropbox entry ended at this constructor and never showed which codec call threw.
+            initCause(e);
         }
 
         public String toString() {

@@ -2799,6 +2799,34 @@ setup. Numbered 32 because §31 is taken on the open input-buffer branch.
 
 ---
 
+## 33. Controller arrival before the stream is up
+
+Built and unit-tested only; not yet run on either box. A controller is assigned a number on its
+first input, and the USB driver service starts from `Game.onCreate()` — so a Pro Controller that
+is already plugged in, reporting ~120 times a second, used to send its arrival while the input
+stream did not exist yet. `LiSendControllerArrivalEvent()` returned -2, nothing retried it, and
+the host made a default pad for the whole session. That would explain §2's gyro items never being
+ticked: the host never learned the pad had a gyro. Found independently by two forks (Axixi2233,
+moonlight-vplus); the fix retries from the input path so the arrival still precedes the first
+gamepad packet the host accepts.
+
+- [ ] `adb shell setprop persist.log.tag '""'` first on the Homatics; restore it afterwards.
+- [ ] **Pro Controller plugged in before launching the stream:** logcat shows
+      `Controller 0 arrival deferred until the host can take it`, then
+      `Controller 0 arrival sent after retry` once the stream is up. Neither line repeats.
+- [ ] **The host sees a Nintendo pad, not an Xbox 360 one** (Sunshine's log names the type it
+      created), and §2's gyro and accelerometer items now pass.
+- [ ] **Plugged in after the stream started:** neither line appears — the first arrival goes
+      straight through, as before.
+- [ ] An Android-enumerated pad touched while the connection spinner is up behaves the same way
+      as the USB case, and its battery level reaches the host after the retry.
+
+Not checkable on either box in hand, both of which sit outside API 31-33: the restored Android 12
+guard on `InputDevice.getSensorManager()` and the API 31-33 `hasRgbControl()` override. They are
+upstream's, kept for other Android TV boxes; an Android 12 or 13 box is what would verify them.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2826,6 +2854,7 @@ setup. Numbered 32 because §31 is taken on the open input-buffer branch.
 | §17.1 sub-50 fractional | A 23.976 or 29.97 Hz output mode specifically — 59.94 takes the other branch and cannot settle it |
 | §18.2 two-client check | A second Moonlight client against the same host |
 | §30 debug boxes | Shield: a debug build in min-latency for the presented counter, then cap-FPS for the gating check. Homatics: any build in min-latency. The mechanism itself is verified on the Shield's release build |
+| §33 Android 12/13 guards | Any Android TV box on API 31-33, with a non-PlayStation pad for the LED check and a third-party pad for the sensor one |
 | §19 | Both target devices; the survey differs per SoC |
 | §26 badge centring | Either box, on a television at normal viewing distance |
 | §20 | The Homatics specifically — the Shield cannot verify a change scoped to `armeabi-v7a` |

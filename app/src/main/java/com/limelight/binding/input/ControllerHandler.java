@@ -500,9 +500,14 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
      * <p>Built-in buttons are always player 0 — they belong to the device the user is holding.
      * External pads take the lowest free number when multi-controller mode is on, and otherwise
      * all share player 0 so that any pad drives the same host controller.
+     *
+     * <p>Once assigned, this is also where an arrival the host could not take yet is retried.
      */
     private void assignControllerNumberIfNeeded(GenericControllerContext context) {
         if (context.assignedControllerNumber) {
+            if (context.arrivalPending) {
+                reportControllerArrival(context);
+            }
             return;
         }
 
@@ -602,7 +607,34 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         context.assignedControllerNumber = true;
 
         // Report attributes of this new controller to the host
-        context.sendControllerArrival();
+        reportControllerArrival(context);
+    }
+
+    /**
+     * Sends the arrival, and leaves it pending to be retried with the controller's next input if
+     * the host could not be told yet.
+     *
+     * <p>A controller is assigned on its first input, which can come before the stream is up: the
+     * USB driver service starts from {@code Game.onCreate()}, long before the connection, and a Pro
+     * Controller reports ~120 times a second from the moment it is claimed. The arrival then fails
+     * with -2 (input stream not initialised), and with nothing to retry it the host saw a plain
+     * default pad for the whole session — no gyro, touchpad, LED or real type. Retrying from the
+     * input path rather than from {@code connectionStarted()} keeps the order the host depends on:
+     * the arrival goes out on the same thread immediately before the packet that follows it, so a
+     * gamepad packet cannot reach Sunshine first and lock in the default type.
+     */
+    private void reportControllerArrival(GenericControllerContext context) {
+        boolean wasPending = context.arrivalPending;
+        context.arrivalPending = !context.sendControllerArrival();
+
+        // Logged on the transitions only: a pending arrival is retried on every report, ~120 Hz
+        // for a Pro Controller, so a line per attempt would flood logcat until the stream is up.
+        if (context.arrivalPending && !wasPending) {
+            LimeLog.info("Controller "+context.controllerNumber+" arrival deferred until the host can take it");
+        }
+        else if (!context.arrivalPending && wasPending) {
+            LimeLog.info("Controller "+context.controllerNumber+" arrival sent after retry");
+        }
     }
 
     /**
@@ -766,10 +798,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         // gamepads.
         //
         // InputDevice.getSensorManager() is the API 31 entry point for pad motion sensors, so the
-        // Shield never reaches it. Upstream additionally narrowed this to Sony and Nintendo pads on
-        // Android 12, where touching InputDeviceSensorManager could NPE on a background thread;
-        // neither supported device is API 31 or 32, so that narrowing is gone.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && prefConfig.gamepadMotionSensors) {
+        // Shield never reaches it. Android 12 (API 31 and 32) has a bug where
+        // InputDeviceSensorManager NPEs on a background thread through bad error checking in its
+        // InputListener callbacks, and the manager is created by the first getSensorManager() call
+        // - so on those versions only pads that plausibly have motion sensors may touch it.
+        // Neither box in hand runs Android 12, but other Android TV boxes do, which is why this
+        // narrowing is kept rather than deleted.
+        // https://cs.android.com/android/_/android/platform/frameworks/base/+/8970010a5e9f3dc5c069f56b4147552accfcbbeb
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && prefConfig.gamepadMotionSensors &&
+                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU ||
+                        context.vendorId == 0x054c || context.vendorId == 0x057e)) { // Sony or Nintendo
             if (dev.getSensorManager().getDefaultSensor(Sensor.TYPE_ACCELEROMETER) != null || dev.getSensorManager().getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null) {
                 context.sensorManager = dev.getSensorManager();
             }
@@ -782,6 +820,16 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                     context.hasRgbLed = true;
                     break;
                 }
+            }
+
+            // Light.hasRgbControl() only answers honestly from API 34. Before that it returned true
+            // for every light, because LIGHT_CAPABILITY_RGB was defined as 0, so on API 31-33 the
+            // answer is replaced with a guess: PlayStation pads have an RGB LED, nothing else does.
+            // Neither box in hand is on API 31-33, but an Android 12 or 13 TV box would otherwise
+            // tell the host that every pad has one. Done here rather than at arrival so the LED
+            // path in handleSetControllerLED() obeys the same answer.
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE && context.vendorId != 0x054c) {
+                context.hasRgbLed = false;
             }
         }
 
@@ -2998,6 +3046,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
 
         public boolean assignedControllerNumber;
         public boolean reservedControllerNumber;
+        /** Assigned, but the host has not been sent the arrival yet; see reportControllerArrival() */
+        public boolean arrivalPending;
         public short controllerNumber;
 
         public int inputMap = 0;
@@ -3075,7 +3125,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             mainThreadHandler.removeCallbacks(mouseEmulationRunnable);
         }
 
-        public void sendControllerArrival() {}
+        /** @return false if the host could not be told, so the arrival should be retried */
+        public boolean sendControllerArrival() {
+            return true;
+        }
     }
 
     /**
@@ -3267,7 +3320,7 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         @Override
-        public void sendControllerArrival() {
+        public boolean sendControllerArrival() {
             byte type;
             switch (inputDevice.getVendorId()) {
                 case 0x045e: // Microsoft
@@ -3332,11 +3385,8 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 }
 
                 // hasRgbLed is only ever set behind an API 31 gate, so it stays false on the
-                // Shield. On the Homatics, API 34 is where Light.hasRgbControl() first answers
-                // honestly — before that it returned true unconditionally, because
-                // LIGHT_CAPABILITY_RGB was defined as 0. Both target devices therefore sit on one
-                // side or the other of that fix, and the PlayStation-pad guess it used to need is
-                // no longer reachable.
+                // Shield, and on API 31-33 it has already been narrowed to PlayStation pads where
+                // it is detected (Light.hasRgbControl() lies there).
                 if (hasRgbLed) {
                     capabilities |= MoonBridge.LI_CCAP_RGB_LED;
                 }
@@ -3388,11 +3438,15 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
                 }
             }
 
-            conn.sendControllerArrivalEvent((byte)controllerNumber, getActiveControllerMask(),
-                    reportedType, supportedButtonFlags, capabilities);
+            if (conn.sendControllerArrivalEvent((byte)controllerNumber, getActiveControllerMask(),
+                    reportedType, supportedButtonFlags, capabilities) != 0) {
+                return false;
+            }
 
-            // After reporting arrival to the host, send initial battery state and begin monitoring
+            // After reporting arrival to the host, send initial battery state and begin monitoring.
+            // Not before: a battery event the host cannot take yet would be recorded as reported.
             backgroundThreadHandler.post(batteryStateUpdateRunnable);
+            return true;
         }
 
         public void migrateContext(InputDeviceContext oldContext) {
@@ -3413,9 +3467,10 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
             // Copy over existing controller number state
             this.assignedControllerNumber = oldContext.assignedControllerNumber;
             this.reservedControllerNumber = oldContext.reservedControllerNumber;
+            this.arrivalPending = oldContext.arrivalPending;
             this.controllerNumber = oldContext.controllerNumber;
 
-            // Copy state initialized in reportControllerArrival()
+            // Copy state initialized in sendControllerArrival()
             this.needsClickpadEmulation = oldContext.needsClickpadEmulation;
 
             // Re-enable sensors on the new context
@@ -3480,9 +3535,9 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
         }
 
         @Override
-        public void sendControllerArrival() {
-            conn.sendControllerArrivalEvent((byte)controllerNumber, getActiveControllerMask(),
-                    device.getType(), device.getSupportedButtonFlags(), device.getCapabilities());
+        public boolean sendControllerArrival() {
+            return conn.sendControllerArrivalEvent((byte)controllerNumber, getActiveControllerMask(),
+                    device.getType(), device.getSupportedButtonFlags(), device.getCapabilities()) == 0;
         }
     }
 }

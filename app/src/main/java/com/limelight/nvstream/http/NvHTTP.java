@@ -286,7 +286,10 @@ public class NvHTTP {
                 currentTag.pop();
                 break;
             case (XmlPullParser.TEXT):
-                if (currentTag.peek().equals(tagname)) {
+                // Text before the first tag has no tag to belong to; peek() on the empty stack
+                // would throw EmptyStackException, which no caller handles. Same hazard, and the
+                // same guard, as the app list parser below.
+                if (!currentTag.isEmpty() && currentTag.peek().equals(tagname)) {
                     return xpp.getText();
                 }
                 break;
@@ -308,14 +311,42 @@ public class NvHTTP {
     static String getXmlString(String str, String tagname, boolean throwIfMissing) throws XmlPullParserException, IOException {
         return getXmlString(new StringReader(str), tagname, throwIfMissing);
     }
+
+    /**
+     * Integer.parseInt() for a mandatory host field, failing as a malformed response does.
+     *
+     * <p>A bare NumberFormatException is unchecked and escapes the XmlPullParserException handling
+     * every caller already has for garbage XML, so a non-numeric field crashed instead of failing
+     * the poll.
+     */
+    private static int getXmlInt(String str, String tagname) throws XmlPullParserException, IOException {
+        String value = getXmlString(str, tagname, true);
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            throw new XmlPullParserException("Malformed "+tagname+" in host response: "+value);
+        }
+    }
     
-    /** @throws HostHttpResponseException if the response body carries a host-side error status */
-    private static void verifyResponseStatus(XmlPullParser xpp) throws HostHttpResponseException {
+    /**
+     * @throws HostHttpResponseException if the response body carries a host-side error status
+     * @throws XmlPullParserException if the status code is missing or not a number
+     */
+    private static void verifyResponseStatus(XmlPullParser xpp) throws HostHttpResponseException, XmlPullParserException {
         // We use Long.parseLong() because in rare cases GFE can send back a status code of
         // 0xFFFFFFFF, which will cause Integer.parseInt() to throw a NumberFormatException due
         // to exceeding Integer.MAX_VALUE. We'll get the desired error code of -1 by just casting
         // the resulting long into an int.
-        int statusCode = (int)Long.parseLong(xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_code"));
+        String statusCodeStr = xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_code");
+        int statusCode;
+        try {
+            statusCode = (int)Long.parseLong(statusCodeStr);
+        } catch (NumberFormatException e) {
+            // A <root> with no status_code gave parseLong(null). The unchecked exception went
+            // past every IOException/XmlPullParserException handler and crashed the poller, so
+            // anything on the LAN answering on the host's port could take the app down.
+            throw new XmlPullParserException("Malformed status_code in host response: "+statusCodeStr);
+        }
         if (statusCode != 200) {
             String statusMsg = xpp.getAttributeValue(XmlPullParser.NO_NAMESPACE, "status_message");
             if (statusCode == -1 && "Invalid".equals(statusMsg)) {
@@ -569,10 +600,14 @@ public class NvHTTP {
     public long getServerCodecModeSupport(String serverInfo) throws XmlPullParserException, IOException {
         // ServerCodecModeSupport wasn't present on old GFE versions
         String str = getXmlString(serverInfo, "ServerCodecModeSupport", false);
-        if (str != null) {
-            return Long.parseLong(str);
-        } else {
+        if (str == null) {
             return 0;
+        }
+        try {
+            return Long.parseLong(str);
+        } catch (NumberFormatException e) {
+            // Unchecked, so it would escape the caller's handling for bad XML; see getXmlInt()
+            throw new XmlPullParserException("Malformed ServerCodecModeSupport in host response: "+str);
         }
     }
     
@@ -588,7 +623,7 @@ public class NvHTTP {
         // has the semantics that its name would indicate. To contain the effects of this change as much
         // as possible, we'll force the current game to zero if the server isn't in a streaming session.
         if (getXmlString(serverInfo, "state", true).endsWith("_SERVER_BUSY")) {
-            return Integer.parseInt(getXmlString(serverInfo, "currentgame", true));
+            return getXmlInt(serverInfo, "currentgame");
         }
         else {
             return 0;
@@ -598,7 +633,7 @@ public class NvHTTP {
     /** @return the HTTPS port the host advertises, which need not be the default */
     public int getHttpsPort(String serverInfo) {
         try {
-            return Integer.parseInt(getXmlString(serverInfo, "HttpsPort", true));
+            return getXmlInt(serverInfo, "HttpsPort");
         } catch (XmlPullParserException e) {
             e.printStackTrace();
             return DEFAULT_HTTPS_PORT;

@@ -106,7 +106,11 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
 
             for (int i = 0; i <= maxKeyCode; i++) {
                 int deviceKeyCode = device.getKeyCodeForKeyLocation(i);
-                if (deviceKeyCode != KeyEvent.KEYCODE_UNKNOWN) {
+                // A vendor layout can map a location to a keycode above getMaxKeyCode(), which
+                // indexed past the end of the table and crashed Game.onCreate(). Such a key is
+                // already unknown to getQwertyKeyCodeForDeviceKeyCode(), so dropping it here
+                // changes nothing it could have looked up.
+                if (deviceKeyCode != KeyEvent.KEYCODE_UNKNOWN && deviceKeyCode <= maxKeyCode) {
                     deviceKeyCodeToQwertyKeyCode[deviceKeyCode] = i;
                 }
             }
