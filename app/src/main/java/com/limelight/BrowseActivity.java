@@ -816,7 +816,9 @@ public class BrowseActivity extends Activity {
                     return;
                 }
 
-                // Add a launcher shortcut for this PC (off the main thread to prevent ANRs)
+                // Add a launcher shortcut for this PC. This usually runs on a polling thread, but
+                // startPolling() delivers the first report for every host synchronously on the UI
+                // thread; ShortcutHelper does the IPC on its own thread either way.
                 if (details.pairState == PairState.PAIRED) {
                     shortcutHelper.createAppViewShortcutForOnlineHost(details);
                 }
@@ -1222,9 +1224,9 @@ public class BrowseActivity extends Activity {
     }
 
     private void createShortcut(AppObject app, ComputerDetails computer, Bitmap boxArt) {
-        if (!shortcutHelper.createPinnedGameShortcut(computer, app.app, boxArt)) {
-            Toast.makeText(this, getString(R.string.unable_to_pin_shortcut), Toast.LENGTH_LONG).show();
-        }
+        shortcutHelper.createPinnedGameShortcut(computer, app.app, boxArt,
+                () -> Toast.makeText(this, getString(R.string.unable_to_pin_shortcut),
+                        Toast.LENGTH_LONG).show());
     }
 
     // ------------------------------------------------------------------------------------------

@@ -2257,7 +2257,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
         });
 
-        // Report this shortcut being used (off the main thread to prevent ANRs)
+        // Report this shortcut being used. ShortcutHelper does the IPC on its own background-
+        // priority thread, so this costs the connection callback nothing.
         ComputerDetails computer = new ComputerDetails();
         computer.name = pcName;
         computer.uuid = Game.this.getIntent().getStringExtra(EXTRA_PC_UUID);

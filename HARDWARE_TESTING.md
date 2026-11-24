@@ -2799,6 +2799,30 @@ setup. Numbered 32 because §31 is taken on the open input-buffer branch.
 
 ---
 
+## 33. Launcher shortcuts and the TV channel run off the UI thread
+
+AGP 9.5's Lint (`ThreadConstraint`) found `ShortcutManager` calls, which the platform annotates
+`@WorkerThread`, reached from the UI thread: applying a host's cached app list, and the first
+report `ComputerManagerService.startPolling()` delivers synchronously for every host. Other UI
+thread callers — selecting a host, removing one, pinning a game — did the same without being
+flagged. `ShortcutHelper` now does all shortcut and TV channel work on one background-priority
+thread of its own. Nothing on the stream path changed; what can regress is the shortcuts
+themselves, and a wrong thread hop fails silently, so these need looking at rather than assuming.
+
+- [ ] **A host's shortcut appears** in the launcher after opening it, and its ranking rises
+      with use.
+- [ ] **Pinning a game** from the app grid's menu still shows the launcher's pin dialog, and the
+      "unable to pin" toast still appears where pinning is unsupported.
+- [ ] **Removing a host disables its shortcuts** with the "deleted" reason when tapped.
+- [ ] **Newly pairing a host still asks to show its channel** on the Android TV home screen. The
+      request is now posted back to the UI thread after the channel is created; a missing prompt
+      would mean it never was.
+- [ ] **No ANR or jank when opening the browse screen** with several paired hosts. That is the
+      case the move was for; it was never measured before the change, so this is a check for
+      regressions, not a claimed improvement.
+
+---
+
 ## Hardware still needed
 
 | Needed for | Hardware |
@@ -2834,3 +2858,4 @@ setup. Numbered 32 because §31 is taken on the open input-buffer branch.
 | §23 Controllers screen | A device with no USB host support, or a build run with the feature absent, for the dependency-crash path |
 | §25 | The Homatics on a 1080p60 display, streaming H.264 — the Shield keeps RFI and never runs the patch |
 | §28 batches | Both batches re-run back to back, to separate HDR from a display renegotiation |
+| §33 | Either box with two or more paired hosts; the TV channel prompt needs a freshly paired host |
