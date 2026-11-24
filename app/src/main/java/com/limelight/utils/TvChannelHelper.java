@@ -45,6 +45,13 @@ public class TvChannelHelper {
         this.context = context;
     }
 
+    /**
+     * Asks the launcher to show this host's channel on the home screen.
+     *
+     * <p>Called from {@link ShortcutHelper}'s worker thread. The channel lookup is TV provider IPC
+     * and stays there; only starting the activity is posted to the UI thread, because
+     * {@code startActivityForResult} touches the window's view hierarchy.
+     */
     void requestChannelOnHomeScreen(ComputerDetails computer) {
         if (!isAndroidTV()) {
             return;
@@ -56,15 +63,17 @@ public class TvChannelHelper {
         }
 
         Intent intent = new Intent(TvContract.ACTION_REQUEST_CHANNEL_BROWSABLE);
-        intent.putExtra(TvContract.EXTRA_CHANNEL_ID, getChannelId(computer.uuid));
-        try {
-            context.startActivityForResult(intent, 0);
-        } catch (Exception ignored) {
-            // ActivityNotFoundException is the only officially documented
-            // exception that can result from this call. However some buggy
-            // devices throw others.
-            // See https://github.com/moonlight-stream/moonlight-android/issues/1302
-        }
+        intent.putExtra(TvContract.EXTRA_CHANNEL_ID, channelId);
+        context.runOnUiThread(() -> {
+            try {
+                context.startActivityForResult(intent, 0);
+            } catch (Exception ignored) {
+                // ActivityNotFoundException is the only officially documented
+                // exception that can result from this call. However some buggy
+                // devices throw others.
+                // See https://github.com/moonlight-stream/moonlight-android/issues/1302
+            }
+        });
     }
 
     void createTvChannel(ComputerDetails computer) {
